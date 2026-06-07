@@ -1,0 +1,28 @@
+# === 機密：絕對不可進版控 ===
+# Turso URL / Auth Token 等同資料庫密碼，只放本機 secrets.toml 或 Community Cloud Secrets UI
+.streamlit/secrets.toml
+.env
+*.env
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# === 虛擬環境 ===
+.venv/
+venv/
+env/
+
+# === 本機資料庫檔（若有本機測試用 SQLite） ===
+*.db
+*.sqlite
+*.sqlite3
+
+# === 作業系統 / 編輯器 ===
+.DS_Store
+.vscode/
+.idea/
