@@ -19,7 +19,7 @@
 | t02 ReturnService TWR/PnL | 完成 | BR-4e 簽名隔離；19 tests 綠，累計 44 |
 | t03 ReturnService MWR/XIRR | 完成 | SC-015,016；接 pyxirr，不收斂降級；11 tests 綠，累計 55 |
 | t04 報酬三維度+區間 | 完成 | SC-019,020,021,028,035；PeriodService＋三維度；21 tests 綠，累計 76 |
-| t05 Allocation 佔比/淨值/漂移 | 未開始 | SC-010,011,025,026,027(資料層) |
+| t05 Allocation 佔比/淨值/漂移 | 完成 | SC-010,011,025,026,027,036；22 tests 綠，累計 94 |
 | t06 目標偏離/再平衡 | 未開始 | SC-029,030 |
 | t07 MonthlyInput 帶入/轉移 | 未開始 | SC-005,008,009 |
 | t08 Repository+Schema | 未開始 | SC-001,002,003,004,006,007 |
