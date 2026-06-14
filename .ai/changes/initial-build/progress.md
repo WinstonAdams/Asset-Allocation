@@ -22,7 +22,7 @@
 | t05 Allocation 佔比/淨值/漂移 | 完成 | SC-010,011,025,026,027,036；22 tests 綠，累計 94 |
 | t06 目標偏離/再平衡 | 完成 | SC-029,030；compute_drift 門檻嚴格大於；9 tests 綠，累計 103 |
 | t07 MonthlyInput 帶入/轉移 | 完成 | SC-005,008,009,037（轉移防呆）；16 tests 綠，累計 120 |
-| t08 Repository+Schema | 未開始 | SC-001,002,003,004,006,007 |
+| t08 Repository+Schema | 完成 | SC-001~004,006,007；libsql CRUD＋insert/upsert 分流；40 tests 綠，累計 143 |
 | t09 DataIo CSV 匯出入 | 未開始 | SC-031,032 |
 | t10 登入守門判定 | 未開始 | SC-033,034 |
 | t11 Streamlit 串接層 | 未開始 | bootstrap/app.py/pages/charts；UI 串接，無新 SC |
