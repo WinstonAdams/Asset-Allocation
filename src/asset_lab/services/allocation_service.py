@@ -24,7 +24,8 @@ from asset_lab.core.constants import HOLDING_KIND, MONTHLY_RECORDS_TABLE
 from asset_lab.core.utils import parse_year_month
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
-from asset_lab.models.results import AllocationSnapshot, NetWorthPoint
+from asset_lab.models.results import AllocationSnapshot, DriftRow, NetWorthPoint
+from asset_lab.models.target import TargetAllocationModel
 
 # 佔比以百分比（0–100）表示，與目標比重同單位。
 _PERCENT_BASE = 100.0
@@ -188,6 +189,47 @@ class AllocationService:
                 )
             )
         return points
+
+    def compute_drift(
+        self,
+        *,
+        snapshot: list[AllocationSnapshot],
+        targets: list[TargetAllocationModel],
+        threshold: float,
+    ) -> list[DriftRow]:
+        """計算各分類現況佔比相對目標比重的偏離，並判定是否需再平衡。
+
+        以分類粒度的現況佔比（snapshot，by='category'）對齊目標比重，逐分類算
+        偏離 = 現況% − 目標%（百分點）。偏離絕對值嚴格超過門檻才標示需再平衡，
+        恰好等於門檻不標示。目標比重為選用設定：只判定有設目標的分類，未設目標的
+        分類不顯示偏離、不判定再平衡；設了目標但當月無持有的分類現況%視為 0，仍
+        計算偏離（偏離 = −目標%）。現況%、目標%、偏離一律以百分比（0–100）表示。
+
+        Args:
+            snapshot: 選定月份的分類現況佔比清單（dimension_key 為資產分類，weight 為 %）。
+            targets: 各分類目標比重清單（target_weight 為 %，0–100）。
+            threshold: 再平衡偏離門檻，以百分點計（如 5.0）。
+
+        Returns:
+            DriftRow 清單，每筆含分類、現況%、目標%、偏離百分點與是否需再平衡；
+            僅含有設目標的分類，未設目標時為空清單。
+        """
+        current_by_category = {row.dimension_key: row.weight for row in snapshot}
+        rows: list[DriftRow] = []
+        for target in targets:
+            # 設了目標但當月無該分類持有時現況視為 0%，仍須呈現負向偏離
+            current_weight = current_by_category.get(target.category, 0.0)
+            drift = current_weight - target.target_weight
+            rows.append(
+                DriftRow(
+                    category=target.category,
+                    current_weight=current_weight,
+                    target_weight=target.target_weight,
+                    drift=drift,
+                    needs_rebalance=abs(drift) > threshold,
+                )
+            )
+        return rows
 
     @staticmethod
     def _dimension_key(holding: HoldingModel, by: str) -> str:
