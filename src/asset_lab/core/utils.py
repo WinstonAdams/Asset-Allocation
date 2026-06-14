@@ -54,6 +54,26 @@ def year_month_add(year_month: str, months: int) -> str:
     return f"{new_year:04d}-{new_month_index + 1:02d}"
 
 
+def months_between(start_ym: str, end_ym: str) -> int:
+    """計算兩個 'YYYY-MM' 相差的月數（end 減 start），同月為 0。
+
+    用於由區間起訖月推算涵蓋的月跨度（涵蓋月數 = 相差月數 + 1）。
+
+    Args:
+        start_ym: 起始月份，'YYYY-MM' 格式。
+        end_ym: 結束月份，'YYYY-MM' 格式。
+
+    Returns:
+        end_ym 減 start_ym 的月數差；end 早於 start 時為負值。
+
+    Raises:
+        DataValidationError: 任一參數不符 'YYYY-MM' 格式。
+    """
+    start_year, start_month = parse_year_month(start_ym)
+    end_year, end_month = parse_year_month(end_ym)
+    return (end_year - start_year) * 12 + (end_month - start_month)
+
+
 def adjacent_periods(year_months: list[str]) -> list[tuple[str, str]]:
     """從「有資料的月份」序列抽出相鄰期間段，供分段連乘使用。
 

@@ -6,7 +6,43 @@ import pandas as pd
 import pytest
 
 # ==== 專案內部 ====
+from asset_lab.models.holding import HoldingModel
 from asset_lab.services.return_service import ReturnService
+
+
+def _range_df(rows: list[dict]) -> pd.DataFrame:
+    """以 (holding_id, year_month, market_value, net_investment) 列組成區間 DataFrame。
+
+    Args:
+        rows: 每列含 holding_id、year_month、market_value、net_investment 鍵的 dict。
+
+    Returns:
+        欄位齊全的區間 DataFrame，供三維度彙總使用。
+    """
+    return pd.DataFrame(
+        rows, columns=["holding_id", "year_month", "market_value", "net_investment"]
+    )
+
+
+def _asset(
+    holding_id: int, category: str, initial_market_value: float, initial_cost: float | None = None
+) -> HoldingModel:
+    """建立一個資產項目主檔。未指定初始成本時與初始市值一致（對齊 TWR 與簡單報酬起點）。"""
+    return HoldingModel(
+        holding_id=holding_id,
+        name=f"資產{holding_id}",
+        kind="asset",
+        category=category,
+        initial_market_value=initial_market_value,
+        initial_cost=initial_market_value if initial_cost is None else initial_cost,
+    )
+
+
+def _result_by(results, dimension_key):
+    """從結果清單取出指定維度鍵的單一 ReturnResult。"""
+    matched = [r for r in results if r.dimension_key == dimension_key]
+    assert len(matched) == 1
+    return matched[0]
 
 
 def _monthly(rows: list[dict]) -> pd.DataFrame:
@@ -438,3 +474,229 @@ class TestInitialCostMarketValueIsolation:
         # 起點一致時 TWR 與簡單報酬率皆 = 10%
         assert _approx(twr, 0.10)
         assert _approx(simple_return, 0.10)
+
+
+class TestComputeReturnsAnnualization:
+    """compute_returns 的年化判定：未滿 12 個月只顯示累積、不年化。"""
+
+    @staticmethod
+    def _twelve_contiguous_months(end_ym: str) -> pd.DataFrame:
+        # 自 end_ym 往回排滿連續 12 個有資料月，每月小幅成長、無資金流動
+        from asset_lab.core.utils import year_month_add
+
+        rows = []
+        value = 100000.0
+        for offset in range(11, -1, -1):
+            value *= 1.01
+            rows.append(
+                {
+                    "holding_id": 1,
+                    "year_month": year_month_add(end_ym, -offset),
+                    "market_value": round(value, 2),
+                    "net_investment": 0.0,
+                }
+            )
+        return _range_df(rows)
+
+    @pytest.mark.scenario("SC-019")
+    def test_sc019_six_month_period_not_annualized(self):
+        # 區間僅涵蓋 6 個月（2026-01 至 2026-06）：TWR/MWR 只顯示累積、不年化
+        rows = []
+        value = 100000.0
+        for index in range(6):
+            value *= 1.02
+            rows.append(
+                {
+                    "holding_id": 1,
+                    "year_month": f"2026-0{index + 1}",
+                    "market_value": round(value, 2),
+                    "net_investment": 0.0,
+                }
+            )
+        results = ReturnService().compute_returns(
+            range_df=_range_df(rows),
+            holdings=[_asset(1, "台股/台股ETF", 100000.0)],
+            dimension="overall",
+            start_ym="2026-01",
+            end_ym="2026-06",
+        )
+        assert results[0].annualized is False
+
+    @pytest.mark.scenario("SC-019")
+    def test_sc019_eleven_month_period_still_not_annualized(self):
+        # 滿 11 個月仍未達年化門檻（2025-07 至 2026-05）：不年化
+        results = ReturnService().compute_returns(
+            range_df=self._twelve_contiguous_months("2026-05").iloc[1:],
+            holdings=[_asset(1, "台股/台股ETF", 100000.0)],
+            dimension="overall",
+            start_ym="2025-07",
+            end_ym="2026-05",
+        )
+        assert results[0].annualized is False
+
+    @pytest.mark.scenario("SC-019")
+    def test_sc019_twelve_month_period_is_annualized(self):
+        # 區間涵蓋滿 12 個月（2025-06 至 2026-05）：才年化
+        results = ReturnService().compute_returns(
+            range_df=self._twelve_contiguous_months("2026-05"),
+            holdings=[_asset(1, "台股/台股ETF", 100000.0)],
+            dimension="overall",
+            start_ym="2025-06",
+            end_ym="2026-05",
+        )
+        assert results[0].annualized is True
+
+    @pytest.mark.scenario("SC-035")
+    def test_sc035_twelve_month_span_with_gaps_still_annualized(self):
+        # 區間日曆月跨度滿 12 個月即年化，即使缺月使實際有資料月只有三個
+        range_df = _range_df(
+            [
+                {"holding_id": 1, "year_month": "2025-06", "market_value": 100000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 1, "year_month": "2025-12", "market_value": 105000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 1, "year_month": "2026-05", "market_value": 110000.0,
+                 "net_investment": 0.0},
+            ]
+        )
+        results = ReturnService().compute_returns(
+            range_df=range_df,
+            holdings=[_asset(1, "台股/台股ETF", 100000.0)],
+            dimension="overall",
+            start_ym="2025-06",
+            end_ym="2026-05",
+        )
+        # 以日曆月跨度（2025-06 至 2026-05 ＝ 12 個月）判定，故年化為 True
+        assert results[0].annualized is True
+
+
+class TestComputeReturnsDimensions:
+    """compute_returns 三維度彙總：整體 / 各分類 / 各單一標的，僅資產不含負債。"""
+
+    @staticmethod
+    def _two_assets_two_categories() -> tuple[pd.DataFrame, list[HoldingModel]]:
+        # 兩個資產分屬兩分類，各自跨兩月成長且無資金流動；外加一筆負債（不應納入）
+        range_df = _range_df(
+            [
+                {"holding_id": 1, "year_month": "2026-01", "market_value": 110000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 1, "year_month": "2026-02", "market_value": 121000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 2, "year_month": "2026-01", "market_value": 210000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 2, "year_month": "2026-02", "market_value": 220500.0,
+                 "net_investment": 0.0},
+                {"holding_id": 9, "year_month": "2026-01", "market_value": 50000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 9, "year_month": "2026-02", "market_value": 50000.0,
+                 "net_investment": 0.0},
+            ]
+        )
+        holdings = [
+            _asset(1, "台股/台股ETF", 100000.0),
+            _asset(2, "美股/美股ETF", 200000.0),
+            HoldingModel(holding_id=9, name="房貸", kind="liability", category=None,
+                         initial_market_value=None, initial_cost=None),
+        ]
+        return range_df, holdings
+
+    @pytest.mark.scenario("SC-020")
+    def test_sc020_holding_dimension_one_result_per_asset(self):
+        # 單一標的維度：每個資產項目一筆結果，各自以自身序列計算
+        range_df, holdings = self._two_assets_two_categories()
+        results = ReturnService().compute_returns(
+            range_df=range_df, holdings=holdings, dimension="holding",
+            start_ym="2026-01", end_ym="2026-02",
+        )
+        assert {r.dimension_key for r in results} == {"1", "2"}
+        # 項目1：100000→110000→121000 = 1.1×1.1 − 1 = 21%
+        assert _approx(_result_by(results, "1").twr, 0.21)
+        # 項目2：200000→210000→220500 = 1.05×1.05 − 1 = 10.25%
+        assert _approx(_result_by(results, "2").twr, 0.1025)
+
+    @pytest.mark.scenario("SC-020")
+    def test_sc020_category_dimension_aggregates_member_holdings(self):
+        # 分類維度：每個分類一筆結果，以該分類成員標的的彙總序列計算
+        range_df, holdings = self._two_assets_two_categories()
+        results = ReturnService().compute_returns(
+            range_df=range_df, holdings=holdings, dimension="category",
+            start_ym="2026-01", end_ym="2026-02",
+        )
+        assert {r.dimension_key for r in results} == {"台股/台股ETF", "美股/美股ETF"}
+        # 單成員分類的 TWR 等同該成員標的的 TWR
+        assert _approx(_result_by(results, "台股/台股ETF").twr, 0.21)
+        assert _approx(_result_by(results, "美股/美股ETF").twr, 0.1025)
+
+    @pytest.mark.scenario("SC-020")
+    def test_sc020_overall_dimension_aggregates_all_assets(self):
+        # 整體維度：單一結果，以全體資產同月市值與淨投入的彙總序列計算
+        range_df, holdings = self._two_assets_two_categories()
+        results = ReturnService().compute_returns(
+            range_df=range_df, holdings=holdings, dimension="overall",
+            start_ym="2026-01", end_ym="2026-02",
+        )
+        assert len(results) == 1
+        assert results[0].dimension == "overall"
+        assert results[0].dimension_key is None
+        # 整體初始市值 300000；月末彙總 320000→341500
+        # (320000/300000)×(341500/320000) − 1 = 341500/300000 − 1 = 13.8333%
+        assert _approx(results[0].twr, 341500.0 / 300000.0 - 1.0)
+
+    @pytest.mark.scenario("SC-020")
+    def test_sc020_liabilities_never_enter_any_dimension(self):
+        # 三維度皆僅計資產：負債分類（None）不出現在任何維度結果
+        range_df, holdings = self._two_assets_two_categories()
+        for dimension in ("overall", "category", "holding"):
+            results = ReturnService().compute_returns(
+                range_df=range_df, holdings=holdings, dimension=dimension,
+                start_ym="2026-01", end_ym="2026-02",
+            )
+            assert all(r.dimension_key != "9" for r in results)
+            assert all(r.dimension_key is None or r.dimension_key != "房貸" for r in results)
+
+    @pytest.mark.scenario("SC-020")
+    def test_sc020_each_dimension_carries_own_net_investment_terminal_value(self):
+        # 各維度以「自身淨投入序列＋自身期末市值為終值」獨立計 MWR；標的中途投入計入自身現金流
+        range_df = _range_df(
+            [
+                {"holding_id": 1, "year_month": "2026-01", "market_value": 100000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 1, "year_month": "2027-01", "market_value": 165000.0,
+                 "net_investment": 50000.0},
+            ]
+        )
+        results = ReturnService().compute_returns(
+            range_df=range_df, holdings=[_asset(1, "台股/台股ETF", 100000.0)],
+            dimension="holding", start_ym="2026-01", end_ym="2027-01",
+        )
+        holding_result = _result_by(results, "1")
+        # MWR 可收斂（投入為流出、終值為流入），且 PnL 以初始成本 100000 起算
+        assert holding_result.mwr_status == "ok"
+        assert holding_result.mwr is not None
+        # 累積成本 100000 + 50000 = 150000；賺賠 165000 − 150000 = 15000
+        assert holding_result.pnl_amount == pytest.approx(15000.0)
+
+    @pytest.mark.scenario("SC-020")
+    def test_sc020_dimension_uses_own_data_months_when_member_changes(self):
+        # 單一標的中途新增（2026-02 才建倉）：整體維度仍以各自有資料月彙總，不被缺月干擾
+        range_df = _range_df(
+            [
+                {"holding_id": 1, "year_month": "2026-01", "market_value": 100000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 1, "year_month": "2026-02", "market_value": 110000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 2, "year_month": "2026-02", "market_value": 50000.0,
+                 "net_investment": 50000.0},
+            ]
+        )
+        holdings = [
+            _asset(1, "台股/台股ETF", 100000.0),
+            _asset(2, "美股/美股ETF", 0.0, initial_cost=0.0),
+        ]
+        results = ReturnService().compute_returns(
+            range_df=range_df, holdings=holdings, dimension="overall",
+            start_ym="2026-01", end_ym="2026-02",
+        )
+        # 整體 2026-01 市值 100000（僅標的1）、2026-02 市值 160000、當月淨投入 50000
+        # 段一 100000→100000(無標的2) ... 段二 (160000 − 50000)/100000 = 1.10 → 整體 TWR 10%
+        assert _approx(results[0].twr, 0.10)

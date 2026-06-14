@@ -22,12 +22,22 @@ import pandas as pd
 import pyxirr
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import MONTHLY_RECORDS_TABLE
-from asset_lab.core.utils import parse_year_month, year_month_add
+from asset_lab.core.constants import HOLDING_KIND, MONTHLY_RECORDS_TABLE
+from asset_lab.core.utils import months_between, parse_year_month, year_month_add
+from asset_lab.models.holding import HoldingModel
+from asset_lab.models.results import CumulativeTwrPoint, ReturnResult
 
 # MWR 不收斂（無正負交替、求解失敗或結果非有限值）時的降級狀態旗標。
 _MWR_OK = "ok"
 _MWR_NOT_CONVERGED = "not_converged"
+
+# 報酬率三維度。整體不分組（單一結果）、分類依資產分類彙總、單一標的以項目為原子。
+_DIMENSION_OVERALL = "overall"
+_DIMENSION_CATEGORY = "category"
+_DIMENSION_HOLDING = "holding"
+
+# 滿此月跨度才年化；未滿只顯示期間累積報酬（涵蓋月數 = 起訖月相差 + 1）。
+_ANNUALIZE_MIN_MONTHS = 12
 
 
 class ReturnService:
@@ -137,6 +147,220 @@ class ReturnService:
         pnl = current_value - cumulative_cost
         simple_return = None if cumulative_cost == 0 else pnl / cumulative_cost
         return pnl, simple_return
+
+    def compute_returns(
+        self,
+        *,
+        range_df: pd.DataFrame,
+        holdings: list[HoldingModel],
+        dimension: str,
+        start_ym: str,
+        end_ym: str,
+    ) -> list[ReturnResult]:
+        """彙總指定維度的報酬率結果（整體 / 各分類 / 各單一標的，僅資產）。
+
+        以單一標的為計算原子，分類與整體由其成員標的彙總。每個維度以「該維度自身的
+        淨投入序列 ＋ 該維度自身期末市值為終值」獨立計算 TWR/MWR/賺賠：標的層用自身
+        序列；分類/整體層為其成員標的同月市值（各自沿用留空前值後）相加、同月淨投入
+        相加組成的彙總序列。各維度的初始市值與初始成本為其成員的對應加總。負債一律
+        不納入。年化僅在區間涵蓋滿 12 個月時開啟，否則只顯示期間累積報酬。
+
+        Args:
+            range_df: 區間月度紀錄 DataFrame，含 holding_id、year_month、market_value、
+                net_investment 欄；涵蓋 [start_ym, end_ym]。
+            holdings: 項目主檔清單，提供 kind / category / 初始市值 / 初始成本。
+            dimension: 維度，須為 'overall' / 'category' / 'holding' 之一。
+            start_ym: 區間起月（'YYYY-MM'），用於年化月跨度判定。
+            end_ym: 區間訖月（'YYYY-MM'），用於年化月跨度判定。
+
+        Returns:
+            該維度的 ReturnResult 清單；overall 為單一結果，category/holding 各組一筆。
+        """
+        annualized = months_between(start_ym, end_ym) + 1 >= _ANNUALIZE_MIN_MONTHS
+        asset_records = self._asset_records(range_df, holdings)
+
+        results: list[ReturnResult] = []
+        for dimension_key, member_ids in self._dimension_groups(dimension, holdings):
+            monthly = self._aggregate_monthly(asset_records, member_ids)
+            initial_market_value, initial_cost = self._dimension_bases(holdings, member_ids)
+            results.append(
+                self._build_result(
+                    dimension=dimension,
+                    dimension_key=dimension_key,
+                    monthly=monthly,
+                    initial_market_value=initial_market_value,
+                    initial_cost=initial_cost,
+                    annualized=annualized,
+                )
+            )
+        return results
+
+    def cumulative_twr_series(
+        self, *, range_df: pd.DataFrame, holdings: list[HoldingModel]
+    ) -> list[CumulativeTwrPoint]:
+        """產出整體（全體資產彙總）逐有資料月的累積 TWR 序列，供報酬率走勢圖。
+
+        以有資料月為節點（缺月不補點），每個節點的值為自區間起點累積至該月的整體
+        TWR。僅含資產；負債不納入。某月某標的市值留空時沿用其上一有值月份（與 TWR
+        連乘一致）。無任何有資料月時回空序列。
+
+        Args:
+            range_df: 區間月度紀錄 DataFrame，含 holding_id、year_month、market_value、
+                net_investment 欄。
+            holdings: 項目主檔清單，用於篩出資產與取得整體初始市值。
+
+        Returns:
+            逐有資料月的 CumulativeTwrPoint 清單，依月份排序。
+        """
+        asset_records = self._asset_records(range_df, holdings)
+        all_asset_ids = [h.holding_id for h in holdings if h.kind == HOLDING_KIND.ASSET]
+        monthly = self._aggregate_monthly(asset_records, all_asset_ids)
+        if monthly.empty:
+            return []
+
+        initial_market_value, _ = self._dimension_bases(holdings, all_asset_ids)
+        ordered = monthly.sort_values(MONTHLY_RECORDS_TABLE.YEAR_MONTH)
+        year_months = [str(ym) for ym in ordered[MONTHLY_RECORDS_TABLE.YEAR_MONTH]]
+
+        series: list[CumulativeTwrPoint] = []
+        for index in range(len(year_months)):
+            # 累積至第 index 個有資料月：取前綴序列計 TWR，得該月的累積報酬節點
+            prefix = ordered.iloc[: index + 1]
+            cumulative = self.compute_twr(monthly=prefix, initial_market_value=initial_market_value)
+            if cumulative is None:
+                # 前綴僅含建倉月（期初皆 0）尚無有效連乘段，跳過該節點
+                continue
+            series.append(
+                CumulativeTwrPoint(year_month=year_months[index], cumulative_twr=cumulative)
+            )
+        return series
+
+    @staticmethod
+    def _asset_records(range_df: pd.DataFrame, holdings: list[HoldingModel]) -> pd.DataFrame:
+        """過濾出資產項目的月度紀錄；負債一律排除。"""
+        asset_ids = {h.holding_id for h in holdings if h.kind == HOLDING_KIND.ASSET}
+        if range_df.empty:
+            return range_df
+        return range_df[range_df[MONTHLY_RECORDS_TABLE.HOLDING_ID].isin(asset_ids)]
+
+    @staticmethod
+    def _dimension_groups(
+        dimension: str, holdings: list[HoldingModel]
+    ) -> list[tuple[str | None, list[int]]]:
+        """依維度組出 (維度鍵, 成員 holding_id 清單)；僅含資產。
+
+        overall 為單一組（鍵為 None、成員為全體資產）；category 依資產分類分組
+        （鍵為分類名）；holding 每個資產一組（鍵為 holding_id 字串）。
+        """
+        assets = [h for h in holdings if h.kind == HOLDING_KIND.ASSET]
+        if dimension == _DIMENSION_OVERALL:
+            return [(None, [h.holding_id for h in assets])]
+        if dimension == _DIMENSION_HOLDING:
+            return [(str(h.holding_id), [h.holding_id]) for h in assets]
+        if dimension == _DIMENSION_CATEGORY:
+            grouped: dict[str, list[int]] = {}
+            for holding in assets:
+                grouped.setdefault(holding.category, []).append(holding.holding_id)
+            return [(category, ids) for category, ids in grouped.items()]
+        raise ValueError(f"未知的報酬率維度：{dimension!r}")
+
+    @staticmethod
+    def _dimension_bases(
+        holdings: list[HoldingModel], member_ids: list[int]
+    ) -> tuple[float, float]:
+        """彙總維度成員的初始市值與初始成本（缺值以 0 計）。"""
+        initial_market_value = 0.0
+        initial_cost = 0.0
+        member_set = set(member_ids)
+        for holding in holdings:
+            if holding.holding_id not in member_set:
+                continue
+            initial_market_value += holding.initial_market_value or 0.0
+            initial_cost += holding.initial_cost or 0.0
+        return initial_market_value, initial_cost
+
+    @staticmethod
+    def _aggregate_monthly(asset_records: pd.DataFrame, member_ids: list[int]) -> pd.DataFrame:
+        """把維度成員標的彙總成單一月度序列（市值同月相加、淨投入同月相加）。
+
+        以成員各自的有資料月為節點，聯集成該維度的有資料月；某成員某月留空市值時，
+        沿用該成員上一有值月份的市值（與單標的 TWR 連乘的沿用語意一致）後才相加，
+        未持有（無該月節點）的成員該月不貢獻市值。淨投入同月直接相加（缺月計 0）。
+
+        Args:
+            asset_records: 已過濾為資產的月度紀錄 DataFrame。
+            member_ids: 該維度的成員 holding_id 清單。
+
+        Returns:
+            彙總後的月度序列 DataFrame，含 year_month、market_value、net_investment 欄；
+            無任何成員資料時為空 DataFrame。
+        """
+        columns = [
+            MONTHLY_RECORDS_TABLE.YEAR_MONTH,
+            MONTHLY_RECORDS_TABLE.MARKET_VALUE,
+            MONTHLY_RECORDS_TABLE.NET_INVESTMENT,
+        ]
+        if asset_records.empty or not member_ids:
+            return pd.DataFrame(columns=columns)
+
+        member_set = set(member_ids)
+        members = asset_records[asset_records[MONTHLY_RECORDS_TABLE.HOLDING_ID].isin(member_set)]
+        if members.empty:
+            return pd.DataFrame(columns=columns)
+
+        year_months = sorted(
+            {str(ym) for ym in members[MONTHLY_RECORDS_TABLE.YEAR_MONTH]},
+            key=parse_year_month,
+        )
+
+        market_by_month: dict[str, float] = dict.fromkeys(year_months, 0.0)
+        net_by_month: dict[str, float] = dict.fromkeys(year_months, 0.0)
+        for holding_id in member_set:
+            single = members[members[MONTHLY_RECORDS_TABLE.HOLDING_ID] == holding_id]
+            if single.empty:
+                continue
+            values, nets = ReturnService._value_series(single)
+            ordered = single.sort_values(MONTHLY_RECORDS_TABLE.YEAR_MONTH)
+            member_months = [str(ym) for ym in ordered[MONTHLY_RECORDS_TABLE.YEAR_MONTH]]
+            for month, value, net in zip(member_months, values, nets, strict=True):
+                if value is not None:
+                    market_by_month[month] += value
+                net_by_month[month] += net
+
+        return pd.DataFrame(
+            {
+                MONTHLY_RECORDS_TABLE.YEAR_MONTH: year_months,
+                MONTHLY_RECORDS_TABLE.MARKET_VALUE: [market_by_month[m] for m in year_months],
+                MONTHLY_RECORDS_TABLE.NET_INVESTMENT: [net_by_month[m] for m in year_months],
+            }
+        )
+
+    def _build_result(
+        self,
+        *,
+        dimension: str,
+        dimension_key: str | None,
+        monthly: pd.DataFrame,
+        initial_market_value: float,
+        initial_cost: float,
+        annualized: bool,
+    ) -> ReturnResult:
+        """組合三條管線輸出為單一維度的 ReturnResult。"""
+        twr = self.compute_twr(monthly=monthly, initial_market_value=initial_market_value)
+        mwr, mwr_status = self.compute_mwr(
+            monthly=monthly, initial_market_value=initial_market_value
+        )
+        pnl, simple_return = self.compute_pnl(monthly=monthly, initial_cost=initial_cost)
+        return ReturnResult(
+            dimension=dimension,
+            dimension_key=dimension_key,
+            twr=twr,
+            mwr=mwr,
+            mwr_status=mwr_status,
+            simple_return=simple_return,
+            pnl_amount=pnl,
+            annualized=annualized,
+        )
 
     @staticmethod
     def _cash_flows(

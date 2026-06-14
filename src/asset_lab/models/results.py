@@ -27,6 +27,16 @@ class ReturnResult(BaseModel):
     annualized: bool
 
 
+class CumulativeTwrPoint(BaseModel):
+    """報酬率走勢圖單點：某有資料月的整體累積 TWR（僅資產）。
+
+    cumulative_twr 為自區間起點累積至該月的時間加權報酬率（百分比小數）。
+    """
+
+    year_month: str
+    cumulative_twr: float
+
+
 class AllocationSnapshot(BaseModel):
     """某月份單一資產項目或分類的市值與佔比（僅資產）。
 
