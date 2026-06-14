@@ -11,12 +11,12 @@
 
 ```
 Streamlit 介面（輸入表單 + 圖表）
-        ↓ libsql-client
+        ↓ libsql（舊 libsql-client 已棄用）
    Turso（雲端 SQLite，免費層）
 ```
 
 - **前端/UI**：Streamlit。輸入與輸出**全部在 Streamlit 介面完成**，使用者不想手動去改資料庫或 Google Sheet。
-- **資料庫**：Turso（雲端 SQLite，透過 `libsql-client`）。
+- **資料庫**：Turso（雲端 SQLite，透過 `libsql` 套件；舊 `libsql-client` 已被官方棄用）。
   - 選它的理由：資料是表格型月度時間序列；使用者是資料工程背景、SQL 是母語；報酬率就是一句 SQL 彙總；每月一次的使用頻率下 Turso 不會有惱人的閒置暫停（Supabase 閒置 7 天要手動喚醒）。
   - 評估過但未採用：Google Sheet（不想手動編輯）、Supabase/Neon（閒置暫停 friction）、Firebase（NoSQL 不適合表格＋彙總）。
 - **資料量**：很小，一年約 12 列。

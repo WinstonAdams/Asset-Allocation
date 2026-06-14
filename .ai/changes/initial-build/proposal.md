@@ -100,12 +100,14 @@
 | BR-12 | 提供 CSV 匯出與匯入：匯出全部原始紀錄（項目主檔含性質/初始市值/初始成本/分類 ＋ 月度列：資產市值/淨投入、負債餘額）；匯入可將該 CSV 還原到（新的）Turso DB | 匯入須驗證格式與唯一鍵，避免重複或污染既有資料 | — |
 
 ## 外部依賴與接口契約
-- **Turso**（雲端 SQLite）：透過 `libsql-client` 連線；URL 與 Auth Token 由使用者於 https://turso.tech 取得。
-- **Streamlit**：UI 框架，提供表單與圖表。
+- **Turso**（雲端 SQLite）：透過 `libsql` 套件連線（舊 `libsql-client` 已被官方棄用、driver 失效，不可用）；URL 與 Auth Token 由使用者於 https://turso.tech 取得。
+- **Streamlit**：UI 框架，提供表單與圖表（需 ≥ 1.42 以支援 `st.login()`）。
+- **Plotly**：圖表函式庫（圓餅圖／堆疊面積／折線；Streamlit 原生不支援圓餅圖）。
+- **pandas**：報酬率彙總、TWR 連乘與圖表資料整形。
 - **Streamlit Community Cloud**：部署平台，從 GitHub repo 部署，提供 Secrets UI。需先有 GitHub repo。需 Streamlit ≥ 1.42（`st.login()` 原生 OIDC 支援）。
 - **Google OAuth（OIDC）**：`st.login()` 的身分提供者；使用者自建 OAuth client（Client ID/Secret），redirect_uri 須含本機與雲端兩個網址。憑證放 secrets，不進 repo。
 - **GitHub repo**：作為 Community Cloud 部署來源；secrets 不進 repo。
-- **計算依賴**：XIRR 需數值求解；候選輕量函式庫 `pyxirr`（避免引入肥大的 scipy），實際選型於設計階段定。
+- **計算依賴**：XIRR/MWR 採 `pyxirr`（0.10.x，有 manylinux wheel，部署零摩擦；避免引入肥大的 scipy）。
 
 ## 環境差異表
 
