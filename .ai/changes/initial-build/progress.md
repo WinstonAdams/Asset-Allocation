@@ -9,12 +9,23 @@
 | 1-2b 架構分析 | 跳過 | greenfield 新專案，無既有 codebase 可分析 |
 | 1-2 設計 | 完成 | design.md 已確認（10 條 ADR）|
 | 1-3 行為規格化 | 完成 | 34 張 SC（SC-001~034），open_questions 全數定案 |
-| 1-4 任務拆解 | 未開始 | — |
+| 1-4 任務拆解 | 完成 | 11 個 Task（t01~t11），SC 全覆蓋 |
 
 ## Phase 2：實作
 
 | Task | 狀態 | 備註 |
 |------|------|------|
+| t01 專案骨架+模型+core | 未開始 | 基礎設施（tests/+conftest marker、pyproject、models、core）；無直接 SC |
+| t02 ReturnService TWR/PnL | 未開始 | SC-012,013,014,017,018,022,023,024 |
+| t03 ReturnService MWR/XIRR | 未開始 | SC-015,016 |
+| t04 報酬三維度+區間 | 未開始 | SC-019,020,021,028(資料層) |
+| t05 Allocation 佔比/淨值/漂移 | 未開始 | SC-010,011,025,026,027(資料層) |
+| t06 目標偏離/再平衡 | 未開始 | SC-029,030 |
+| t07 MonthlyInput 帶入/轉移 | 未開始 | SC-005,008,009 |
+| t08 Repository+Schema | 未開始 | SC-001,002,003,004,006,007 |
+| t09 DataIo CSV 匯出入 | 未開始 | SC-031,032 |
+| t10 登入守門判定 | 未開始 | SC-033,034 |
+| t11 Streamlit 串接層 | 未開始 | bootstrap/app.py/pages/charts；UI 串接，無新 SC |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
 
 ## Phase 3：審查
