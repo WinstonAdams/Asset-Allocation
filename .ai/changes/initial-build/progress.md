@@ -15,7 +15,7 @@
 
 | Task | 狀態 | 備註 |
 |------|------|------|
-| t01 專案骨架+模型+core | 未開始 | 基礎設施（tests/+conftest marker、pyproject、models、core）；無直接 SC |
+| t01 專案骨架+模型+core | 完成 | 基礎設施＋core 純函式；25 tests 綠，ruff 綠 |
 | t02 ReturnService TWR/PnL | 未開始 | SC-012,013,014,017,018,022,023,024 |
 | t03 ReturnService MWR/XIRR | 未開始 | SC-015,016 |
 | t04 報酬三維度+區間 | 未開始 | SC-019,020,021,028(資料層) |
