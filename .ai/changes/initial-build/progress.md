@@ -23,7 +23,7 @@
 | t06 目標偏離/再平衡 | 完成 | SC-029,030；compute_drift 門檻嚴格大於；9 tests 綠，累計 103 |
 | t07 MonthlyInput 帶入/轉移 | 完成 | SC-005,008,009,037（轉移防呆）；16 tests 綠，累計 120 |
 | t08 Repository+Schema | 完成 | SC-001~004,006,007；libsql CRUD＋insert/upsert 分流；40 tests 綠，累計 143 |
-| t09 DataIo CSV 匯出入 | 未開始 | SC-031,032 |
+| t09 DataIo CSV 匯出入 | 完成 | SC-031,032,038（孤兒紀錄拒絕）；含表頭標準 CSV 匯出入＋五種拒絕路徑；15 tests 綠，累計 158 |
 | t10 登入守門判定 | 未開始 | SC-033,034 |
 | t11 Streamlit 串接層 | 未開始 | bootstrap/app.py/pages/charts；UI 串接，無新 SC |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|

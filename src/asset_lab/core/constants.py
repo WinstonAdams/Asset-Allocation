@@ -81,3 +81,29 @@ class TARGET_ALLOCATIONS_TABLE:
     TABLE_NAME = "target_allocations"
     CATEGORY = "category"
     TARGET_WEIGHT = "target_weight"
+
+
+class CSV_EXPORT:
+    """CSV 匯出/匯入的對外欄位契約（含表頭標準 CSV，三類資料各一份）。
+
+    欄位即各 model 的欄位、欄序固定；此為對外契約，發布後改欄位須維持相容。
+    """
+
+    HOLDINGS_COLUMNS = (
+        "holding_id",
+        "name",
+        "kind",
+        "category",
+        "initial_market_value",
+        "initial_cost",
+    )
+    RECORDS_COLUMNS = (
+        "holding_id",
+        "year_month",
+        "market_value",
+        "net_investment",
+    )
+    TARGETS_COLUMNS = (
+        "category",
+        "target_weight",
+    )
