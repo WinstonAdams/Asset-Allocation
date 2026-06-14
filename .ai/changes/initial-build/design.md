@@ -287,13 +287,18 @@ class HoldingRepository:
     def replace_all(self, *, holdings: list[HoldingModel]) -> None: ... # CSV 匯入用（批次）
 
 class RecordRepository:
-    """月度紀錄 I/O。(holding_id, year_month) 為唯一鍵（BR-1）。"""
+    """月度紀錄 I/O。(holding_id, year_month) 為唯一鍵（BR-1）。
+    寫入分兩條語義不同的路徑（不可合併）：
+      - insert_record：嚴格新增（SC-007），撞唯一鍵須拒絕
+      - upsert_record：在地更新（SC-006 編輯），同鍵覆寫不產生重複列
+    """
     def __init__(self, *, conn) -> None: ...
     def read_month(self, *, year_month: str) -> list[MonthlyRecordModel]: ...
     def read_range(self, *, start_ym: str, end_ym: str) -> pd.DataFrame: ...   # 報酬率/趨勢用
     def read_all(self) -> pd.DataFrame: ...                                    # CSV 匯出用
     def latest_year_month(self) -> Optional[str]: ...                          # 帶入上月用（BR-1c）
-    def upsert_record(self, *, record: MonthlyRecordModel) -> None: ...        # 新增/編輯單列
+    def insert_record(self, *, record: MonthlyRecordModel) -> None: ...        # 嚴格新增（SC-007）；撞 (holding_id, year_month) 唯一鍵 → DataValidationError
+    def upsert_record(self, *, record: MonthlyRecordModel) -> None: ...        # 在地更新（SC-006 編輯）；同鍵覆寫，不產生重複列
     def delete_record(self, *, holding_id: int, year_month: str) -> None: ...
     def replace_all(self, *, records: list[MonthlyRecordModel]) -> None: ...   # CSV 匯入批次
 
@@ -365,9 +370,13 @@ class DataIoService:
     def export_holdings_csv(self, *, holdings: list[HoldingModel]) -> bytes: ...    # 含表頭
     def export_records_csv(self, *, records: pd.DataFrame) -> bytes: ...            # 含表頭
     def export_targets_csv(self, *, targets: list[TargetAllocationModel]) -> bytes: ...  # 含表頭
-    def parse_and_validate(self, *, holdings_csv: bytes, records_csv: bytes, targets_csv: bytes
+    def parse_and_validate(self, *, holdings_csv: bytes, records_csv: bytes, targets_csv: bytes,
+                           target_db_empty: bool
                            ) -> tuple[list[HoldingModel], list[MonthlyRecordModel], list[TargetAllocationModel]]: ...
         # 驗證表頭齊全、(holding_id, year_month) 唯一鍵不重複、kind/分類合法、目標%總和；失敗拋例外（Page catch → st.error）
+        # target_db_empty：目標庫是否為空（SC-032「非空須拒絕」）。空庫與否是 I/O 事實，
+        #   依 AD-2 Service 須純運算（無 I/O），故由 Page 層查 Repository 後注入此布林旗標；
+        #   「非空即拒（→ DataValidationError）」的業務判斷留在 Service。
 ```
 
 ### core（`src/asset_lab/core/`）
