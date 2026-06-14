@@ -26,7 +26,7 @@
 | t09 DataIo CSV 匯出入 | 完成 | SC-031,032,038（孤兒紀錄拒絕）；含表頭標準 CSV 匯出入＋五種拒絕路徑；15 tests 綠，累計 158 |
 | t10 登入守門判定 | 完成 | SC-033,034,039（email 正規化）；evaluate_access 純函式；10 tests 綠，累計 168 |
 | t11 Streamlit 串接層 | 完成 | bootstrap/app.py/pages/charts；charts+bootstrap 走 TDD（18 tests，累計 186），app.py 守門以 AppTest 驗證 fail-closed；ruff 綠 |
-| 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
+| 2-Z 整合驗證 | 完成 | pytest 186 passed、AppTest 啟動 fail-closed 守門通過；scenario-lint 業務綁定 39/39 全覆蓋且 0 invalid，孤兒 FAIL 限 test_core_utils + test_bootstrap 兩非業務測試檔，列為【已知可接受偏差】（3-Z 重跑勿誤判迴歸）|
 
 ## Phase 3：審查
 
