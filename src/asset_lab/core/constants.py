@@ -17,6 +17,9 @@
 # 年月鍵的字串格式；全程以 'YYYY-MM' 表示月份節點。
 YEAR_MONTH_FORMAT = "%Y-%m"
 
+# 「自最早記錄起」的區間下界 sentinel：早於任何真實年月，供 read_range 取全部歷史。
+EARLIEST_YEAR_MONTH_SENTINEL = "0000-01"
+
 # 報酬率區間與圖表所採用的時區（年初判定、近一年起點以此計）。
 TIMEZONE = "Asia/Taipei"
 

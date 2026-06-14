@@ -21,7 +21,7 @@ import pandas as pd
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import HOLDING_KIND, MONTHLY_RECORDS_TABLE
-from asset_lab.core.utils import parse_year_month
+from asset_lab.core.utils import filter_asset_records, parse_year_month
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.results import AllocationSnapshot, DriftRow, NetWorthPoint
@@ -118,7 +118,7 @@ class AllocationService:
             依年月、分類排序；無有效資產資料時為空 DataFrame。
         """
         columns = [_DRIFT_YEAR_MONTH, _DRIFT_DIMENSION_KEY, _DRIFT_WEIGHT]
-        asset_records = self._asset_records(range_df, holdings)
+        asset_records = filter_asset_records(range_df, holdings)
         if asset_records.empty:
             return pd.DataFrame(columns=columns)
 
@@ -239,14 +239,6 @@ class AllocationService:
         if by == _BY_CATEGORY:
             return holding.category
         raise ValueError(f"未知的佔比粒度：{by!r}")
-
-    @staticmethod
-    def _asset_records(range_df: pd.DataFrame, holdings: list[HoldingModel]) -> pd.DataFrame:
-        """過濾出資產項目的月度紀錄；負債一律排除。"""
-        if range_df.empty:
-            return range_df
-        asset_ids = {h.holding_id for h in holdings if h.kind == HOLDING_KIND.ASSET}
-        return range_df[range_df[MONTHLY_RECORDS_TABLE.HOLDING_ID].isin(asset_ids)]
 
     @staticmethod
     def _sorted_data_months(records: pd.DataFrame) -> list[str]:

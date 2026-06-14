@@ -6,7 +6,7 @@ import pytest
 
 # ==== 專案內部 ====
 from asset_lab.core.exceptions import DataValidationError
-from asset_lab.core.utils import adjacent_periods, parse_year_month, year_month_add
+from asset_lab.core.utils import parse_year_month, year_month_add
 
 
 class TestParseYearMonth:
@@ -66,43 +66,3 @@ class TestYearMonthAdd:
     def test_rejects_malformed_input(self):
         with pytest.raises(DataValidationError):
             year_month_add("2026-13", 1)
-
-
-class TestAdjacentPeriods:
-    """adjacent_periods：從有資料的月份序列抽出相鄰期間段（缺月跳過、不補插）。"""
-
-    def test_consecutive_months_form_adjacent_segments(self):
-        assert adjacent_periods(["2026-01", "2026-02", "2026-03"]) == [
-            ("2026-01", "2026-02"),
-            ("2026-02", "2026-03"),
-        ]
-
-    def test_gap_month_is_skipped_not_filled(self):
-        # 缺 2026-03：相鄰有資料月 2026-02 與 2026-04 直接成一段，不補插 2026-03
-        assert adjacent_periods(["2026-01", "2026-02", "2026-04"]) == [
-            ("2026-01", "2026-02"),
-            ("2026-02", "2026-04"),
-        ]
-
-    def test_single_month_has_no_period(self):
-        assert adjacent_periods(["2026-01"]) == []
-
-    def test_empty_sequence_has_no_period(self):
-        assert adjacent_periods([]) == []
-
-    def test_unsorted_input_is_ordered_chronologically(self):
-        assert adjacent_periods(["2026-03", "2026-01", "2026-02"]) == [
-            ("2026-01", "2026-02"),
-            ("2026-02", "2026-03"),
-        ]
-
-    def test_duplicate_months_are_collapsed(self):
-        # 同一有資料月重複出現只視為一個節點
-        assert adjacent_periods(["2026-01", "2026-01", "2026-02"]) == [
-            ("2026-01", "2026-02"),
-        ]
-
-    def test_year_boundary_segment(self):
-        assert adjacent_periods(["2026-12", "2027-01"]) == [
-            ("2026-12", "2027-01"),
-        ]

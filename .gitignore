@@ -12,6 +12,9 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
+# === 工具暫存產物（spec-driven-flow checker 等） ===
+.cache/
+
 # === 虛擬環境 ===
 .venv/
 venv/

@@ -32,7 +32,7 @@
 
 | 步驟 | 狀態 | 備註 |
 |------|------|------|
-| 3-1 程式碼清理 | 未開始 | 依規模判斷是否執行 |
+| 3-1 程式碼清理 | 完成 | SAFE+主要SUGGEST 已修：移 adjacent_periods 死碼、清 AD-10 註解、抽 filter_asset_records 共用、allocation 頁 read_range 去重、0000-01 入 constants、刪 SPEC.md；179 tests 綠、ruff 綠；checker HIGH 1→0 |
 | 3-2 安全審查 | 未開始 | 涉及認證/付款/個資時才執行 |
 | 3-3 規則符合度審查 | 未開始 | 工程準則全面符合度檢查 |
 | 3-4 行為對映審查 | 未開始 | AI 比對 SC 描述 vs test 內容 |

@@ -150,7 +150,7 @@ class TestPrefillFromPrevious:
     @pytest.mark.scenario("SC-005")
     @pytest.mark.scenario("SC-009")
     def test_sc005_sold_item_not_carried(self):
-        # 上月已賣出（市值 0 = 出清，AD-10）的項目不帶入新月份；仍持有的照常帶入
+        # 上月已賣出（市值 0 = 出清）的項目不帶入新月份；仍持有的照常帶入
         prev_records = [
             _prev_record(1, "2026-05", 0.0, net_investment=-530000.0),  # 台積電全數賣出
             _prev_record(2, "2026-05", 470000.0),  # 現金仍持有

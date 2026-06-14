@@ -8,9 +8,12 @@ Service 與 Repository 皆可呼叫（見架構合約 §8）。
 import re
 
 # ==== 第三方套件 ====
-# 無
+import pandas as pd
+
 # ==== 專案內部 ====
+from asset_lab.core.constants import HOLDING_KIND, MONTHLY_RECORDS_TABLE
 from asset_lab.core.exceptions import DataValidationError
+from asset_lab.models.holding import HoldingModel
 
 # 'YYYY-MM'：四位數年、兩位數補零的月（01–12）；用於從介面攔下格式不合的年月。
 _YEAR_MONTH_PATTERN = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
@@ -74,19 +77,20 @@ def months_between(start_ym: str, end_ym: str) -> int:
     return (end_year - start_year) * 12 + (end_month - start_month)
 
 
-def adjacent_periods(year_months: list[str]) -> list[tuple[str, str]]:
-    """從「有資料的月份」序列抽出相鄰期間段，供分段連乘使用。
+def filter_asset_records(range_df: pd.DataFrame, holdings: list[HoldingModel]) -> pd.DataFrame:
+    """從月度紀錄篩出資產項目的列；負債一律排除。
 
-    以有資料的月份為節點，相鄰兩個有資料月之間視為一段期間；缺月直接跳過、
-    不補插，因此期間段可橫跨多個無資料月份（見設計 AD-10）。輸入會先排序去重，
-    故節點順序與重複不影響結果。
+    配置與報酬率口徑皆「僅計資產」，故 ReturnService 與 AllocationService 都需先以此
+    過濾掉負債列。抽為共用純函式，使「負債排除」口徑單一定義、兩個 Service 不各自重複。
 
     Args:
-        year_months: 有資料月份的清單（'YYYY-MM' 格式，可亂序或含重複）。
+        range_df: 月度紀錄 DataFrame，含 holding_id 欄。
+        holdings: 項目主檔清單，用於辨識哪些 holding_id 為資產。
 
     Returns:
-        相鄰期間段清單，每段為 (期初月, 期末月)；少於兩個節點時為空清單。
+        僅含資產項目列的 DataFrame；輸入為空時原樣回傳。
     """
-    nodes = sorted({parse_year_month(ym): ym for ym in year_months}.items())
-    ordered = [ym for _, ym in nodes]
-    return list(zip(ordered, ordered[1:], strict=False))
+    if range_df.empty:
+        return range_df
+    asset_ids = {h.holding_id for h in holdings if h.kind == HOLDING_KIND.ASSET}
+    return range_df[range_df[MONTHLY_RECORDS_TABLE.HOLDING_ID].isin(asset_ids)]

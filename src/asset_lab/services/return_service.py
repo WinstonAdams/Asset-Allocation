@@ -23,7 +23,12 @@ import pyxirr
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import HOLDING_KIND, MONTHLY_RECORDS_TABLE
-from asset_lab.core.utils import months_between, parse_year_month, year_month_add
+from asset_lab.core.utils import (
+    filter_asset_records,
+    months_between,
+    parse_year_month,
+    year_month_add,
+)
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.results import CumulativeTwrPoint, ReturnResult
 
@@ -177,7 +182,7 @@ class ReturnService:
             該維度的 ReturnResult 清單；overall 為單一結果，category/holding 各組一筆。
         """
         annualized = months_between(start_ym, end_ym) + 1 >= _ANNUALIZE_MIN_MONTHS
-        asset_records = self._asset_records(range_df, holdings)
+        asset_records = filter_asset_records(range_df, holdings)
 
         results: list[ReturnResult] = []
         for dimension_key, member_ids in self._dimension_groups(dimension, holdings):
@@ -212,7 +217,7 @@ class ReturnService:
         Returns:
             逐有資料月的 CumulativeTwrPoint 清單，依月份排序。
         """
-        asset_records = self._asset_records(range_df, holdings)
+        asset_records = filter_asset_records(range_df, holdings)
         all_asset_ids = [h.holding_id for h in holdings if h.kind == HOLDING_KIND.ASSET]
         monthly = self._aggregate_monthly(asset_records, all_asset_ids)
         if monthly.empty:
@@ -234,14 +239,6 @@ class ReturnService:
                 CumulativeTwrPoint(year_month=year_months[index], cumulative_twr=cumulative)
             )
         return series
-
-    @staticmethod
-    def _asset_records(range_df: pd.DataFrame, holdings: list[HoldingModel]) -> pd.DataFrame:
-        """過濾出資產項目的月度紀錄；負債一律排除。"""
-        asset_ids = {h.holding_id for h in holdings if h.kind == HOLDING_KIND.ASSET}
-        if range_df.empty:
-            return range_df
-        return range_df[range_df[MONTHLY_RECORDS_TABLE.HOLDING_ID].isin(asset_ids)]
 
     @staticmethod
     def _dimension_groups(

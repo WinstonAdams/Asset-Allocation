@@ -15,7 +15,7 @@ import logging
 import streamlit as st
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import PERIOD_MODE
+from asset_lab.core.constants import EARLIEST_YEAR_MONTH_SENTINEL, PERIOD_MODE
 from asset_lab.core.exceptions import AssetLabError
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ def _resolve_period(*, period_service, record_repo, latest_ym: str) -> tuple[str
         custom_start = st.text_input("自訂起月（YYYY-MM）")
         custom_end = st.text_input("自訂訖月（YYYY-MM）")
 
-    range_df = record_repo.read_range(start_ym="0000-01", end_ym=latest_ym)
+    range_df = record_repo.read_range(start_ym=EARLIEST_YEAR_MONTH_SENTINEL, end_ym=latest_ym)
     earliest_ym = (
         str(range_df["year_month"].min()) if not range_df.empty else latest_ym
     )
