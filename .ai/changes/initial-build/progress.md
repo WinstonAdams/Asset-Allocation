@@ -7,7 +7,7 @@
 | 1-1 提案 | 完成 | proposal.md 已確認 |
 | 1-2a 技術選型 | 完成 | tech-research.md 已產出；發現 Turso 套件名需修正（libsql-client→libsql）|
 | 1-2b 架構分析 | 跳過 | greenfield 新專案，無既有 codebase 可分析 |
-| 1-2 設計 | 未開始 | — |
+| 1-2 設計 | 完成 | design.md 已確認（10 條 ADR）|
 | 1-3 行為規格化 | 未開始 | scenario-author 產 scenarios/ 卡片 |
 | 1-4 任務拆解 | 未開始 | — |
 
