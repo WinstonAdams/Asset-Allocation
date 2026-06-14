@@ -1,12 +1,12 @@
-# Progress: [Change 名稱]
+# Progress: initial-build
 
 ## Phase 1：規劃
 
 | 步驟 | 狀態 | 備註 |
 |------|------|------|
-| 1-1 提案 | 未開始 | — |
+| 1-1 提案 | 完成 | proposal.md 已確認 |
 | 1-2a 技術選型 | 未開始 | 按需，tech-researcher 產 tech-research.md；不需要時改「跳過」|
-| 1-2b 架構分析 | 未開始 | 按需，architect 產 architecture-brief.md；不需要時改「跳過」|
+| 1-2b 架構分析 | 跳過 | greenfield 新專案，無既有 codebase 可分析 |
 | 1-2 設計 | 未開始 | — |
 | 1-3 行為規格化 | 未開始 | scenario-author 產 scenarios/ 卡片 |
 | 1-4 任務拆解 | 未開始 | — |
