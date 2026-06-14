@@ -207,6 +207,157 @@ class TestComputePnl:
         assert pnl == pytest.approx(-50000.0)
 
 
+class TestComputeMwr:
+    """compute_mwr：以 XIRR 求解現金流年化報酬，不收斂時降級回 (None, 'not_converged')。"""
+
+    @pytest.mark.scenario("SC-015")
+    def test_sc015_xirr_annualizes_pure_growth_over_one_year(self):
+        # 初始市值 100000（流出），整整持有 12 個月、無中途資金流動，末月市值 110000（流入）
+        monthly = _monthly(
+            [
+                {"year_month": "2026-01", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-02", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-03", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-04", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-05", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-06", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-07", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-08", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-09", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-10", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-11", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-12", "market_value": 110000.0, "net_investment": 0.0},
+            ]
+        )
+        mwr, status = ReturnService().compute_mwr(monthly=monthly, initial_market_value=100000.0)
+        # 初始投入 100000 滿一年後變 110000 → 年化內部報酬率 10%
+        assert status == "ok"
+        assert _approx(mwr, 0.10)
+
+    @pytest.mark.scenario("SC-015")
+    def test_sc015_mid_investment_is_negative_cash_flow(self):
+        # 中途投入計為負現金流（流出）：初始 100000，2026-07 投入 50000，末月市值 165000
+        monthly = _monthly(
+            [
+                {"year_month": "2026-07", "market_value": None, "net_investment": 50000.0},
+                {"year_month": "2027-01", "market_value": 165000.0, "net_investment": 0.0},
+            ]
+        )
+        mwr, status = ReturnService().compute_mwr(monthly=monthly, initial_market_value=100000.0)
+        # 投入為負現金流、終值為正現金流 → 求得正的年化內部報酬率
+        assert status == "ok"
+        assert mwr is not None and mwr > 0.0
+
+    @pytest.mark.scenario("SC-015")
+    def test_sc015_withdrawal_is_positive_cash_flow(self):
+        # 中途提領計為正現金流（流入）：初始 100000，2026-07 提領 20000，末月市值 90000
+        monthly = _monthly(
+            [
+                {"year_month": "2026-07", "market_value": None, "net_investment": -20000.0},
+                {"year_month": "2027-01", "market_value": 90000.0, "net_investment": 0.0},
+            ]
+        )
+        mwr, status = ReturnService().compute_mwr(monthly=monthly, initial_market_value=100000.0)
+        # 提領（+20000）與終值（+90000）合計回收 110000，對應正報酬
+        assert status == "ok"
+        assert mwr is not None and mwr > 0.0
+
+    @pytest.mark.scenario("SC-015")
+    def test_sc015_terminal_value_blank_carries_forward(self):
+        # 末月市值留空（仍持有未更新）：沿用上一有值月份作為終值現金流
+        monthly = _monthly(
+            [
+                {"year_month": "2026-06", "market_value": 130000.0, "net_investment": 0.0},
+                {"year_month": "2026-12", "market_value": None, "net_investment": 0.0},
+            ]
+        )
+        mwr, status = ReturnService().compute_mwr(monthly=monthly, initial_market_value=100000.0)
+        # 終值沿用 130000 → 仍可求解出正報酬
+        assert status == "ok"
+        assert mwr is not None and mwr > 0.0
+
+    @pytest.mark.scenario("SC-015")
+    def test_sc015_zero_opening_position_built_from_net_investment(self):
+        # 期初市值 0、靠當期淨投入建倉：初始現金流為 0，投入與終值仍構成有效現金流
+        monthly = _monthly(
+            [
+                {"year_month": "2026-01", "market_value": None, "net_investment": 100000.0},
+                {"year_month": "2027-01", "market_value": 110000.0, "net_investment": 0.0},
+            ]
+        )
+        mwr, status = ReturnService().compute_mwr(monthly=monthly, initial_market_value=0.0)
+        # 投入 100000 一年後 110000 → 約 10% 年化
+        assert status == "ok"
+        assert mwr is not None and mwr > 0.0
+
+    @pytest.mark.scenario("SC-016")
+    def test_sc016_no_sign_change_does_not_converge(self):
+        # 現金流全為同號（初始流出 + 末月市值為 0、無任何回收）→ XIRR 無正負交替、無法收斂
+        monthly = _monthly(
+            [
+                {"year_month": "2026-06", "market_value": 0.0, "net_investment": 0.0},
+            ]
+        )
+        mwr, status = ReturnService().compute_mwr(monthly=monthly, initial_market_value=100000.0)
+        # 無法收斂時降級：mwr 不呈現數值、狀態標記為 not_converged
+        assert mwr is None
+        assert status == "not_converged"
+
+    @pytest.mark.scenario("SC-016")
+    def test_sc016_empty_series_degrades_gracefully(self):
+        # 無任何有資料月：只有初始流出、無終值現金流 → 無從求解，降級而非拋出
+        mwr, status = ReturnService().compute_mwr(
+            monthly=_monthly([]), initial_market_value=100000.0
+        )
+        assert mwr is None
+        assert status == "not_converged"
+
+    @pytest.mark.scenario("SC-016")
+    def test_sc016_non_finite_result_is_treated_as_not_converged(self):
+        # 求解結果為非有限值（極端現金流導致年化報酬發散為 inf/nan）亦視為不收斂
+        # 初始流出趨近於零、單月回收極大值 → 年化內部報酬率發散
+        monthly = _monthly(
+            [
+                {"year_month": "2026-01", "market_value": 1e15, "net_investment": 0.0},
+            ]
+        )
+        mwr, status = ReturnService().compute_mwr(monthly=monthly, initial_market_value=1e-12)
+        # 非有限求解結果統一降級，不讓 inf 漏到上層當成真實報酬
+        assert mwr is None
+        assert status == "not_converged"
+
+    @pytest.mark.scenario("SC-016")
+    def test_sc016_mwr_failure_does_not_affect_twr_and_pnl(self):
+        # 同一序列下 MWR 不收斂，但 TWR 與賺賠/簡單報酬率照常計算，互不拖累
+        monthly = _monthly(
+            [
+                {"year_month": "2026-06", "market_value": 0.0, "net_investment": 0.0},
+            ]
+        )
+        service = ReturnService()
+        mwr, mwr_status = service.compute_mwr(monthly=monthly, initial_market_value=100000.0)
+        twr = service.compute_twr(monthly=monthly, initial_market_value=100000.0)
+        pnl, simple_return = service.compute_pnl(monthly=monthly, initial_cost=100000.0)
+        # MWR 降級
+        assert mwr is None and mwr_status == "not_converged"
+        # TWR 照常：(0 − 0 − 100000) ÷ 100000 = −100%（全額虧損）
+        assert _approx(twr, -1.0)
+        # 賺賠照常：市值 0 − 累積成本 100000 = −100000
+        assert pnl == pytest.approx(-100000.0)
+        assert _approx(simple_return, -1.0)
+
+    @pytest.mark.scenario("SC-016")
+    def test_sc016_does_not_raise_on_non_converging_input(self):
+        # 降級語意保證：不收斂時 compute_mwr 不得讓例外往上拋（否則會拖垮整頁）
+        monthly = _monthly(
+            [
+                {"year_month": "2026-06", "market_value": 0.0, "net_investment": 0.0},
+            ]
+        )
+        # 不應拋出任何例外
+        ReturnService().compute_mwr(monthly=monthly, initial_market_value=100000.0)
+
+
 class TestInitialCostMarketValueIsolation:
     """compute_twr 與 compute_pnl 對 initial_cost / initial_market_value 的強制隔離。"""
 
@@ -258,6 +409,19 @@ class TestInitialCostMarketValueIsolation:
         with pytest.raises(TypeError):
             ReturnService().compute_pnl(  # type: ignore[call-arg]
                 monthly=monthly, initial_cost=300000.0, initial_market_value=500000.0
+            )
+
+    @pytest.mark.scenario("SC-018")
+    def test_sc018_compute_mwr_signature_rejects_initial_cost(self):
+        # 介面護欄：compute_mwr 同樣只吃 initial_market_value，不接受 initial_cost
+        monthly = _monthly(
+            [
+                {"year_month": "2026-01", "market_value": 110000.0, "net_investment": 0.0},
+            ]
+        )
+        with pytest.raises(TypeError):
+            ReturnService().compute_mwr(  # type: ignore[call-arg]
+                monthly=monthly, initial_market_value=100000.0, initial_cost=300000.0
             )
 
     @pytest.mark.scenario("SC-018")

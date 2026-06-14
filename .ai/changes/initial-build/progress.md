@@ -17,7 +17,7 @@
 |------|------|------|
 | t01 專案骨架+模型+core | 完成 | 基礎設施＋core 純函式；25 tests 綠，ruff 綠 |
 | t02 ReturnService TWR/PnL | 完成 | BR-4e 簽名隔離；19 tests 綠，累計 44 |
-| t03 ReturnService MWR/XIRR | 未開始 | SC-015,016 |
+| t03 ReturnService MWR/XIRR | 完成 | SC-015,016；接 pyxirr，不收斂降級；11 tests 綠，累計 55 |
 | t04 報酬三維度+區間 | 未開始 | SC-019,020,021,028(資料層) |
 | t05 Allocation 佔比/淨值/漂移 | 未開始 | SC-010,011,025,026,027(資料層) |
 | t06 目標偏離/再平衡 | 未開始 | SC-029,030 |
