@@ -36,7 +36,7 @@
 | 3-2 安全審查 | 完成 | OWASP Top 10 全維度通過；唯一 LOW（依賴下限+pip-audit）已修：pip-audit 進 dev extras、直接依賴補保守下限、pip-audit 跑出 No known vulnerabilities、179 tests 綠、ruff 綠 |
 | 3-3 規則符合度審查 | 完成 | 有條件通過；補 pages 型別提示（MEDIUM）；import 空行與 ruff I001 不可調和、以 ruff 綠為準（既知偏離）；HIGH 偽陽性屬 AD-1/2 既定偏離；179 tests 綠 |
 | 3-4 行為對映審查 | 完成 | 有條件通過；4 落差+1 觀察全在 test 端已補（移 tautology 改驗持久化、MWR 缺月、SC-021 邊界、SC-039 拆案例、補 test_app_guard AppTest 守門回歸）；193 tests 綠，SC 39/39 |
-| 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
+| 3-Z 最終驗證 | 完成 | 三件事全 PASS：scenario-lint 業務綁定 39/39 全覆蓋、0 invalid marker、孤兒 FAIL 仍限 test_core_utils+test_bootstrap（偏差未擴大）；pytest 193 passed；AppTest 啟動 app.py 無 runtime 例外、fail-closed 守門 5 案全綠（SC-033/034 未登入/非本人/空清單）。Phase 3 審查改動未破壞 runtime |
 
 ## Phase 4：收尾
 
