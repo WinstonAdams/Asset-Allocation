@@ -61,6 +61,60 @@ checker **未報出**但人工掃描發現的語意層問題見下方 SAFE / SUG
 
 ## 3-2 安全性審查
 
+審查範圍：src/asset_lab 全樹（access.py、bootstrap.py、4 個 repositories、data_io_service.py）＋ app.py ＋ pages/ 5 檔 ＋ .gitignore ＋ .streamlit/secrets.toml.example。本 Change 為 greenfield initial-build，以 OWASP Top 10 逐維度全檢視。
+核准判定：通過（無 CRITICAL / HIGH；唯一 LOW 已於第二段修正，餘 2 條觀察事項維持觀察、無需動作）
+
+### 自動掃描
+
+Checker 命令：`python ../.claude/skills/spec-driven-flow/scripts/checkers/runner.py --phase 3-2 --project-dir . --diff-base origin/main --json --output .ai/changes/initial-build/.cache/checker_3_2.json`
+退出碼：0（正常完成）
+總違規：0 條（CRITICAL: 0 / HIGH: 0 / MEDIUM: 0 / LOW: 0）
+Baseline 命中：0 條
+完整報告：`.ai/changes/initial-build/.cache/checker_3_2.json`
+
+**重要前提（scan_targets 為空的成因）**：checker 以 `git diff --merge-base origin/main HEAD` 取掃描目標，而本機 `HEAD == origin/main`（initial-build 全部 commit 已合入 origin/main），故 diff 回 0 檔、scan_targets=[]、0 違規。**這不代表「無程式碼」或「無風險」，而是 diff 基準與已合併狀態重合**。因此本次安全結論完全以下方人工全樹審查為準，checker 0 違規僅作「無新增 diff 級機械違規」的輔助佐證，不替代審查職責。
+
+依賴掃描（第二段已補執行）：`pip-audit` 已加入 dev extras 並裝入 .venv，跑 `.venv/bin/pip-audit` 結果 **No known vulnerabilities found**（唯一 skip 為本地套件 `asset-lab` 自身——未上 PyPI，預期且無安全意涵）。`pip list --outdated` 僅顯示 anyio/certifi/numpy/pydantic_core/pytest/ruff 各落後一個小版本，無安全急迫性。
+
+### 發現
+
+- [LOW — 已修正] A06:依賴與元件 — `pyproject.toml` — 依賴版本下限過寬且未跑 CVE 掃描
+  問題：`libsql`、`pyxirr`、`plotly`、`pandas`、`pydantic` 皆無版本下限（僅 `streamlit>=1.42`）。原本環境無 `pip-audit`／`uvx`，無法對已安裝版本（streamlit 1.58.0、pandas 3.0.3、libsql 0.1.11 等）做 CVE 比對，等於少了一道自動化關卡。
+  修復（第二段已實施）：
+    1. `pyproject.toml` dev extras 加入 `pip-audit`。
+    2. 直接依賴補上保守下限（以 .venv 已驗證版本為基準、不過度收緊）：`libsql>=0.1`、`pyxirr>=0.10`、`plotly>=5`、`pandas>=2.2`、`pydantic>=2`；`streamlit>=1.42` 維持不降。
+    3. 裝入 .venv 後跑 `.venv/bin/pip-audit`：**No known vulnerabilities found**。
+    4. 回歸驗證：`pytest` 179 passed、`ruff check .` All checks passed。
+  影響：低；已關閉「缺自動化 CVE 偵測手段」的流程缺口。
+  Checker 對應：checker 未報出（3-2 checker 不含依賴 CVE 掃描；且 diff 基準為空）。
+
+- [觀察 / INFO] A09:日誌與監控 — `pages/*.py` — `logger.exception(...)` 寫入完整堆疊
+  問題：5 個頁面在 catch `AssetLabError` 時呼叫 `logger.exception(...)`，會把完整 traceback 寫入 stdlib logging。當前被 catch 的僅領域例外（友善中文訊息，不含機密）；但若未來把連線/bootstrap 例外也納入同一 catch，traceback 可能帶出 Turso URL 等連線字串。
+  現況判定：**不構成漏洞**。連線建立（`get_connection` 讀 `st.secrets`）發生在 bootstrap、不在這些 catch 範圍內；目前 log 內容不含機密。列為觀察，提醒日後擴大 catch 範圍時須確認不記敏感連線字串。
+  Checker 對應：checker 未報出。
+
+- [觀察 / INFO] A09:日誌與監控 — `app.py:67` — `st.caption(f"已登入：{st.user.email}")`
+  問題：側欄顯示登入者自身 email。此為**守門放行後**、僅顯示給該使用者本人，且 email 即其登入身分，非他人個資外洩。
+  現況判定：**不構成漏洞**，符合常見「顯示目前登入帳號」慣例。列為觀察僅為記錄個資出現點。
+  Checker 對應：checker 未報出。
+
+### 各維度逐項結論（OWASP Top 10）
+
+- **A01 權限控制失效**：守門 `_require_access()` 置於 `main()` 最頂、先於 `bootstrap.get_container()`（連線/讀取）與 `st.navigation`，任一未放行決策皆 `st.stop()`，非本人在登入後不會觸發任何 Repository 讀取或頁面渲染。`evaluate_access` 為 fail-closed：未登入→擋、無 email→擋、email 不在清單→擋，僅命中允許清單才放行。**無越權路徑**。（註：此為單一資料庫、單一擁有者模型，無多租戶/RBAC 需求，故無水平越權面。）
+- **A02 加密失效**：本程式不自行做加解密；機密（Turso token、OAuth secret、cookie_secret）全交由 Streamlit `st.secrets` 與 `st.login()` OIDC 管理。Turso 連線為 `libsql://`（TLS）。**無自製弱加密**。
+- **A03 注入**：所有 SQL（record/holding/schema/target repository）皆參數化 `cursor.execute(sql, (?...))`；SQL 字串中的表名/欄名一律來自 `core/constants.py` 受控常數，**無任何使用者輸入拼接進 SQL**。CSV 匯入經 `DataIoService.parse_and_validate` 驗證性質/分類/唯一鍵/孤兒紀錄後才以參數化 `replace_all` 寫入，數值欄走 `float()`、字串欄落 model，無公式注入回寫風險（匯出用 `df.to_csv`，未對 `=`/`+`/`@` 開頭做 CSV formula-injection 轉義——但本工具 CSV 僅供使用者自身下載/回匯，非分享給第三方開啟，風險可接受，列為極低）。**無 SQL/命令/路徑注入**。
+- **A04 不安全設計**：守門邏輯抽為不依賴 Streamlit 的純函式 `evaluate_access`，以單元測試覆蓋三種決策（SC-033/034/039 email 正規化）；fail-closed 為刻意設計（漏設 secrets→空 set→不放行；`StreamlitSecretNotFoundError`→回空 set 而非崩潰）。設計穩健。
+- **A05 安全設定錯誤**：`.streamlit/secrets.toml` 已被 `.gitignore` 第 3 行排除（`git check-ignore` 確認命中），磁碟上不存在實體 secrets.toml；`secrets.toml.example` 範本所有值皆為佔位（`PASTE_YOUR_...`、`your-db-name`、`owner@example.com`、`GENERATE_A_RANDOM_HIGH_ENTROPY_STRING`），無真值。`getattr(st.user, ...)` 對 `[auth]` 未設定退化為未登入而非整頁崩潰。**設定安全**。
+- **A06 易受攻擊與過時的元件**：見上方 LOW（缺 pip-audit、依賴下限寬鬆）。
+- **A07 識別與驗證失效**：採 `st.login()` Google OIDC，零自建密碼/session 機制；session 與 cookie 由 Streamlit OIDC（`cookie_secret`）管理。email 比對前以 `_normalize_email`（strip+lower）正規化兩側，避免大小寫/空白造成誤放行或誤擋。**無自建認證弱點**。
+- **A08 軟體與資料完整性失效**：無不安全反序列化——CSV 走 `pd.read_csv`（非 pickle/eval）；無 `pickle.loads`、無 `yaml.load`、無動態 `eval/exec`。`model_dump()` 僅序列化自家 pydantic model 進 session_state。**無風險**。
+- **A09 記錄與監控失敗**：見上方兩條觀察。錯誤對使用者僅顯示領域例外友善訊息（`st.error(str(error))`），底層堆疊不噴到畫面。**目前無機密外洩**。
+- **A10 SSRF**：本程式不依使用者輸入發出任何外連請求；唯一外連目標 Turso URL 來自受控 `st.secrets`。**無 SSRF 面**。
+
+### 密鑰歷史檢查
+
+`git log --all -p` 全歷史掃描：無 `.env`/`secrets.toml`/`.pem`/`.key` 曾進版控；無任何 JWT(`eyJ`)、`sk-`、`GOCSPX-`、真實 `auth_token` 或真實 `libsql://*.turso` 值（僅範本佔位）；src/pages 無寫死真實 email（僅 `example.com`）。tracked files 僅 `.streamlit/secrets.toml.example`（佔位範本，合法進版控）。**機密零進版控，無需輪換**。
+
 <!-- security-reviewer subagent 產出（涉及認證/付款/個資時才執行） -->
 
 ## 3-3 規則符合度審查
