@@ -16,15 +16,20 @@ import logging
 import streamlit as st
 
 # ==== 專案內部 ====
+from asset_lab.bootstrap import Container
 from asset_lab.core.constants import ASSET_CATEGORIES, DEFAULT_REBALANCE_THRESHOLD, HOLDING_KIND
 from asset_lab.core.exceptions import AssetLabError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.target import TargetAllocationModel
+from asset_lab.repositories.holding_repository import HoldingRepository
+from asset_lab.repositories.record_repository import RecordRepository
+from asset_lab.repositories.target_repository import TargetRepository
+from asset_lab.services.allocation_service import AllocationService
 
 logger = logging.getLogger(__name__)
 
 
-def _container():
+def _container() -> Container:
     """取放行後存入 session 的依賴容器。"""
     return st.session_state["container"]
 
@@ -52,7 +57,7 @@ def render() -> None:
         st.error(str(error))
 
 
-def _render_holdings(*, holding_repo) -> None:
+def _render_holdings(*, holding_repo: HoldingRepository) -> None:
     """持有項目主檔的新增與編輯（改名/改分類不更動 holding_id）。"""
     st.subheader("持有項目主檔")
     for holding in holding_repo.list_holdings():
@@ -82,7 +87,7 @@ def _render_holdings(*, holding_repo) -> None:
         st.success("已新增項目")
 
 
-def _render_targets(*, target_repo) -> None:
+def _render_targets(*, target_repo: TargetRepository) -> None:
     """各分類目標比重設定（百分比 0–100）。"""
     st.subheader("目標比重")
     current = {t.category: t.target_weight for t in target_repo.read_targets()}
@@ -102,7 +107,13 @@ def _render_targets(*, target_repo) -> None:
             st.success(f"已儲存 {category} 目標比重")
 
 
-def _render_drift(*, holding_repo, target_repo, record_repo, allocation_service) -> None:
+def _render_drift(
+    *,
+    holding_repo: HoldingRepository,
+    target_repo: TargetRepository,
+    record_repo: RecordRepository,
+    allocation_service: AllocationService,
+) -> None:
     """當月各分類相對目標的偏離與是否需再平衡。"""
     st.subheader("目標偏離")
     latest_ym = record_repo.latest_year_month()

@@ -15,13 +15,17 @@ import logging
 import streamlit as st
 
 # ==== 專案內部 ====
+from asset_lab.bootstrap import Container
 from asset_lab.core.exceptions import AssetLabError
 from asset_lab.models.record import MonthlyRecordModel
+from asset_lab.repositories.holding_repository import HoldingRepository
+from asset_lab.repositories.record_repository import RecordRepository
+from asset_lab.services.monthly_input_service import MonthlyInputService
 
 logger = logging.getLogger(__name__)
 
 
-def _container():
+def _container() -> Container:
     """取放行後存入 session 的依賴容器。"""
     return st.session_state["container"]
 
@@ -59,7 +63,9 @@ def render() -> None:
         st.error(str(error))
 
 
-def _render_record_editor(*, record_repo, holding_repo) -> None:
+def _render_record_editor(
+    *, record_repo: RecordRepository, holding_repo: HoldingRepository
+) -> None:
     """單列新增/編輯/刪除：收集欄位後委派 Repository 寫入。"""
     st.subheader("單列錄入")
     holdings = holding_repo.list_holdings()
@@ -90,7 +96,13 @@ def _render_record_editor(*, record_repo, holding_repo) -> None:
         st.success("已刪除")
 
 
-def _render_transfer(*, input_service, record_repo, holding_repo, target_ym: str) -> None:
+def _render_transfer(
+    *,
+    input_service: MonthlyInputService,
+    record_repo: RecordRepository,
+    holding_repo: HoldingRepository,
+    target_ym: str,
+) -> None:
     """項目間成對轉移：委派 Service 產生成對紀錄後由 Repository 寫入。"""
     st.subheader("項目間轉移")
     options = {h.holding_id: h.name for h in holding_repo.list_holdings()}

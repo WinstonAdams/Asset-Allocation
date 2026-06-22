@@ -15,8 +15,12 @@ import logging
 import streamlit as st
 
 # ==== 專案內部 ====
+from asset_lab.bootstrap import Container
 from asset_lab.core.constants import EARLIEST_YEAR_MONTH_SENTINEL, PERIOD_MODE
 from asset_lab.core.exceptions import AssetLabError
+from asset_lab.models.results import ReturnResult
+from asset_lab.repositories.record_repository import RecordRepository
+from asset_lab.services.period_service import PeriodService
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +28,7 @@ logger = logging.getLogger(__name__)
 _MWR_UNAVAILABLE = "無法計算"
 
 
-def _container():
+def _container() -> Container:
     """取放行後存入 session 的依賴容器。"""
     return st.session_state["container"]
 
@@ -66,7 +70,9 @@ def render() -> None:
         st.error(str(error))
 
 
-def _resolve_period(*, period_service, record_repo, latest_ym: str) -> tuple[str, str]:
+def _resolve_period(
+    *, period_service: PeriodService, record_repo: RecordRepository, latest_ym: str
+) -> tuple[str, str]:
     """讀區間模式與自訂起訖，委派 PeriodService 解析為 (起月, 訖月)。"""
     mode = st.selectbox("區間", options=list(PERIOD_MODE.ALL))
     custom_start = custom_end = None
@@ -87,7 +93,7 @@ def _resolve_period(*, period_service, record_repo, latest_ym: str) -> tuple[str
     )
 
 
-def _render_results(results) -> None:
+def _render_results(results: list[ReturnResult]) -> None:
     """逐維度呈現報酬率；MWR 不收斂時降級為「無法計算」。"""
     if not results:
         st.write("此區間無可計算的資產報酬。")

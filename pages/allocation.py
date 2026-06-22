@@ -12,17 +12,23 @@
 import logging
 
 # ==== 第三方套件 ====
+import pandas as pd
 import streamlit as st
 
 # ==== 專案內部 ====
 from asset_lab import charts
+from asset_lab.bootstrap import Container
 from asset_lab.core.constants import EARLIEST_YEAR_MONTH_SENTINEL
 from asset_lab.core.exceptions import AssetLabError
+from asset_lab.models.holding import HoldingModel
+from asset_lab.repositories.record_repository import RecordRepository
+from asset_lab.services.allocation_service import AllocationService
+from asset_lab.services.return_service import ReturnService
 
 logger = logging.getLogger(__name__)
 
 
-def _container():
+def _container() -> Container:
     """取放行後存入 session 的依賴容器。"""
     return st.session_state["container"]
 
@@ -68,7 +74,13 @@ def render() -> None:
         st.error(str(error))
 
 
-def _render_pie(*, record_repo, allocation_service, holdings, latest_ym: str) -> None:
+def _render_pie(
+    *,
+    record_repo: RecordRepository,
+    allocation_service: AllocationService,
+    holdings: list[HoldingModel],
+    latest_ym: str,
+) -> None:
     """選定月份資產配置圓餅（可切項目/分類粒度）。"""
     st.subheader("配置佔比（圓餅）")
     by = st.radio("粒度", options=["category", "holding"], horizontal=True)
@@ -79,14 +91,24 @@ def _render_pie(*, record_repo, allocation_service, holdings, latest_ym: str) ->
     st.plotly_chart(charts.allocation_pie(snapshot=snapshot), use_container_width=True)
 
 
-def _render_area(*, allocation_service, holdings, range_df) -> None:
+def _render_area(
+    *,
+    allocation_service: AllocationService,
+    holdings: list[HoldingModel],
+    range_df: pd.DataFrame,
+) -> None:
     """各資產分類佔比隨月份變化的堆疊面積圖（區間自開始記錄至最新月）。"""
     st.subheader("配置漂移（堆疊面積）")
     drift_df = allocation_service.drift_series(range_df=range_df, holdings=holdings)
     st.plotly_chart(charts.allocation_area(drift_df=drift_df), use_container_width=True)
 
 
-def _render_net_worth(*, allocation_service, holdings, range_df) -> None:
+def _render_net_worth(
+    *,
+    allocation_service: AllocationService,
+    holdings: list[HoldingModel],
+    range_df: pd.DataFrame,
+) -> None:
     """淨值折線，使用者可勾選疊加總資產/總負債線。"""
     st.subheader("淨值趨勢（折線）")
     show_assets = st.checkbox("疊加總資產線")
@@ -100,7 +122,12 @@ def _render_net_worth(*, allocation_service, holdings, range_df) -> None:
     )
 
 
-def _render_cumulative_twr(*, return_service, holdings, range_df) -> None:
+def _render_cumulative_twr(
+    *,
+    return_service: ReturnService,
+    holdings: list[HoldingModel],
+    range_df: pd.DataFrame,
+) -> None:
     """整體累積 TWR 走勢（固定單一折線，不提供指標切換）。"""
     st.subheader("報酬率走勢（累積 TWR）")
     points = return_service.cumulative_twr_series(range_df=range_df, holdings=holdings)

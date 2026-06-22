@@ -119,6 +119,80 @@ Baseline 命中：0 條
 
 ## 3-3 規則符合度審查
 
+審查範圍：原始碼 24 檔（src/asset_lab 全樹 + app.py + pages/ 5 檔），全為 greenfield 新增。git diff vs origin/main 為空（HEAD == origin/main，全部 commit 已合入），故以「整個新建 codebase」為審查對象、逐檔逐條比對工程準則。
+專案脈絡：greenfield、**無 utils_v2**（已確認該目錄不存在）；design.md AD-1/AD-2/AD-8 為既定且正當的偏離依據（Streamlit 入口模型取代 RPA main.py、頁面即 Controller、stdlib logging 取代 structlog/biz_job）。ruff（E/F/I/UP/B，line-length 100）全綠。
+核准判定：**有條件通過**（無 CRITICAL / HIGH 真實違規；checker 兩條 HIGH 經復核皆為對 ADR 既定偏離的偽陽性；實質發現為 1 MEDIUM + 數條 LOW）
+
+### 自動掃描
+
+Checker 命令：`python <monorepo>/.claude/skills/spec-driven-flow/scripts/checkers/runner.py --phase 3-3 --project-dir . --diff-base origin/main --json --output .ai/changes/initial-build/.cache/checker_3_3.json`
+退出碼：0（正常完成）
+總違規：2 條（CRITICAL: 0 / HIGH: 2 / MEDIUM: 0 / LOW: 0）
+Baseline 命中：0 條
+完整報告：`.ai/changes/initial-build/.cache/checker_3_3.json`
+
+> 註：checker 以 `git diff --merge-base origin/main HEAD` 取掃描目標，本機 diff 為空（scan_targets=[]），故兩條 HIGH 屬「專案結構級」靜態檢查（檢 main.py / controllers 目錄是否存在），非 diff 級。
+
+逐條復核：
+
+- **HIGH `root_main_exists`**（checker 已標）「專案根目錄缺少 main.py」— **判定不違規（偽陽性）**。本專案為 Streamlit 互動式 Web App，入口為 `streamlit run app.py`，AD-1 明確記錄「以 Streamlit 多頁 App 取代 RPA main.py 入口模型」並逐項論證 RPA 的 argparse/biz_job/批次退出語意在常駐 Web App 無對應、硬套會產生死碼。checker 規則對應的是 02-architecture §3 main.py 合約，該合約前提是 CLI/RPA 腳本，不適用本專案。屬 ADR 既定且正當的偏離。
+- **HIGH `src_project_layout_missing`**（checker 已標）「缺少 asset_lab/controllers 目錄」— **判定不違規（偽陽性）**。AD-2 明定分層為 `Page(View/Controller) → Service → Repository → Model`：頁面（`pages/*.py`）扮演 Controller/View 複合角色，是 Streamlit 社群慣例，符合「流程決策歸 Controller」精神。`services/` `repositories/` `models/` `core/` 皆齊備且職責切分清楚。無獨立 controllers/ 目錄是 AD-2 的刻意設計，非缺漏。
+- **checker 未報出**但人工掃描發現的語意層問題見下方「規則審查發現」（pages 型別提示缺漏、import 空區塊空行、薄別名等）。
+
+### 規則審查發現
+
+#### MEDIUM
+
+- [MEDIUM] `pages/input.py`、`pages/allocation.py`、`pages/returns.py`、`pages/settings.py`、`pages/data_io.py` — **私有 helper 與 `_container()` 普遍缺型別提示**
+  問題：每頁的 `def _container():`（回傳值無型別）、以及所有 `_render_*` / `_resolve_period` / `_render_results` 的 keyword 參數（`record_repo`、`holding_repo`、`container`、`allocation_service`、`results`、`holdings`、`range_df` 等）缺型別標註。`render() -> None` 與少數已標（`latest_ym: str`、`value: float | None`）為例外。違反 coding-style §3「型別提示：函式參數與回傳值必填」。
+  範例：`pages/allocation.py:71 def _render_pie(*, record_repo, allocation_service, holdings, latest_ym: str) -> None:`（前三參數無型別）、`pages/returns.py:90 def _render_results(results) -> None:`、各頁 `def _container():`。
+  建議修法：`_container()` 標 `-> Container`（`from asset_lab.bootstrap import Container`）；helper 參數標對應 Repository/Service/Model 型別（`record_repo: RecordRepository`、`holdings: list[HoldingModel]`、`range_df: pd.DataFrame`、`results: list[ReturnResult]` 等）。Page 為 Streamlit 黏合層、接的是 Container 已具型別的屬性，補上即為純機械工，無行為風險。
+  影響範圍：5 檔、約 12 個函式簽名。3-1 清理階段已將此項列為 SUGGEST 並註記「建議交 3-3 統一判定」（review.md §3-1 SUGGEST 倒數第 4 條）——本階段確認為應修之規則違規。
+  Checker 對應：checker 未報出（ruff 選用集 E/F/I/UP/B 不含 ANN 系列強制型別標註；屬語意層人工檢出）。
+
+#### LOW
+
+- [LOW] `src/asset_lab/repositories/holding_repository.py:12-14`、`schema_repository.py:14-16`、`target_repository.py:11-13`、`services/monthly_input_service.py:21-23`、`services/period_service.py:12-14` 等 — **空 import 區塊（`# 無`）與下一個區塊標頭之間缺空行**
+  問題：當「第三方套件」區塊為 `# 無`（無實際 import）時，`# 無` 與接續的 `# ==== 專案內部 ====` 標頭之間沒有空行，形如：
+  ```
+  # ==== 第三方套件 ====
+  # 無
+  # ==== 專案內部 ====
+  from asset_lab.core.constants import ...
+  ```
+  嚴格依 coding-style §2「三個區塊、區塊間留空行」應於 `# 無` 後保留空行。**判定為可接受的工具驅動偏離**：本專案 ruff 啟用 `I`（isort），實際有 import 的相鄰區塊間（如「原生」與「第三方」、「第三方」與「專案內部」）凡含真實 import 處皆已正確留空行並通過 I001；唯獨「空區塊（# 無）緊接下一標頭」這一情形，與 isort 對「連續註解 + import 群組」的歸併判定產生張力。implementor 過程已記錄此為「utils import 區塊空行（I001 與風格規則衝突）」的既知偏離。屬純排版、零行為影響、ruff 綠。**建議維持現狀**；若要消弭，可在報告第二段於各空區塊 `# 無` 後補一空行並複跑 ruff 確認仍綠（風險極低）。
+  Checker 對應：checker 未報出（ruff I001 通過；屬風格細則人工檢出）。
+
+- [LOW] `src/asset_lab/repositories/target_repository.py:59` — `read_all()` 為 `read_targets()` 的薄別名（`return self.read_targets()`）
+  問題：兩方法同結果，純為語意命名（匯出語境用 read_all、設定/偏離語境用 read_targets，與其他 Repository 的 read_all 對外契約一致）。不違反任何硬性規則。3-1 已記錄並判定保留。**判定可接受**，僅記錄，無需動作。
+  Checker 對應：checker 未報出。
+
+- [LOW] `src/asset_lab/services/allocation_service.py:34-36`（`_DRIFT_*`）與 `src/asset_lab/charts.py:28-30`（`_AREA_*`）— 長表欄名契約（`"year_month"/"dimension_key"/"weight"`）在生產者（drift_series）與消費者（allocation_area）各自定義一組同值常數
+  問題：耦合契約的重複定義，日後改欄名須兩處同步。3-1 已列 SUGGEST（低優先）。不違反硬性規則（兩端皆以具名常數而非散落字面，已優於魔法字串）。**判定可接受**；若第二段有餘力可收斂為單一來源（如 results 模組或 constants 常數），兩端引用。
+  Checker 對應：checker 未報出。
+
+### 各規則檔逐項符合度結論
+
+- **01-coding-style**：雙引號、snake_case/PascalCase、kwargs（DI 與多參數方法一律 keyword args，符合）皆遵守。docstring 完整（public 函式/方法/類別含 Args/Returns/Raises、繁中、註解說明 WHY）。型別提示——**Service/Repository/Model/core/charts/bootstrap/app 層完整**，唯 **pages helper 缺型別（上方 MEDIUM）**。Import 三區塊用語正確、`# 無` 佔位保留順序，唯空區塊空行細節（上方 LOW）。魔法字串：`"0000-01"` 已於 3-1 收斂為 `EARLIEST_YEAR_MONTH_SENTINEL`，狀態值/維度名/欄名皆具名常數，未見散落魔法字串。
+- **02-architecture**：分層歸屬正確——Service 純運算無 I/O 無 Streamlit（ReturnService/AllocationService/PeriodService/DataIoService 建構子無依賴；MonthlyInputService 經 Protocol 注入 reader 僅讀取、不寫入）；Repository 只做 SQL 執行與 row↔model 轉換、不含業務判斷（資產篩選、目標總和校驗皆在上層）；Page 委派不算業務值。`core/utils.py` `filter_asset_records`/`parse_year_month`/`year_month_add`/`months_between` 為純函式、無 I/O、無流程判斷，符合 §8。Repository 皆有建構子且 conn 由 bootstrap keyword 注入。main.py/controllers 結構偏離為 AD-1/AD-2 既定（見自動掃描復核）。
+- **03-data-config**：constants.py 以嵌套 class + 模組級具名常數組織，Sheet-schema 規則不適用（本專案為 Turso 而非 Google Sheet），DB 表/欄 schema 以扁平 class（`HOLDINGS_TABLE` 等）承載、無 URL 混入、無 SCHEMA 中間層，精神一致。Pydantic Model 皆純資料結構（無業務邏輯、無 I/O、無 Service/Repository 呼叫、無 field_validator），Result model 與主檔 model 分離。機密（Turso 憑證、OAuth、允許 email）全走 st.secrets，無寫死（與 3-2 安全審查一致）。`Optional[T]` 改採 `T | None`——見下方既定偏離評估。
+- **04-cross-cutting**：Logging 以 stdlib `logging.getLogger(__name__)` 模組頂層宣告、未經建構子注入（保留 §1.1 精神）；不採 structlog event-name/note/log_type 欄位契約為 **AD-8 既定偏離**（無 utils_v2 pipeline，硬套形同空轉）。Error handling：Repository/Service 錯誤往上拋（RecordRepository 將 UNIQUE 衝突、DataIoService 將解析失敗「轉譯例外類型後 raise」屬合法的加 context 轉拋，非吞例外）；**Page 為唯一 catch 點**（取代 RPA Controller 角色），catch 後 `st.error` + `logger.exception`，符合「單一 catch 點、不重複 log、不吞例外」核心原則。DI：runtime 值一律 bootstrap 讀取後 keyword 注入，下層不自行從 constants 提取 runtime 值（Repository 的 `from constants import *_TABLE` 為模組級 schema 常數定義用於組 SQL 字串、非 runtime 環境差異值；屬 §3.2 表中「業務規格 schema」灰區，但本專案無 --env 多環境、表名為全域固定常數，且 SQL 模板須在模組級組裝，判定可接受、非違規）。
+- **05-reference**：作為前四檔的具現化參考，差異點（Optional vs |None、structlog vs logging、main.py vs app.py）均已由 AD-1/AD-8 與 UP045 涵蓋。
+
+### 既定偏離評估（implementor 記錄的兩項 + ADR 偏離）
+
+- **`Optional[X]` → `X | None`（ruff UP045 要求）— 可接受**。03-data-config §3 與 05-reference 範例寫 `Optional[T] = Field(default=None)`，但本專案 ruff 啟用 `UP`（pyupgrade），UP045 會將 `Optional[X]` 標為應改寫為 `X | None`（py312 target）。`X | None` 與 `Optional[X]` 語意完全等價，且為 PEP 604 現代寫法。規則檔的 `Optional` 寫法早於工具設定、屬範例用語非硬性禁止 `|`。判定：**遵守 ruff（工具強制）優先，無需改回 Optional**。全 Model/簽名一致採 `X | None`，未見混用。
+- **utils import 區塊空行（I001 與風格規則張力）— 可接受**。見上方 LOW；ruff I001 綠、純排版、零行為影響。
+- **AD-1 / AD-2 / AD-8（Streamlit 入口、頁面即 Controller、stdlib logging）— 既定且正當**。design.md 逐項論證偏離理由與否決方案，3-1/3-2 亦以此為基準，本階段確認接受。
+
+### 第二段修正結果（使用者裁決範圍：MEDIUM 型別提示 + LOW 空行）
+
+- **[MEDIUM 已修] pages/ 5 檔型別提示補齊**。對 `pages/input.py`、`allocation.py`、`returns.py`、`settings.py`、`data_io.py` 的 `_container()`（回傳型別補 `-> Container`）與全部私有 helper 參數（共 12 個函式簽名）補上正確型別：依設計介面契約使用 `Container`、`RecordRepository`/`HoldingRepository`/`TargetRepository`、`AllocationService`/`ReturnService`/`PeriodService`/`MonthlyInputService`、`list[HoldingModel]`、`list[ReturnResult]`、`pd.DataFrame` 等；並補入對應 import（皆為既有公開類別，無循環引用）。純機械補標，不改任何行為。coding-style §3「函式參數與回傳值必填」此項已關閉。
+
+- **[LOW 未採用——以 ruff 綠為準]** 空 import 區塊（`# 無`）後補空行的嘗試**與 ruff I001 直接衝突，無法兩全**。實測：於 `# 無` 與 `# ==== 專案內部 ====` 間補空行後，`ruff check`（啟用 `I`）報 5 個 I001「Import block is un-sorted or un-formatted」，且 `ruff --fix` 的修法正是**移除**該空行（isort 將 `# 無` 視為附屬於後續 import 群組，群組與其註解間不得有空行）。依使用者裁決的 fallback 條款「ruff 與補空行衝突無法兩全時以 ruff 綠為準」，已 `ruff --fix` 回原狀（5 檔的 `# 無` 緊接 `# ==== 專案內部 ====`，無空行）。此即 implementor 過程記錄的既知偏離（「utils import 區塊空行 = I001 與風格規則衝突」）的最終確認：**coding-style §2「區塊間留空行」與 ruff I001 在「空區塊」情形下不可調和，採 ruff 綠**。其餘 LOW（`read_all` 薄別名、長表欄名常數重複）依裁決維持現狀未動。
+
+- **驗證**：`.venv/bin/ruff check .` All checks passed；`.venv/bin/python -m pytest tests/` **179 passed**（與修正前一致，無迴歸）；`py_compile` 5 頁全過。
+
 <!-- rules-reviewer subagent 產出（工程準則全面符合度檢查）-->
 
 ## 3-4 行為對映審查

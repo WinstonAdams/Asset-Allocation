@@ -16,12 +16,13 @@ import logging
 import streamlit as st
 
 # ==== 專案內部 ====
+from asset_lab.bootstrap import Container
 from asset_lab.core.exceptions import AssetLabError
 
 logger = logging.getLogger(__name__)
 
 
-def _container():
+def _container() -> Container:
     """取放行後存入 session 的依賴容器。"""
     return st.session_state["container"]
 
@@ -39,7 +40,7 @@ def render() -> None:
         st.error(str(error))
 
 
-def _render_export(*, container) -> None:
+def _render_export(*, container: Container) -> None:
     """全量匯出三類資料為含表頭 CSV，提供下載按鈕。"""
     st.subheader("匯出")
     data_io = container.data_io_service
@@ -53,7 +54,7 @@ def _render_export(*, container) -> None:
     st.download_button("下載 targets.csv", data=targets_csv, file_name="targets.csv")
 
 
-def _render_import(*, container) -> None:
+def _render_import(*, container: Container) -> None:
     """上傳三份 CSV，驗證後還原到空庫（驗證失敗的 catch 在 render 統一處理）。"""
     st.subheader("匯入（還原到空庫）")
     st.warning("匯入僅支援還原到空的資料庫；若庫內已有資料，匯入會被拒絕以免污染。")
