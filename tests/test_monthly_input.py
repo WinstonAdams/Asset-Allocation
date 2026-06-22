@@ -173,14 +173,6 @@ class TestPrefillSoldExclusion:
     """SC-009：賣出當月記市值 0、之後缺列，後續月份不再帶入該項目。"""
 
     @pytest.mark.scenario("SC-009")
-    def test_sc009_sale_month_zero_value_negative_net_investment_recorded(self):
-        # 賣出當月（2026-05）以市值 0、淨投入 −530000 記錄，捕捉最後一期報酬與資金流出
-        record = _prev_record(1, "2026-05", 0.0, net_investment=-530000.0)
-        # 賣出當月本身仍是一筆有效紀錄（出清語意），不是空列
-        assert record.market_value == 0.0
-        assert record.net_investment == -530000.0
-
-    @pytest.mark.scenario("SC-009")
     def test_sc009_no_carry_after_sale_month(self):
         # 自賣出之後的月份起不再帶入該已賣出項目（缺列＝已不持有）
         prev_records = [_prev_record(1, "2026-05", 0.0, net_investment=-530000.0)]
@@ -314,6 +306,43 @@ def _record(holding_id: int, year_month: str, market_value: float, net_investmen
         market_value=market_value,
         net_investment=net_investment,
     )
+
+
+class TestSaleMonthClearoutPersisted:
+    """SC-009：賣出當月以市值 0、負淨投入記錄，是一筆真實持久化的有效紀錄（非空列）。"""
+
+    @pytest.mark.scenario("SC-009")
+    def test_sc009_sale_month_zero_value_negative_net_investment_persisted(
+        self, record_repo, seeded_holding_id
+    ):
+        # 賣出當月（2026-05）取回 530000：以市值 0、淨投入 −530000 寫入儲存層
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 0.0, -530000.0)
+        )
+        # 讀回確認：賣出當月被持久化為一筆有效紀錄（捕捉最後一期報酬與資金流出），非缺列
+        month = record_repo.read_month(year_month="2026-05")
+        assert len(month) == 1
+        assert month[0].holding_id == seeded_holding_id
+        assert month[0].market_value == 0.0
+        assert month[0].net_investment == -530000.0
+
+    @pytest.mark.scenario("SC-009")
+    def test_sc009_sale_month_value_captured_in_return_input_series(
+        self, record_repo, seeded_holding_id
+    ):
+        # 賣出當月的市值 0／淨投入 −530000 確實進入下游報酬連乘的輸入序列（read_range）
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-04", 530000.0, 0.0)
+        )
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 0.0, -530000.0)
+        )
+        history = record_repo.read_range(start_ym="2026-04", end_ym="2026-05")
+        # 兩個月皆為有值節點，賣出當月不被當成空列略過
+        by_month = dict(zip(history["year_month"], history["market_value"], strict=True))
+        assert by_month["2026-05"] == 0.0
+        nets = dict(zip(history["year_month"], history["net_investment"], strict=True))
+        assert nets["2026-05"] == -530000.0
 
 
 class TestMonthlyRecordCrud:

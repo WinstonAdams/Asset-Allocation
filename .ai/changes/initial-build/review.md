@@ -198,3 +198,123 @@ Baseline 命中：0 條
 ## 3-4 行為對映審查
 
 <!-- scenario-mapper subagent 產出（AI 比對 SC 描述 vs test 內容，分「不對齊」「對齊」兩類）-->
+
+審查範圍：39 個 SC（SC-001~039）× 約 130 個帶 marker 的 test 函式
+Marker 覆蓋：39/39 SC 皆有對應 test marker（無孤兒 SC）
+核准判定：**有條件通過 → 第二段全數修正完成，現為通過**
+
+比對方式：逐張 SC 讀 `## 行為`（GIVEN/WHEN/THEN）、`## 邊界`、`## 錯誤`，對照掛該 marker 的 test 函式之輸入值、mock 設定與 assertion，判斷 test 是否真的在驗證 SC 寫的行為。
+
+### 第二段修正結果（使用者裁決：全修；只動 test，不改 SC、不改 production 行為）
+
+| 編號 | 處置 | 動作摘要 |
+|------|------|---------|
+| N1 SC-009 | 改 test | 移除 `test_sc009_sale_month_zero_value_negative_net_investment_recorded`（tautology）；於 repo 層新增 `TestSaleMonthClearoutPersisted` 兩個 test，經 `RecordRepository.upsert_record` 真實寫入後 `read_month`/`read_range` 讀回，驗賣出當月市值 0／淨投入 −530000 被持久化為有效節點（非空列）。`tests/test_monthly_input.py` |
+| N2 SC-022 | 補 test | 新增 `TestComputeMwrGapMonths` 兩個 test：直接檢視 `_cash_flows` 確認現金流節點＝有資料月（無 2026-03 缺月節點），並以「多一個真實中途月會改變 MWR」反證缺月未被插值。`tests/test_return.py` |
+| N3 SC-021 | 確認歸層後補 test | 確認「無資料不顯示／至少一完整月」不在 `PeriodService.resolve_period`（僅做模式→起訖月映射），而在 `ReturnService` 計算層：空區間→三指標皆 None、`cumulative_twr_series`→空；一個完整月→有值；僅建倉段→None。新增 `TestComputeReturnsRangeBoundaries` 四個 test。`tests/test_return.py` |
+| N4 SC-039 | 補 test | 將大小寫＋空白合併案例拆出 `test_case_only_difference_*`、`test_whitespace_only_difference_*` 兩個分離案例（合併案例保留）。`tests/test_access_control.py` |
+| O1 SC-033/034 | 補 test（新檔） | 新增 `tests/test_app_guard.py`：以 Streamlit AppTest 實跑 `app.py`，驗未登入→登入入口並停止、非本人→「無權限」拒絕並停止、空允許清單→擋下；三情境皆斷言未組裝依賴容器（`CONTAINER_SESSION_KEY` 不在 session）＝未觸發任何財務資料讀取／未進入頁面路由（fail-closed）。 |
+
+驗證：`pytest tests/` 193 passed（第二段前基線 179 → 淨 +14：N1 −1+2、N2 +2、N3 +4、N4 +2、O1 +5）；`ruff check .` All checks passed；SC marker 覆蓋仍 39/39。
+**無修改任何 SC 卡片、無修改任何 production 程式碼**（純 test 異動）。
+
+---
+
+### 不對齊（需第二段處理）
+
+#### N1〔改 test〕SC-009 `test_sc009_sale_month_zero_value_negative_net_investment_recorded`
+- 檔案：`tests/test_monthly_input.py:176-181`
+- SC-009 THEN：「2026-05 仍捕捉到該項目最後一期報酬與資金流出」「賣出當月的『市值 0』是出清語意」
+- test 內容：函式只 `_prev_record(1, "2026-05", 0.0, net_investment=-530000.0)` 建一個 model，然後 `assert record.market_value == 0.0` / `assert record.net_investment == -530000.0`。
+- 判斷：**斷言的是 test 自己剛塞進 model 的值，未呼叫任何 production 行為**（無 service/repo 互動）。這是 tautology，掛了 SC-009 marker 卻沒驗到「系統如何捕捉出清語意」。SC-009 的「不帶入後續月份」面向另由 `test_sc009_no_carry_after_sale_month` 與 `test_sc005_sold_item_not_carried` 真正覆蓋，故此函式對 SC-009 無增量驗證價值。
+- 建議：改成驗證真實行為（例如經 `RecordRepository.upsert_record` 寫入後讀回，確認市值 0／淨投入 −530000 被持久化為一筆有效紀錄，而非空列），或移除並讓 SC-009 的「出清當月仍是有效紀錄」由 repo CRUD test 承接。
+
+#### N2〔多面向漏測〕SC-022 缺月分段在 XIRR/MWR 維度未涵蓋
+- 檔案：`tests/test_return.py:137-162`（`test_sc022_gap_month_segmented_not_filled`、`test_sc022_unsorted_input_is_ordered_chronologically`）
+- SC-022 THEN：「TWR 逐段連乘、**XIRR 現金流**、所有圖表節點皆以有資料月為準」
+- test 內容：兩個 test 都只呼叫 `compute_twr`，驗 TWR 缺月分段；**無任一 test 對 `compute_mwr`/XIRR 餵入含缺月序列驗證「缺月不補插、以有資料月為現金流節點」**。
+- 判斷：SC-022 明列 XIRR 為其行為面向之一，test 僅覆蓋 TWR 面向，XIRR 面向漏測。
+- 建議：補一個掛 SC-022 的 test，對 `compute_mwr` 餵入含整月缺漏（如 2026-03 缺）的序列，斷言現金流以有資料月為節點、缺月不插值。
+
+#### N3〔多面向漏測〕SC-021 區間邊界「無資料／至少一個完整月」未驗
+- 檔案：`tests/test_period.py`（全檔 7 個 test）
+- SC-021 邊界：「區間須涵蓋至少一個完整月報酬」「區間內無資料時不顯示」
+- test 內容：`test_period.py` 全部測 `resolve_period`（mode→起訖月映射，含 inception/ytd/last_12m/custom/時區/未知模式/custom 缺日期）。涵蓋 SC-021 主行為（區間切換重算映射）與「Asia/Taipei 時區」邊界，對齊良好；但**「區間內無資料時不顯示」「至少一個完整月」兩條邊界沒有任何 assertion**。
+- 判斷：主行為對齊，邊界面向部分漏測。屬「一張 SC 多個面向漏測」。
+- 備註：此兩邊界可能落在更上層（呼叫 `compute_returns` / 串接層）才有意義，`resolve_period` 本身不負責。第二段可確認該行為歸屬哪層、是否已被別處隱含覆蓋；若確實無處驗證則補測。
+
+#### N4〔多面向漏測，輕微〕SC-039 大小寫／空白兩觸發未分離驗證
+- 檔案：`tests/test_access_control.py:119-128`（`test_uppercase_and_whitespace_email_matches_lowercase_allowlist`）
+- SC-039 WHEN：email「僅在『英文字母大小寫』**或**『前後空白』上不同」；邊界區分兩種獨立觸發。
+- test 內容：唯一一個 SC-039 test 用 `"  OWNER@Example.TEST  "` 同時帶大小寫＋前後空白，一次測完。
+- 判斷：production（`access.py::_normalize_email` = `strip().lower()`）行為正確，但 test 未分離「只有大小寫差異」「只有前後空白差異」兩種單獨情境，多面向合併在一個案例。屬輕微 multi-facet 不足，非錯誤。
+- 備註：`tests/test_bootstrap.py` 的 `parse_allowed_emails` 系列（掛 SC-033/034）有獨立驗大小寫去重與空白片段，部分補足；但 access 守門層本身仍只有合併案例。第二段可補兩個分離案例（純大小寫、純空白）。
+
+---
+
+### 觀察事項（非 marker 對映問題，列予主 AI 判斷，第二段不一定要動）
+
+#### O1 SC-033/034「不渲染任何頁面」串接層 THEN 無自動化 test
+- SC-033 THEN：「未登入前不渲染任何頁面、不載入任何財務資料」；SC-034 THEN：「不渲染任何頁面、不觸發任何財務資料讀取」。
+- 現況：守門「判定」邏輯由 `evaluate_access` 純函式完整覆蓋（`test_access_control.py` granted/denied 三態齊全，且 `test_any_denied_decision_never_grants` 守住 fail-closed 語意），對齊良好。但「擋下時 app.py 確實 `st.stop()`、不渲染頁面」屬串接層副作用——progress（t11／2-Z）稱以 AppTest 驗證過 fail-closed，然**目前 test 樹內查無任何 `AppTest`**（`grep -rn AppTest tests/ src/` 為空）。
+- 判斷：SC-033/034 的「判定」面向對映無誤；「停止渲染」面向目前無回歸保護。是否補 AppTest 串接層測試，請主 AI 與使用者決定（屬覆蓋範圍取捨，非既有 test 對映錯誤）。
+
+#### O2 非業務測試檔（已知可接受偏差，承 2-Z）
+- `test_core_utils.py`、`test_bootstrap.py` 中 `build_container` 系列無 SC marker，屬基礎設施／純組裝測試，承 2-Z 列「孤兒 FAIL 限此二檔、已知可接受偏差」。本次審查確認其不掛任何 SC marker、不影響 SC↔test 對映完整性，不視為問題。
+
+---
+
+### 對齊（抽樣列示判斷依據；未列者均逐一比對為對齊）
+
+| SC | 代表 test 函式 | 判斷依據 |
+|----|---------------|---------|
+| SC-001 | test_sc001_add_asset_persists_category_and_initials 等 5 個 | 初始市值 500000／成本 300000、穩定 id、新買=舊持倉兩邊界皆對齊 GIVEN/邊界 |
+| SC-002 | test_sc002_add_liability_has_no_category_or_initials | 負債 category/initial_* 皆 None，對齊 THEN |
+| SC-003 | test_sc003_history_records_still_bound_to_same_id_after_rename | 改名後 holding_id 與市值序列不變＝連乘輸入不變，對齊 THEN |
+| SC-004 | test_sc004_category_change_applies_to_all_history | 改分類後主檔只存當前分類、紀錄無 category 欄＝非時間版本化，對齊 THEN |
+| SC-005 | test_sc005_* 7 個 | 帶入清單、市值留空/淨投入 0、首月 fallback、已賣出不帶入皆對齊行為與邊界 |
+| SC-006 | test_sc006_edit_updates_in_place_without_duplicate | upsert 不產生重複列、刪除移除，對齊三段 WHEN/THEN |
+| SC-007 | test_sc007_strict_insert_duplicate_rejected | insert 重複鍵拋 DataValidationError、原紀錄不污染，對齊錯誤 |
+| SC-008 | test_sc008_pair_records_opposite_net_investments | 來源 −50000／目標 +50000、合計 0，對齊 THEN 與「不改整體」邊界 |
+| SC-010 | test_sc010_net_worth_is_assets_minus_liabilities | 1000000−200000=800000；無負債=總資產、可為負，對齊行為與邊界 |
+| SC-011 | test_sc011_liability_excluded_from_*_weights | 佔比分母僅資產、負債不出現，對齊 THEN |
+| SC-012 | test_sc012_chain_links_periods_excluding_net_investment | 1.1³−1=33.1% 且排除淨投入，對齊 |
+| SC-013 | test_sc013_extra_capital_not_counted_as_return | (155000−50000−100000)/100000=5%，含 55% 裸算反例，對齊 |
+| SC-014 | test_sc014_zero_opening_building_month_excluded | 期初 0 段跳過、自下一段起算 21%，對齊 |
+| SC-015 | test_sc015_* 5 個 | 投入=負流、提領=正流、終值=正流、留空沿用，對齊現金流方向 |
+| SC-016 | test_sc016_mwr_failure_does_not_affect_twr_and_pnl | 不收斂回 (None,'not_converged')、不拋例外、TWR/PnL 照算，對齊降級語意 |
+| SC-017 | test_sc017_pnl_and_simple_return_from_cumulative_cost | 累積成本 400000、賺賠 100000、25%；成本 0 不顯示，對齊 |
+| SC-018 | test_sc018_* 6 個 | TWR/MWR 以市值起算、PnL 以成本起算、簽名拒絕混用參數，對齊隔離行為 |
+| SC-019 | test_sc019_six/eleven/twelve_month | 6、11 月不年化、12 月年化，對齊邊界 |
+| SC-020 | test_sc020_* 6 個 | 三維度各自序列、分類彙總、負債永不入、各維度自身現金流，對齊 |
+| SC-023 | test_sc023_insurance_surrender_value_below_premium_is_negative | (250000−300000)/300000=−16.67%，對齊保險口徑 |
+| SC-024 | test_sc024_blank_value_carries_forward_previous_month | 留空沿用 250000、不計為變動，對齊 BR-10b |
+| SC-025 | test_sc025_* + charts test_sc025_pie_uses_only_asset_weights | 53%/47%、按項目/分類兩粒度、留空不貢獻、圓餅僅資產，對齊 |
+| SC-026 | test_sc026_* + test_sc026_area_is_percent_stacked | 各分類跨月佔比、缺月跳過、負債排除、百分比堆疊，對齊 |
+| SC-027 | test_sc027_* + net_worth_line 預設/疊加 | 淨值節點＋可疊加總資產/總負債線，對齊 |
+| SC-028 | test_sc028_* + cumulative_twr_line 單線 | 累積 TWR 逐月、缺月跳過、僅資產、固定單折線無切換，對齊邊界 |
+| SC-029 | test_sc029_drift_is_current_minus_target | 偏離=現況−目標→+8/−8，攜帶現況%/目標%，對齊 |
+| SC-030 | test_sc030_abs_drift_equal_to_threshold_not_flagged | 5=5 不標示（嚴格大於）、未設目標不判定，對齊邊界 |
+| SC-031 | test_sc031_roundtrip_restores_identical_data_into_empty_db | 三類 CSV 含表頭、匯入空庫還原一致、負債 None 保留，對齊 |
+| SC-032 | test_sc032_* 8 個 | 缺表頭/重複鍵/非法 kind/非法分類/非空庫五路徑皆拒並友善訊息，對齊錯誤清單 |
+| SC-033 | test_sc033_* + bootstrap parse/allowed_emails | 已登入本人放行、未登入擋下且優先、secrets 缺失 fail-closed，對齊（渲染面向見 O1）|
+| SC-034 | test_sc034_* + test_any_denied_decision_never_grants | 非本人/空清單/無 email/空字串皆擋、擋下恆不放行，對齊（渲染面向見 O1）|
+| SC-035 | test_sc035_twelve_month_span_with_gaps_still_annualized | 日曆跨度滿 12 月即年化，缺月致實際 3 個有資料月仍年化，對齊 |
+| SC-036 | test_sc036_snapshot/drift_skips_zero_total_month | 合計 0 月佔比圖略過、其餘月照常，對齊 |
+| SC-037 | test_sc037_* 4 個 | 金額 0/負/來源=目標皆拋 DataValidationError、正金額不同項目通過，對齊防呆 |
+| SC-038 | test_sc038_record_referencing_unknown_holding_is_rejected | 孤兒紀錄 holding_id=999 拒整批且點名 999，對齊 |
+| SC-039 | test_uppercase_and_whitespace_email_matches_lowercase_allowlist | strip().lower() 後比對放行，對齊（兩觸發分離見 N4）|
+
+---
+
+### 第二段建議修正範圍（待主 AI 與使用者確認）
+
+| 編號 | 方向 | 動作 | 風險 |
+|------|------|------|------|
+| N1 | 改 test | SC-009 tautology test 改為驗真實 repo 行為，或移除（行為已被其他 test 覆蓋）| 低 |
+| N2 | 補 test | SC-022 補 compute_mwr/XIRR 缺月分段 test | 低 |
+| N3 | 確認後補 test | 先確認 SC-021「無資料/至少一完整月」邊界歸屬層級，再決定補測或標記為他層職責 | 低 |
+| N4 | 補 test | SC-039 補純大小寫、純空白兩分離案例 | 低 |
+| O1 | 需使用者確認 | 是否補 app.py 串接層 AppTest 驗「擋下時停止渲染」（progress 稱驗過但 test 樹無此檔）| 中（涉測試策略取捨）|
+
+> 所有「不對齊」項皆指向 test 端（漏測或 tautology），**無一項需要修改 SC 卡片本身**——SC 描述均為合法業務語言且行為自洽。故無「需使用者確認是否改 SC」的阻擋項；O1 屬測試覆蓋策略，非 SC 對映錯誤。

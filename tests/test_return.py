@@ -1,5 +1,5 @@
 # ==== 原生（標準庫） ====
-# 無
+from datetime import date
 
 # ==== 第三方套件 ====
 import pandas as pd
@@ -394,6 +394,57 @@ class TestComputeMwr:
         ReturnService().compute_mwr(monthly=monthly, initial_market_value=100000.0)
 
 
+class TestComputeMwrGapMonths:
+    """SC-022：缺月以相鄰有資料月為現金流節點，缺月跳過、不補插值（XIRR 面向）。"""
+
+    @pytest.mark.scenario("SC-022")
+    def test_sc022_mwr_cash_flow_nodes_are_data_months_gap_skipped(self):
+        # 2026-03 整月缺漏；現金流節點應只取有資料月（2026-01、2026-02、2026-04），
+        # 缺月不另造節點、不補插值。直接檢視 _cash_flows 組出的發生日序列。
+        with_gap = _monthly(
+            [
+                {"year_month": "2026-01", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-02", "market_value": None, "net_investment": 50000.0},
+                {"year_month": "2026-04", "market_value": 180000.0, "net_investment": 0.0},
+            ]
+        )
+        dates, amounts = ReturnService._cash_flows(with_gap, 100000.0)
+        # 初始流出落在首個有資料月前一月（2025-12），其後為三個有資料月月初；無 2026-03 節點
+        assert dates == [
+            date(2025, 12, 1),
+            date(2026, 1, 1),
+            date(2026, 2, 1),
+            date(2026, 4, 1),
+        ]
+        # 對應金額：期初流出 −100000；2026-02 投入 50000 計 −50000；末月併入終值 +180000
+        assert amounts == pytest.approx([-100000.0, 0.0, -50000.0, 180000.0])
+
+    @pytest.mark.scenario("SC-022")
+    def test_sc022_mwr_gap_month_not_interpolated_into_extra_node(self):
+        # 缺月不補插：含缺月（2026-03 缺）的序列，與「真的多記一筆 2026-03 中途投入」的
+        # 序列必然得出不同 MWR——證實缺月未被當成插值節點偷偷塞進現金流。
+        gap_series = _monthly(
+            [
+                {"year_month": "2026-01", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-04", "market_value": 150000.0, "net_investment": 0.0},
+            ]
+        )
+        extra_real_node = _monthly(
+            [
+                {"year_month": "2026-01", "market_value": None, "net_investment": 0.0},
+                {"year_month": "2026-03", "market_value": None, "net_investment": 30000.0},
+                {"year_month": "2026-04", "market_value": 150000.0, "net_investment": 0.0},
+            ]
+        )
+        service = ReturnService()
+        mwr_gap, status_gap = service.compute_mwr(monthly=gap_series, initial_market_value=100000.0)
+        mwr_extra, status_extra = service.compute_mwr(
+            monthly=extra_real_node, initial_market_value=100000.0
+        )
+        assert status_gap == "ok" and status_extra == "ok"
+        assert mwr_gap != pytest.approx(mwr_extra)
+
+
 class TestInitialCostMarketValueIsolation:
     """compute_twr 與 compute_pnl 對 initial_cost / initial_market_value 的強制隔離。"""
 
@@ -568,6 +619,78 @@ class TestComputeReturnsAnnualization:
         )
         # 以日曆月跨度（2025-06 至 2026-05 ＝ 12 個月）判定，故年化為 True
         assert results[0].annualized is True
+
+
+class TestComputeReturnsRangeBoundaries:
+    """SC-021 邊界：區間內無資料時不顯示、區間須涵蓋至少一個完整月報酬。
+
+    PeriodService.resolve_period 僅做「模式→起訖月」映射（見 test_period.py），
+    不負責「區間內是否有資料」「能否構成完整月報酬」的判定；該兩條邊界落在
+    ReturnService 計算層：無有資料月時不產生可顯示的報酬，能否構成連乘段決定是否有值。
+    """
+
+    @pytest.mark.scenario("SC-021")
+    def test_sc021_empty_range_yields_no_displayable_return(self):
+        # 區間內無任何資料：三個指標皆為 None（UI 無數值可顯示），不憑空產生報酬
+        empty = _range_df([])
+        results = ReturnService().compute_returns(
+            range_df=empty,
+            holdings=[_asset(1, "台股/台股ETF", 100000.0)],
+            dimension="overall",
+            start_ym="2026-01",
+            end_ym="2026-12",
+        )
+        result = results[0]
+        assert result.twr is None
+        assert result.mwr is None
+        assert result.simple_return is None
+        assert result.pnl_amount is None
+
+    @pytest.mark.scenario("SC-021")
+    def test_sc021_empty_range_cumulative_twr_series_is_empty(self):
+        # 走勢圖：區間內無資料時無任何節點（不顯示）
+        series = ReturnService().cumulative_twr_series(
+            range_df=_range_df([]), holdings=[_asset(1, "台股/台股ETF", 100000.0)]
+        )
+        assert series == []
+
+    @pytest.mark.scenario("SC-021")
+    def test_sc021_range_with_one_full_month_return_is_displayable(self):
+        # 區間涵蓋至少一個完整月報酬（初始市值 100000 + 一個有資料月 110000 構成一段）：有值
+        one_month = _range_df(
+            [
+                {"holding_id": 1, "year_month": "2026-02", "market_value": 110000.0,
+                 "net_investment": 0.0},
+            ]
+        )
+        results = ReturnService().compute_returns(
+            range_df=one_month,
+            holdings=[_asset(1, "台股/台股ETF", 100000.0)],
+            dimension="overall",
+            start_ym="2026-01",
+            end_ym="2026-02",
+        )
+        # 構成一個完整月報酬段 100000→110000 = 10%，可顯示
+        assert _approx(results[0].twr, 0.10)
+
+    @pytest.mark.scenario("SC-021")
+    def test_sc021_building_month_only_has_no_full_month_return(self):
+        # 不足一個完整月報酬：期初市值 0 且僅有建倉月一段（無下一段），TWR 無從連乘
+        building_only = _range_df(
+            [
+                {"holding_id": 1, "year_month": "2026-01", "market_value": 100000.0,
+                 "net_investment": 100000.0},
+            ]
+        )
+        results = ReturnService().compute_returns(
+            range_df=building_only,
+            holdings=[_asset(1, "台股/台股ETF", 0.0, initial_cost=0.0)],
+            dimension="overall",
+            start_ym="2026-01",
+            end_ym="2026-01",
+        )
+        # 僅建倉段、無可連乘的完整月報酬 → TWR 不顯示
+        assert results[0].twr is None
 
 
 class TestComputeReturnsDimensions:

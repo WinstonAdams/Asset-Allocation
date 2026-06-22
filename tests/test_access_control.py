@@ -114,11 +114,36 @@ class TestAccessGuardrail:
 
 
 class TestEmailNormalization:
-    """SC-039：本人 email 大小寫 / 前後空白差異時，正規化後仍視為本人。"""
+    """SC-039：本人 email 大小寫 / 前後空白差異時，正規化後仍視為本人。
+
+    SC-039 邊界區分兩種獨立觸發（「僅大小寫不同」「僅前後空白不同」），故分離驗證。
+    """
+
+    @pytest.mark.scenario("SC-039")
+    def test_case_only_difference_email_matches_lowercase_allowlist(self):
+        # 僅大小寫不同（無多餘空白）：整個 email 轉小寫後比對，仍視為本人
+        decision = evaluate_access(
+            is_logged_in=True,
+            email="OWNER@Example.TEST",
+            allowed_emails=ALLOWED,
+        )
+        assert decision.granted is True
+        assert decision.reason is AccessReason.GRANTED
+
+    @pytest.mark.scenario("SC-039")
+    def test_whitespace_only_difference_email_matches_allowlist(self):
+        # 僅前後空白不同（大小寫一致）：去前後空白後比對，仍視為本人
+        decision = evaluate_access(
+            is_logged_in=True,
+            email="  owner@example.test  ",
+            allowed_emails=ALLOWED,
+        )
+        assert decision.granted is True
+        assert decision.reason is AccessReason.GRANTED
 
     @pytest.mark.scenario("SC-039")
     def test_uppercase_and_whitespace_email_matches_lowercase_allowlist(self):
-        # 去前後空白 + 整個 email 轉小寫後比對，避免本人因字面細節被誤擋
+        # 大小寫 + 前後空白同時不同：正規化（去空白 + 轉小寫）後比對，仍視為本人
         decision = evaluate_access(
             is_logged_in=True,
             email="  OWNER@Example.TEST  ",
