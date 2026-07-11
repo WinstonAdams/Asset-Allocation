@@ -28,6 +28,7 @@
 | t11 Streamlit 串接層 | 完成 | bootstrap/app.py/pages/charts；charts+bootstrap 走 TDD（18 tests，累計 186），app.py 守門以 AppTest 驗證 fail-closed；ruff 綠 |
 | 2-Z 整合驗證 | 完成 | pytest 186 passed、AppTest 啟動 fail-closed 守門通過；scenario-lint 業務綁定 39/39 全覆蓋且 0 invalid，孤兒 FAIL 限 test_core_utils + test_bootstrap 兩非業務測試檔，列為【已知可接受偏差】（3-Z 重跑勿誤判迴歸）|
 | t12 修正 pages/ 自動多頁繞過守門 | 完成 | 驗收回饋（§5.4 回繞）：`pages/`→`views/`（git mv 保留歷史），關閉 Streamlit 檔案系統自動多頁、導覽僅由 st.navigation 驅動；補 tests/test_navigation_guard.py 守門回歸測試（`pages/` 再現或自動多頁被重新偵測即 fail）；SC-PENDING-001 經使用者採用為 SC-040（access-control）；pytest 196 綠、ruff 綠、scenario-lint 40/40 |
+| t13 補 streamlit[auth] 依賴 | 完成 | 驗收回饋：`st.login()` 需 Authlib（Streamlit `[auth]` extra），原 `streamlit>=1.42` 未帶 extra，登入時拋 StreamlitMissingAuthlibError（本機與 Cloud 部署皆會失敗）。改為 `streamlit[auth]>=1.42`、venv 裝妥 Authlib 1.7.2、刷新 uv.lock。**鐵則 3 單點小改自理、未經獨立驗收**（改一行依賴＋重裝驗證，無業務邏輯變動、無新增測試）|
 
 ## Phase 3：審查
 

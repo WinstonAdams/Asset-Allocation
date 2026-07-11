@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "個人資產配置與報酬率管理工具（Streamlit + Turso）"
 requires-python = ">=3.12"
 dependencies = [
-    "streamlit>=1.42",
+    "streamlit[auth]>=1.42",
     "libsql>=0.1",
     "pyxirr>=0.10",
     "plotly>=5",
