@@ -27,6 +27,7 @@
 | t10 登入守門判定 | 完成 | SC-033,034,039（email 正規化）；evaluate_access 純函式；10 tests 綠，累計 168 |
 | t11 Streamlit 串接層 | 完成 | bootstrap/app.py/pages/charts；charts+bootstrap 走 TDD（18 tests，累計 186），app.py 守門以 AppTest 驗證 fail-closed；ruff 綠 |
 | 2-Z 整合驗證 | 完成 | pytest 186 passed、AppTest 啟動 fail-closed 守門通過；scenario-lint 業務綁定 39/39 全覆蓋且 0 invalid，孤兒 FAIL 限 test_core_utils + test_bootstrap 兩非業務測試檔，列為【已知可接受偏差】（3-Z 重跑勿誤判迴歸）|
+| t12 修正 pages/ 自動多頁繞過守門 | 完成 | 驗收回饋（§5.4 回繞）：`pages/`→`views/`（git mv 保留歷史），關閉 Streamlit 檔案系統自動多頁、導覽僅由 st.navigation 驅動；補 tests/test_navigation_guard.py 守門回歸測試（`pages/` 再現或自動多頁被重新偵測即 fail）；SC-PENDING-001 經使用者採用為 SC-040（access-control）；pytest 196 綠、ruff 綠、scenario-lint 40/40 |
 
 ## Phase 3：審查
 

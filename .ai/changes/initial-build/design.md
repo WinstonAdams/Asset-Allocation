@@ -23,8 +23,9 @@
 ### AD-1：以 Streamlit 多頁 App 取代 RPA `main.py` 入口模型
 - **背景**：工程準則的入口合約假設「argparse 解析 → `init()` 載入 env/config → DI 組裝 → `with biz_job(): controller.execute()` 一次性跑完退出」。Streamlit App 的執行模型完全不同：由 `streamlit run app.py` 啟動常駐進程，每次使用者互動觸發整個 script 由上而下 **rerun**，無「跑完即退出」的批次語意，也沒有 CLI 參數。
 - **選擇**：
-  - 入口檔為 `app.py`（專案根目錄），職責＝「`st.login()` 守門 → 組裝依賴（cached）→ 路由到當前頁面」。多頁面用 Streamlit 原生 `st.navigation` / `pages/` 機制。
-  - 每個頁面檔（如 `pages/input.py`、`pages/allocation.py`、`pages/returns.py`、`pages/settings.py`、`pages/data_io.py`）扮演 **Controller/View 複合角色**：負責 UI 元件渲染、收集使用者輸入、呼叫 Service、把結果交給圖表元件。
+  - 入口檔為 `app.py`（專案根目錄），職責＝「`st.login()` 守門 → 組裝依賴（cached）→ 路由到當前頁面」。多頁面**僅**用 Streamlit 原生 `st.navigation`（程式化路由）驅動，頁面檔集中放於 `views/`。
+  - 每個頁面檔（如 `views/input.py`、`views/allocation.py`、`views/returns.py`、`views/settings.py`、`views/data_io.py`）扮演 **Controller/View 複合角色**：負責 UI 元件渲染、收集使用者輸入、呼叫 Service、把結果交給圖表元件。
+  - **修正（t12）**：資料夾刻意不命名為 `pages/`——`pages/` 是 Streamlit 的保留資料夾名，與入口目錄同層存在時會觸發框架「檔案系統自動多頁」模式，使每個子頁被獨立註冊為可直接以 URL 存取的頁面，完全繞過 `app.py` 的 `st.login()` 守門（認證繞過）；同時側邊欄會以檔名（而非 `st.Page(title=...)` 設定的中文標題）顯示。改名為 `views/` 後，導覽只由 `app.py` 內的 `st.navigation` 程式化驅動，未登入時側邊欄不會出現任何子頁項目。
   - 依賴組裝集中在一個 `bootstrap` 模組（`src/asset_lab/bootstrap.py`），以 `@st.cache_resource` 快取 Repository/Service 實例（避免每次 rerun 重建連線）。
 - **理由**：Streamlit 是 proposal 拍板的 UI 框架（SPEC §二已定案），其 rerun 模型與 `main.py` 批次模型不相容，硬套會產生死碼（argparse、biz_job 在常駐 Web App 無意義）。頁面即 Controller 是 Streamlit 社群慣例，符合「流程決策歸 Controller」的精神——頁面決定呼叫哪些 Service、如何呈現失敗。
 - **否決方案**：
@@ -38,7 +39,7 @@
 - **背景**：需求含大量業務運算（TWR 連乘、MWR/XIRR、配置佔比、目標偏離、淨值彙總），與 I/O（Turso 讀寫、CSV 匯出入），必須切分以免運算邏輯與 UI/IO 糾纏。
 - **選擇**：
   ```
-  app.py / pages/*.py        ← View + 流程決策（呼叫哪些 Service、如何呈現）
+  app.py / views/*.py        ← View + 流程決策（呼叫哪些 Service、如何呈現）
         ↓
   services/*.py              ← 純業務運算（無 I/O；報酬率、配置、淨值、目標、CSV 整形）
         ↓
@@ -394,7 +395,7 @@ class DataIoService:
   def get_container():            # 讀 st.secrets（機密）+ constants（業務常數），keyword-args 注入 Repo/Service
   def allowed_emails() -> set[str]:   # 從 st.secrets 讀允許清單（BR-8，個資不寫死）
   ```
-- `pages/*.py`：View+流程決策（Controller 角色）；唯一 catch 點（AD-8）；呼叫 Service、把結果交 `charts.py`（Plotly 元件）渲染。
+- `views/*.py`：View+流程決策（Controller 角色）；唯一 catch 點（AD-8）；呼叫 Service、把結果交 `charts.py`（Plotly 元件）渲染。資料夾名刻意避開 Streamlit 保留字 `pages/`（見 AD-1 修正說明），僅由 `app.py` 的 `st.navigation` 程式化註冊路由。
 
 ---
 
@@ -429,7 +430,7 @@ class DataIoService:
 
 | ID | 類型 | 決策 | 信心度 |
 |----|------|------|--------|
-| AD-1 | 架構 | Streamlit 多頁 App（`app.py` + `pages/`）取代 RPA `main.py`/biz_job 入口模型 | High |
+| AD-1 | 架構 | Streamlit 多頁 App（`app.py` + `views/`，程式化 `st.navigation`，避開保留字 `pages/`）取代 RPA `main.py`/biz_job 入口模型 | High |
 | AD-2 | 架構 | 分層 Page(View/Controller)→Service(純運算)→Repository(I/O)→Model | High |
 | AD-3 | 架構 | 三表 schema：holdings（穩定 ID）+ monthly_records（複合鍵）+ target_allocations | High |
 | AD-4 | 架構 | 報酬率三管線（TWR/MWR/PnL），BR-4e 以函式簽名強制隔離初始市值 vs 初始成本 | High |

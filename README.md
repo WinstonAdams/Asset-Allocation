@@ -29,7 +29,7 @@
 採分層架構，相依方向單向（Page → Service → Repository → Model）；Service 為純運算、不碰 I/O 與 Streamlit，故可獨立單元測試。
 
 1. `app.py` 入口：登入守門（未登入顯示登入入口、非本人顯示拒絕，皆停止後續渲染）→ 組裝依賴容器（連線與建表就緒）→ `st.navigation` 多頁路由。
-2. 各 `pages/` 頁面為 View／Controller：讀使用者操作 → 委派 Service 運算 → 經 Repository 存取 Turso → 以 Plotly 呈現。
+2. 各 `views/` 頁面為 View／Controller：讀使用者操作 → 委派 Service 運算 → 經 Repository 存取 Turso → 以 Plotly 呈現。頁面路由僅由 `app.py` 的 `st.navigation` 註冊——資料夾刻意不命名為 `pages/`，因該名稱是 Streamlit 保留字，會觸發框架自動多頁探索，使子頁可繞過登入守門直接以 URL 存取。
 3. `services/` 純運算：報酬率三管線、配置／淨值／漂移、目標偏離、月度錄入整形、CSV 匯出入驗證。
 4. `repositories/` 以 `libsql` 連 Turso，三張表（持有項目主檔、月度紀錄、目標配置），月度紀錄以 (holding_id, year_month) 複合主鍵保證同月同項目唯一。
 
@@ -101,7 +101,7 @@ pip-audit       # 依賴漏洞掃描
 ```
 資產管理/
 ├── app.py                       # Streamlit 入口：登入守門 → 依賴組裝 → 多頁路由
-├── pages/                       # 功能頁（input/allocation/returns/settings/data_io）
+├── views/                       # 功能頁（input/allocation/returns/settings/data_io；非 `pages/`，避免觸發 Streamlit 自動多頁探索）
 ├── src/asset_lab/
 │   ├── models/                  # pydantic 資料模型（項目/紀錄/目標/結果）
 │   ├── core/                    # 常數、例外、純工具、登入存取判定
