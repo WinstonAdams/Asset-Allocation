@@ -8,10 +8,16 @@ bootstrap 的 st.cache_resource 包裝與 st.secrets 讀取屬無法純測的 St
    測試一律用虛構值，不出現任何真實 email（遵守敏感資料護欄）。
 2. build_container：以 keyword args 把連線注入各 Repository、再把 Repository 注入各 Service，
    組出單一容器。可注入假連線斷言「依賴有被正確接上」，不需 Streamlit runtime。
+
+另補一段版控範本 secrets.toml.example 的結構回歸測試：TOML 語法中，區塊標頭
+（`[section]`）之後、下一個標頭之前的所有 key 都歸屬該區塊，`allowed_emails` 若被放在
+`[turso]` 與 `[auth]` 之間會被誤歸入 `turso.allowed_emails`，導致 allowed_emails() 讀
+不到頂層值而 fail-closed 擋下所有人（含合法使用者）。此測試鎖定範本解析後的結構。
 """
 
 # ==== 原生（標準庫） ====
-# 無
+import tomllib
+from pathlib import Path
 
 # ==== 第三方套件 ====
 import pytest
@@ -28,6 +34,8 @@ from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 from asset_lab.services.period_service import PeriodService
 from asset_lab.services.return_service import ReturnService
+
+APP_DIR = Path(__file__).resolve().parent.parent
 
 
 class _FakeConnection:
@@ -136,3 +144,20 @@ def test_build_container_wires_services() -> None:
     # 月度錄入服務的 I/O 委派接上容器內的 Repository 實例
     assert container.monthly_input_service._record_repo is container.record_repo
     assert container.monthly_input_service._holding_repo is container.holding_repo
+
+
+def test_secrets_template_keeps_allowed_emails_at_top_level() -> None:
+    """secrets.toml.example 的 allowed_emails 須為頂層 key，不得落入任何 [section]。
+
+    回歸防呆：allowed_emails 一旦被放在兩個 [section] 標頭之間，TOML 會把它歸入前一個
+    區塊（例如 turso.allowed_emails），allowed_emails() 讀的頂層值即變 None，
+    守門因而 fail-closed 擋下所有人（含合法使用者）。
+    """
+    template_path = APP_DIR / ".streamlit" / "secrets.toml.example"
+
+    with template_path.open("rb") as f:
+        parsed = tomllib.load(f)
+
+    assert "allowed_emails" in parsed
+    assert "allowed_emails" not in parsed.get("turso", {})
+    assert "allowed_emails" not in parsed.get("auth", {})
