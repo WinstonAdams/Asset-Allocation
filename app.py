@@ -23,6 +23,12 @@ import streamlit as st
 from asset_lab import bootstrap
 from asset_lab.core.access import AccessReason, evaluate_access
 
+# 固定瀏覽器分頁標題與圖示：st.set_page_config 必須是整支腳本第一個 Streamlit 指令，
+# 且每次 rerun（包含切頁、登入前後）都會重新執行到這裡並帶入相同值，因此標題與圖示
+# 不會被登入畫面、拒絕畫面或 st.navigation／各頁的 st.Page(title=...) 覆蓋——後者只影響
+# 側邊欄導覽項目的顯示文字，不影響瀏覽器分頁標題。
+st.set_page_config(page_title="資產管理", page_icon="💰")
+
 # 放行後把組裝好的依賴容器存入 session，供各頁以同一容器取用，免每頁重組。
 CONTAINER_SESSION_KEY = "container"
 

@@ -29,6 +29,7 @@
 | 2-Z 整合驗證 | 完成 | pytest 186 passed、AppTest 啟動 fail-closed 守門通過；scenario-lint 業務綁定 39/39 全覆蓋且 0 invalid，孤兒 FAIL 限 test_core_utils + test_bootstrap 兩非業務測試檔，列為【已知可接受偏差】（3-Z 重跑勿誤判迴歸）|
 | t12 修正 pages/ 自動多頁繞過守門 | 完成 | 驗收回饋（§5.4 回繞）：`pages/`→`views/`（git mv 保留歷史），關閉 Streamlit 檔案系統自動多頁、導覽僅由 st.navigation 驅動；補 tests/test_navigation_guard.py 守門回歸測試（`pages/` 再現或自動多頁被重新偵測即 fail）；SC-PENDING-001 經使用者採用為 SC-040（access-control）；pytest 196 綠、ruff 綠、scenario-lint 40/40 |
 | t13 補 streamlit[auth] 依賴 | 完成 | 驗收回饋：`st.login()` 需 Authlib（Streamlit `[auth]` extra），原 `streamlit>=1.42` 未帶 extra，登入時拋 StreamlitMissingAuthlibError（本機與 Cloud 部署皆會失敗）。改為 `streamlit[auth]>=1.42`、venv 裝妥 Authlib 1.7.2、刷新 uv.lock。**鐵則 3 單點小改自理、未經獨立驗收**（改一行依賴＋重裝驗證，無業務邏輯變動、無新增測試）|
+| t14 固定瀏覽器分頁標題與圖示 | 完成 | 驗收回饋：st.navigation 預設以當前頁標題當瀏覽器分頁標題，切頁時標籤跟著變。app.py 頂層加 st.set_page_config(page_title="資產管理", page_icon="💰")；補 tests/test_page_config.py（攔截 LocalScriptRunner 讀原始 ForwardMsg 驗證登入/拒絕畫面標題圖示固定＋views 不覆蓋回歸）；SC-PENDING-002 經使用者採用為 SC-041（browser-tab-title，icon 沿用 💰 不變）；pytest 199 綠、ruff 綠、scenario-lint 41/41 |
 
 ## Phase 3：審查
 
