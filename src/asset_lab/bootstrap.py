@@ -20,6 +20,7 @@ Repository/Service 不直接讀 st.secrets。
 # ==== 原生（標準庫） ====
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 # ==== 第三方套件 ====
@@ -27,7 +28,9 @@ import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
 # ==== 專案內部 ====
+from asset_lab.core.constants import PROTOCOL_DOC_RELATIVE_PATH
 from asset_lab.repositories.holding_repository import HoldingRepository
+from asset_lab.repositories.protocol_doc_repository import ProtocolDocRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
@@ -50,6 +53,11 @@ _SECRET_TURSO_TOKEN = "auth_token"
 # st.secrets 內允許登入 email 的鍵；email 屬個資，只存在於 secrets。
 _SECRET_ALLOWED_EMAILS = "allowed_emails"
 
+# 行為協定文件的絕對路徑：本檔位於 src/asset_lab/，parents[2] 即 repo 根——本機
+# `streamlit run app.py` 與 Streamlit Community Cloud 部署皆隨 repo 一併帶有 docs/，
+# 以 __file__ 錨定而非依賴 CWD，兩種執行環境皆可解析到同一份檔案。
+_PROTOCOL_DOC_PATH = Path(__file__).resolve().parents[2] / PROTOCOL_DOC_RELATIVE_PATH
+
 
 @dataclass(frozen=True)
 class Container:
@@ -64,6 +72,7 @@ class Container:
     target_repo: TargetRepository
     schema_repo: SchemaRepository
     protocol_threshold_repo: ProtocolThresholdRepository
+    protocol_doc_repo: ProtocolDocRepository
     return_service: ReturnService
     allocation_service: AllocationService
     period_service: PeriodService
@@ -116,6 +125,7 @@ def build_container(*, conn: "Connection") -> Container:
     target_repo = TargetRepository(conn=conn)
     schema_repo = SchemaRepository(conn=conn)
     protocol_threshold_repo = ProtocolThresholdRepository(conn=conn)
+    protocol_doc_repo = ProtocolDocRepository(doc_path=_PROTOCOL_DOC_PATH)
 
     return Container(
         holding_repo=holding_repo,
@@ -123,6 +133,7 @@ def build_container(*, conn: "Connection") -> Container:
         target_repo=target_repo,
         schema_repo=schema_repo,
         protocol_threshold_repo=protocol_threshold_repo,
+        protocol_doc_repo=protocol_doc_repo,
         return_service=ReturnService(),
         allocation_service=AllocationService(),
         period_service=PeriodService(),

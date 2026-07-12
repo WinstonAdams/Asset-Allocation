@@ -18,5 +18,9 @@ class DataValidationError(AssetLabError):
     """資料格式或內容不符規格時拋出（如年月格式錯誤、CSV 匯入唯一鍵重複）。"""
 
 
+class ProtocolDocError(AssetLabError):
+    """行為協定文件（docs/PROTOCOL.md）讀取失敗時拋出（缺失、無法讀取等），交 Page 層反饋。"""
+
+
 class SchemaError(AssetLabError):
     """資料庫結構建立或對齊失敗時拋出。"""

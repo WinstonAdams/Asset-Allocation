@@ -29,6 +29,9 @@ DEFAULT_REBALANCE_THRESHOLD = 5.0
 # 回撤基準的資料不足下限：累積 TWR 有效節點數低於此值即不判斷回撤深度，一律退回 L0。
 PROTOCOL_MIN_DATA_MONTHS = 3
 
+# docs/PROTOCOL.md 相對 repo 根的路徑；行為協定頁以此讀取全文唯讀渲染。
+PROTOCOL_DOC_RELATIVE_PATH = "docs/PROTOCOL.md"
+
 
 class HOLDING_KIND:
     """持有項目性質。資產計入配置與報酬率；負債僅計入淨值的負向。"""
