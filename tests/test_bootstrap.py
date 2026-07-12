@@ -1,13 +1,17 @@
 """bootstrap.py 的可測組裝邏輯測試。
 
 bootstrap 的 st.cache_resource 包裝與 st.secrets 讀取屬無法純測的 Streamlit runtime 副作用，
-但其中兩段邏輯是純函式、與 runtime 無關，故抽出獨立測試：
+但其中幾段邏輯是純函式、與 runtime 無關，故抽出獨立測試：
 
 1. parse_allowed_emails：把 st.secrets 讀回的允許清單原始值（可能是清單、逗號分隔字串或
    單一字串）正規化成 set，供守門判定（t10 的 evaluate_access）使用。允許 email 屬個資，
    測試一律用虛構值，不出現任何真實 email（遵守敏感資料護欄）。
 2. build_container：以 keyword args 把連線注入各 Repository、再把 Repository 注入各 Service，
    組出單一容器。可注入假連線斷言「依賴有被正確接上」，不需 Streamlit runtime。
+3. _with_reconnect_on_stale_stream：Turso 遠端連線的 Hrana stream 閒置隔夜會被伺服器端
+   關閉，快取住的連線與容器不會自動感知，下次操作即拋「stream not found」類例外整頁崩潰
+   （t16 驗收回饋）。此函式把「取容器→驗證存活→失效則清快取重連重試一次」收斂成可注入
+   假容器/假快取清除動作的純函式，故以假物件模擬連線失效與重連成功，不需真連 Turso。
 
 另補一段版控範本 secrets.toml.example 的結構回歸測試：TOML 語法中，區塊標頭
 （`[section]`）之後、下一個標頭之前的所有 key 都歸屬該區塊，`allowed_emails` 若被放在
@@ -18,6 +22,7 @@ bootstrap 的 st.cache_resource 包裝與 st.secrets 讀取屬無法純測的 St
 # ==== 原生（標準庫） ====
 import tomllib
 from pathlib import Path
+from unittest.mock import Mock
 
 # ==== 第三方套件 ====
 import pytest
@@ -144,6 +149,140 @@ def test_build_container_wires_services() -> None:
     # 月度錄入服務的 I/O 委派接上容器內的 Repository 實例
     assert container.monthly_input_service._record_repo is container.record_repo
     assert container.monthly_input_service._holding_repo is container.holding_repo
+
+
+class _FakeSchemaRepo:
+    """假 schema repo：ensure_schema 依建構時指定成功或拋指定例外，模擬連線存活探測。"""
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self._error = error
+        self.call_count = 0
+
+    def ensure_schema(self) -> None:
+        self.call_count += 1
+        if self._error is not None:
+            raise self._error
+
+
+class _FakeResilientContainer:
+    """假容器：_with_reconnect_on_stale_stream 只用得到 schema_repo 這個欄位。"""
+
+    def __init__(self, schema_repo: _FakeSchemaRepo) -> None:
+        self.schema_repo = schema_repo
+
+
+def _make_get_container(*containers: _FakeResilientContainer):
+    """依序回傳指定的假容器，並記錄實際被呼叫次數，供斷言重試次數上限。"""
+    queue = list(containers)
+
+    def _get_container() -> _FakeResilientContainer:
+        _get_container.call_count += 1
+        return queue.pop(0)
+
+    _get_container.call_count = 0
+    return _get_container
+
+
+@pytest.mark.scenario("SC-042")
+def test_with_reconnect_returns_container_when_connection_alive() -> None:
+    """連線存活（ensure_schema 成功）時直接回傳容器，不清任何快取、不重取。"""
+    container = _FakeResilientContainer(_FakeSchemaRepo())
+    get_container = _make_get_container(container)
+    clear_connection_cache = Mock()
+    clear_container_cache = Mock()
+
+    result = bootstrap._with_reconnect_on_stale_stream(
+        get_container=get_container,
+        clear_connection_cache=clear_connection_cache,
+        clear_container_cache=clear_container_cache,
+    )
+
+    assert result is container
+    assert get_container.call_count == 1
+    clear_connection_cache.assert_not_called()
+    clear_container_cache.assert_not_called()
+
+
+@pytest.mark.scenario("SC-042")
+def test_with_reconnect_recovers_from_stale_stream_error() -> None:
+    """首次查詢拋 stream-not-found 類失效時，清兩層快取重連後重試一次即成功。"""
+    stale_error = ValueError(
+        'Hrana: `api error: `status=404 Not Found, '
+        'body={"error":"stream not found: abc123"}``'
+    )
+    dead_container = _FakeResilientContainer(_FakeSchemaRepo(error=stale_error))
+    revived_container = _FakeResilientContainer(_FakeSchemaRepo())
+    get_container = _make_get_container(dead_container, revived_container)
+    clear_connection_cache = Mock()
+    clear_container_cache = Mock()
+
+    result = bootstrap._with_reconnect_on_stale_stream(
+        get_container=get_container,
+        clear_connection_cache=clear_connection_cache,
+        clear_container_cache=clear_container_cache,
+    )
+
+    assert result is revived_container
+    assert get_container.call_count == 2
+    clear_connection_cache.assert_called_once()
+    clear_container_cache.assert_called_once()
+
+
+@pytest.mark.scenario("SC-042")
+def test_with_reconnect_reraises_non_stale_business_error() -> None:
+    """非連線失效的一般業務例外（如唯一性約束違反）原樣往上拋，不誤判為可重連。"""
+    business_error = ValueError("UNIQUE constraint failed: holdings.name")
+    container = _FakeResilientContainer(_FakeSchemaRepo(error=business_error))
+    get_container = _make_get_container(container)
+    clear_connection_cache = Mock()
+    clear_container_cache = Mock()
+
+    with pytest.raises(ValueError, match="UNIQUE constraint failed"):
+        bootstrap._with_reconnect_on_stale_stream(
+            get_container=get_container,
+            clear_connection_cache=clear_connection_cache,
+            clear_container_cache=clear_container_cache,
+        )
+
+    assert get_container.call_count == 1
+    clear_connection_cache.assert_not_called()
+    clear_container_cache.assert_not_called()
+
+
+@pytest.mark.scenario("SC-042")
+def test_with_reconnect_gives_up_after_second_consecutive_failure() -> None:
+    """重連重試一次後仍失效，例外原樣浮出，不無限重連。"""
+    stale_error = ValueError('stream not found: abc123')
+    first_container = _FakeResilientContainer(_FakeSchemaRepo(error=stale_error))
+    second_container = _FakeResilientContainer(_FakeSchemaRepo(error=stale_error))
+    get_container = _make_get_container(first_container, second_container)
+    clear_connection_cache = Mock()
+    clear_container_cache = Mock()
+
+    with pytest.raises(ValueError, match="stream not found"):
+        bootstrap._with_reconnect_on_stale_stream(
+            get_container=get_container,
+            clear_connection_cache=clear_connection_cache,
+            clear_container_cache=clear_container_cache,
+        )
+
+    assert get_container.call_count == 2
+    clear_connection_cache.assert_called_once()
+    clear_container_cache.assert_called_once()
+
+
+def test_is_stale_stream_error_matches_stream_not_found_message() -> None:
+    """訊息含 stream not found（含大小寫混合）判定為可重連的連線失效。"""
+    exc = ValueError('Hrana: `api error: `status=404, body={"error":"Stream Not Found: x"}``')
+
+    assert bootstrap._is_stale_stream_error(exc) is True
+
+
+def test_is_stale_stream_error_rejects_unrelated_business_error() -> None:
+    """一般業務例外訊息（無 stream not found 字樣）判定為不可重連，避免誤吞。"""
+    exc = ValueError("UNIQUE constraint failed: holdings.name")
+
+    assert bootstrap._is_stale_stream_error(exc) is False
 
 
 def test_secrets_template_keeps_allowed_emails_at_top_level() -> None:

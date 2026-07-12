@@ -27,6 +27,7 @@
   - 每個頁面檔（如 `views/input.py`、`views/allocation.py`、`views/returns.py`、`views/settings.py`、`views/data_io.py`）扮演 **Controller/View 複合角色**：負責 UI 元件渲染、收集使用者輸入、呼叫 Service、把結果交給圖表元件。
   - **修正（t12）**：資料夾刻意不命名為 `pages/`——`pages/` 是 Streamlit 的保留資料夾名，與入口目錄同層存在時會觸發框架「檔案系統自動多頁」模式，使每個子頁被獨立註冊為可直接以 URL 存取的頁面，完全繞過 `app.py` 的 `st.login()` 守門（認證繞過）；同時側邊欄會以檔名（而非 `st.Page(title=...)` 設定的中文標題）顯示。改名為 `views/` 後，導覽只由 `app.py` 內的 `st.navigation` 程式化驅動，未登入時側邊欄不會出現任何子頁項目。
   - 依賴組裝集中在一個 `bootstrap` 模組（`src/asset_lab/bootstrap.py`），以 `@st.cache_resource` 快取 Repository/Service 實例（避免每次 rerun 重建連線）。
+  - **修正（t16）**：`@st.cache_resource` 只保證「進程存活期間不重建」，不代表 Turso 遠端連線本身恆久有效——其 Hrana stream 閒置隔夜會被伺服器端關閉，快取住的連線與（綁定該連線的）容器不會自動感知，下次操作即拋「stream not found」類例外導致整頁崩潰（本機與 Community Cloud 長駐皆會發生）。新增 `bootstrap.get_resilient_container()`（`app.py` 改呼叫此函式取代直接呼叫 `get_container()`）：每次取用容器時以 `ensure_schema()`（idempotent 的 `CREATE TABLE IF NOT EXISTS`，順便當存活探測）驗證連線可用；偵測到訊息含 `stream not found` 的可重連失效樣態時，依序清「連線＋容器」兩層快取（`get_connection.clear()` + `get_container.clear()`）後重取一次並再驗證，成功即透明恢復、使用者無感；非此類例外（SQL 語法錯、約束違反等業務例外）原樣往上拋，且最多重試一次，不無限重連。
 - **理由**：Streamlit 是 proposal 拍板的 UI 框架（SPEC §二已定案），其 rerun 模型與 `main.py` 批次模型不相容，硬套會產生死碼（argparse、biz_job 在常駐 Web App 無意義）。頁面即 Controller 是 Streamlit 社群慣例，符合「流程決策歸 Controller」的精神——頁面決定呼叫哪些 Service、如何呈現失敗。
 - **否決方案**：
   - **硬套 `main.py` + argparse + biz_job**：在 Web App 中無對應語意（無批次、無退出碼、無 CLI 參數），會產生無法執行的死碼，否決。
@@ -190,7 +191,7 @@
 
 ### TD-1：Turso 連線套件 — `libsql`（已定案）
 - **推薦**：`libsql`（信心度：High）。原 proposal/SPEC 寫的 `libsql-client` 已棄用（websocket driver 隨 AWS 遷移失效）；**proposal §外部依賴 與 SPEC §二 的套件名已更正為 `libsql`（於 1-2a commit caae4df 落定），無待辦**。
-- **理由**：官方現行唯一遠端連線 SDK，API 近似 sqlite3、無編譯依賴、Community Cloud 可 pip 安裝。資料量極小（年約 12×N 列）+ 使用者 SQL 為母語 → **不引入 ORM（否決 sqlalchemy-libsql，過度工程）**，Repository 直接寫原生 SQL。連線於 `bootstrap` 以 `@st.cache_resource` 建一次。
+- **理由**：官方現行唯一遠端連線 SDK，API 近似 sqlite3、無編譯依賴、Community Cloud 可 pip 安裝。資料量極小（年約 12×N 列）+ 使用者 SQL 為母語 → **不引入 ORM（否決 sqlalchemy-libsql，過度工程）**，Repository 直接寫原生 SQL。連線於 `bootstrap` 以 `@st.cache_resource` 建一次；**閒置逾時的自動重連見 AD-1「修正（t16）」**——libsql 的 Python binding 未提供公開的「連線層自動重開」API（compiled extension，無可查證的重連方法），故重連採「清快取＋重新呼叫 `libsql.connect()`」而非連線物件自我修復，是查證過套件實際行為後的務實選擇。
 
 ### TD-2：XIRR / MWR — `pyxirr`
 - **推薦**：`pyxirr`（0.10.x，信心度：High）。
@@ -386,13 +387,14 @@ class DataIoService:
 - `exceptions.py`：`DataValidationError`（CSV 匯入驗證失敗）、`SchemaError` 等業務例外。
 
 ### 入口與組裝（`app.py` + `src/asset_lab/bootstrap.py`）
-- `app.py`：`st.login()` 守門（AD-6）→ `bootstrap.get_container()`（cached 依賴）→ `st.navigation` 路由。
+- `app.py`：`st.login()` 守門（AD-6）→ `bootstrap.get_resilient_container()`（cached 依賴，含閒置逾時自動重連，見 AD-1「修正（t16）」）→ `st.navigation` 路由。
 - `bootstrap.py`：
   ```python
   @st.cache_resource
   def get_connection():           # libsql.connect(database=st.secrets[...], auth_token=...)
   @st.cache_resource
   def get_container():            # 讀 st.secrets（機密）+ constants（業務常數），keyword-args 注入 Repo/Service
+  def get_resilient_container() -> Container:  # 取容器＋驗證連線存活；失效則清快取重連重試一次（t16）
   def allowed_emails() -> set[str]:   # 從 st.secrets 讀允許清單（BR-8，個資不寫死）
   ```
 - `views/*.py`：View+流程決策（Controller 角色）；唯一 catch 點（AD-8）；呼叫 Service、把結果交 `charts.py`（Plotly 元件）渲染。資料夾名刻意避開 Streamlit 保留字 `pages/`（見 AD-1 修正說明），僅由 `app.py` 的 `st.navigation` 程式化註冊路由。
@@ -407,6 +409,7 @@ class DataIoService:
 - **logging 偏離 structlog 欄位契約**（AD-8）：無 utils_v2 pipeline 下的合理偏離；若日後此 monorepo 引入 utils_v2，logging 層可再對齊。
 - **CSV 為對外契約**：含表頭標準 CSV，欄位即各 model 欄位（AD-9/AD-10）；一旦發布即須維持相容，未來改欄位須考慮回溯相容。
 - **「賣出當月 0、之後缺列」為隱性錄入約定**（AD-10）：須在錄入頁與 README 明確提示，避免使用者誤記成續記 0 列；由 Scenario 覆蓋此錄入行為。
+- **連線存活探測以 `ensure_schema()` 代表整條連線**（t16）：假設同一條連線的 Hrana stream 若已失效，其上任何操作都會以同一樣態失敗，故用它探測即可代表本次 rerun 對所有 Repository 呼叫皆有效，不逐一探測每個 Repository；若未來 libsql 出現「部分操作失效、部分正常」的樣態，此假設需重新檢視。
 
 ---
 

@@ -6,7 +6,9 @@ CLI 參數，故不採 RPA 的 main.py + argparse 模型）。本檔職責限於
 1. 守門：未登入先顯示登入入口並停止；已登入則以純判定（evaluate_access）比對 st.user.email
    是否在允許清單，非本人即顯示拒絕並停止——前置於任何資料存取，確保非本人看不到任何
    財務資料。允許 email 與登入設定皆來自 st.secrets，不寫死。
-2. 組裝：放行後取快取的依賴容器（連線與 schema 已就緒），存入 session 供各頁取用。
+2. 組裝：放行後取快取的依賴容器（連線與 schema 已就緒；連線因閒置逾時失效時
+   `get_resilient_container()` 會自動清快取重連並重試一次，見 bootstrap.py），存入
+   session 供各頁取用。
 3. 路由：以 st.navigation 註冊多頁並執行當前頁。
 
 實際業務運算與 I/O 已在下層 Service/Repository（由 SC 測試保證正確）；本檔只做守門副作用
@@ -67,7 +69,7 @@ def main() -> None:
     """守門通過後組裝依賴並路由到當前頁面。"""
     _require_access()
 
-    st.session_state[CONTAINER_SESSION_KEY] = bootstrap.get_container()
+    st.session_state[CONTAINER_SESSION_KEY] = bootstrap.get_resilient_container()
 
     with st.sidebar:
         st.caption(f"已登入：{st.user.email}")
