@@ -90,6 +90,7 @@ def main() -> None:
 
     navigation = st.navigation(
         [
+            st.Page("views/overview.py", title="總覽", icon=":material/dashboard:", default=True),
             st.Page("views/input.py", title="月度錄入", icon=":material/edit_note:"),
             st.Page("views/allocation.py", title="資產配置", icon=":material/donut_large:"),
             st.Page("views/returns.py", title="報酬率", icon=":material/trending_up:"),

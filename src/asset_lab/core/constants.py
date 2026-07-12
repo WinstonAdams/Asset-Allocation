@@ -5,7 +5,7 @@
 """
 
 # ==== 原生（標準庫） ====
-# 無
+from dataclasses import dataclass
 
 # ==== 第三方套件 ====
 # 無
@@ -116,6 +116,63 @@ class PROTOCOL_THRESHOLDS_TABLE:
     TABLE_NAME = "protocol_thresholds"
     LEVEL = "level"
     DRAWDOWN_THRESHOLD = "drawdown_threshold"
+
+
+@dataclass(frozen=True)
+class ProtocolLevelSpec:
+    """單一協定等級的展示規格（必做/禁止結構化編碼）。
+
+    內容依 docs/PROTOCOL.md §1「情境分級與對應動作」表人工謄寫；兩處須人工同步，
+    改動協定文本時須一併更新本表（已知維護點）。L0（平時）不在文件表格內，其必做/
+    禁止依協定 §0/§3 通則補上「照計畫、無特別禁止」的基準姿態。
+    """
+
+    code: str
+    label: str
+    band_text: str
+    must_do: tuple[str, ...]
+    must_not: tuple[str, ...]
+
+
+# L0（平時）+ L1–L3 依 docs/PROTOCOL.md §1 表謄寫；供總覽頁查表呈現必做/禁止摘要。
+PROTOCOL_LEVELS: tuple[ProtocolLevelSpec, ...] = (
+    ProtocolLevelSpec(
+        code=PROTOCOL_LEVEL_CODE.L0,
+        label="平時",
+        band_text="−10% 以內",
+        must_do=("照計畫定期定額（依原訂投資計畫，不特別作為）",),
+        must_not=(
+            "無特別禁止事項（平時姿態，維持既定計畫）",
+            "行為防火牆通則：只看本系統，不看券商 App",
+        ),
+    ),
+    ProtocolLevelSpec(
+        code=PROTOCOL_LEVEL_CODE.L1,
+        label="修正",
+        band_text="−10% ~ −20%",
+        must_do=("照常定期定額，什麼都不改",),
+        must_not=("增加看盤頻率", "閱讀「崩盤將至」類內容"),
+    ),
+    ProtocolLevelSpec(
+        code=PROTOCOL_LEVEL_CODE.L2,
+        label="熊市",
+        band_text="−20% ~ −30%",
+        must_do=("照常定期定額", "若配置偏離目標超過 5 個百分點，執行再平衡"),
+        must_not=("賣出任何部位", "修改目標配置", "與人爭論行情"),
+    ),
+    ProtocolLevelSpec(
+        code=PROTOCOL_LEVEL_CODE.L3,
+        label="深熊",
+        band_text="−30% 以上",
+        must_do=("照常定期定額", "啟動機動加碼（規則文字，見協定 §2）", "重讀本協定"),
+        must_not=(
+            "賣出任何部位",
+            "修改目標配置",
+            "與人爭論行情",
+            "72 小時內不做任何新決定",
+        ),
+    ),
+)
 
 
 class CSV_EXPORT:

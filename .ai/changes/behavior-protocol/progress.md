@@ -18,7 +18,7 @@
 | t01 協定判定引擎（assess 純運算） | 完成 | SC-043/044/045；models/protocol.py + ProtocolStatus + constants + protocol_service.assess；回撤含起始基準1.0、達門檻進較深級、<3月退L0分無資料/資料不足；19 tests，累計 226 綠 |
 | t02 門檻設定端到端 | 完成 | SC-046/047；比照 target_allocations：protocol_thresholds 表＋Repository＋effective_thresholds/validate_thresholds(0<L1<L2<L3)＋bootstrap 注入＋設定頁區段（非法即拒不落 DB）；13 tests，累計 239 綠 |
 | t03 行為協定唯讀頁 + 文件 Repo | 完成 | SC-048；ProtocolDocRepository（__file__ 錨定讀 docs/PROTOCOL.md、失敗轉 ProtocolDocError）＋ views/protocol.py 唯讀渲染 ＋ app.py nav；docs/PROTOCOL.md 一併納入版控；6 tests，累計 245 綠 |
-| t04 總覽落地頁 + 必做/禁止結構化 | 未開始 | SC-049/050；PROTOCOL_LEVELS + views/overview.py + app.py nav default 落地 |
+| t04 總覽落地頁 + 必做/禁止結構化 | 完成 | SC-049/050；PROTOCOL_LEVELS 結構化（依 §1 表＋L0）＋ overview_presentation 純函式（查表/狀態→呈現）＋ views/overview.py（default 落地）＋ app.py nav；資料不足分無紀錄/資料不足兩文案退 L0；21 tests，累計 266 綠 |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
 
 ## Phase 3：審查
