@@ -67,12 +67,25 @@ class TestProtocolLevelsContentAlignsWithProtocolTable:
         assert any("無特別禁止" in item for item in l0.must_not)
 
     @pytest.mark.scenario("SC-050")
+    def test_sc050_l0_stays_clean_without_firewall_or_crash_wording(self):
+        # 鎖定邊界：L0 平時不得出現行為防火牆或任何大跌應對提醒——那些只在系統
+        # 真的判定進入 L1 以上時才有意義，避免與平時/資料不足的中性姿態混淆
+        l0 = overview_presentation.level_spec_for(PROTOCOL_LEVEL_CODE.L0)
+        for item in (*l0.must_do, *l0.must_not):
+            assert "券商 App" not in item
+            assert "行為防火牆" not in item
+
+    @pytest.mark.scenario("SC-050")
     def test_sc050_l1_matches_protocol_table(self):
         l1 = overview_presentation.level_spec_for(PROTOCOL_LEVEL_CODE.L1)
         assert l1.label == "修正"
         assert l1.band_text == "−10% ~ −20%"
         assert l1.must_do == ("照常定期定額，什麼都不改",)
-        assert l1.must_not == ("增加看盤頻率", "閱讀「崩盤將至」類內容")
+        assert l1.must_not == (
+            "行為防火牆通則：只看本系統，不看券商 App",
+            "增加看盤頻率",
+            "閱讀「崩盤將至」類內容",
+        )
 
     @pytest.mark.scenario("SC-050")
     def test_sc050_l2_matches_protocol_table(self):
@@ -80,16 +93,30 @@ class TestProtocolLevelsContentAlignsWithProtocolTable:
         assert l2.label == "熊市"
         assert l2.band_text == "−20% ~ −30%"
         assert l2.must_do == ("照常定期定額", "若配置偏離目標超過 5 個百分點，執行再平衡")
-        assert l2.must_not == ("賣出任何部位", "修改目標配置", "與人爭論行情")
+        assert l2.must_not == (
+            "行為防火牆通則：只看本系統，不看券商 App",
+            "賣出任何部位",
+            "修改目標配置",
+            "與人爭論行情",
+        )
 
     @pytest.mark.scenario("SC-050")
     def test_sc050_l3_prohibitions_equal_l2_plus_cooldown(self):
-        # 禁止＝同 L2，外加「72 小時內不做任何新決定」
+        # 禁止＝同 L2（含行為防火牆提醒），外加「72 小時內不做任何新決定」
         l2 = overview_presentation.level_spec_for(PROTOCOL_LEVEL_CODE.L2)
         l3 = overview_presentation.level_spec_for(PROTOCOL_LEVEL_CODE.L3)
         assert l3.label == "深熊"
         assert l3.band_text == "−30% 以上"
         assert l3.must_not == (*l2.must_not, "72 小時內不做任何新決定")
+
+    @pytest.mark.scenario("SC-050")
+    @pytest.mark.parametrize(
+        "code", [PROTOCOL_LEVEL_CODE.L1, PROTOCOL_LEVEL_CODE.L2, PROTOCOL_LEVEL_CODE.L3]
+    )
+    def test_sc050_l1_and_above_include_firewall_reminder(self, code):
+        # 行為防火牆提醒（只看本系統、不看券商 App）自 L1 起皆須顯示
+        spec = overview_presentation.level_spec_for(code)
+        assert "行為防火牆通則：只看本系統，不看券商 App" in spec.must_not
 
 
 class TestLevelSpecForLookup:

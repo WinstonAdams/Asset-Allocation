@@ -124,7 +124,8 @@ class ProtocolLevelSpec:
 
     內容依 docs/PROTOCOL.md §1「情境分級與對應動作」表人工謄寫；兩處須人工同步，
     改動協定文本時須一併更新本表（已知維護點）。L0（平時）不在文件表格內，其必做/
-    禁止依協定 §0/§3 通則補上「照計畫、無特別禁止」的基準姿態。
+    禁止依協定 §0 通則補上「照計畫、無特別禁止」的基準姿態，維持平時姿態的乾淨呈現，
+    不帶任何大跌應對或行為防火牆提醒（那些只在真的偵測到回撤、進入 L1 以上時才有意義）。
     """
 
     code: str
@@ -134,6 +135,10 @@ class ProtocolLevelSpec:
     must_not: tuple[str, ...]
 
 
+# 行為防火牆通則（協定 §3）：只在真的判定進入 L1 以上（偵測到回撤）時才提醒，
+# 平時（L0）不顯示，避免和「資料不足」的中性姿態混在一起、失去警示意義。
+_BEHAVIOR_FIREWALL_REMINDER = "行為防火牆通則：只看本系統，不看券商 App"
+
 # L0（平時）+ L1–L3 依 docs/PROTOCOL.md §1 表謄寫；供總覽頁查表呈現必做/禁止摘要。
 PROTOCOL_LEVELS: tuple[ProtocolLevelSpec, ...] = (
     ProtocolLevelSpec(
@@ -141,24 +146,21 @@ PROTOCOL_LEVELS: tuple[ProtocolLevelSpec, ...] = (
         label="平時",
         band_text="−10% 以內",
         must_do=("照計畫定期定額（依原訂投資計畫，不特別作為）",),
-        must_not=(
-            "無特別禁止事項（平時姿態，維持既定計畫）",
-            "行為防火牆通則：只看本系統，不看券商 App",
-        ),
+        must_not=("無特別禁止事項（平時姿態，維持既定計畫）",),
     ),
     ProtocolLevelSpec(
         code=PROTOCOL_LEVEL_CODE.L1,
         label="修正",
         band_text="−10% ~ −20%",
         must_do=("照常定期定額，什麼都不改",),
-        must_not=("增加看盤頻率", "閱讀「崩盤將至」類內容"),
+        must_not=(_BEHAVIOR_FIREWALL_REMINDER, "增加看盤頻率", "閱讀「崩盤將至」類內容"),
     ),
     ProtocolLevelSpec(
         code=PROTOCOL_LEVEL_CODE.L2,
         label="熊市",
         band_text="−20% ~ −30%",
         must_do=("照常定期定額", "若配置偏離目標超過 5 個百分點，執行再平衡"),
-        must_not=("賣出任何部位", "修改目標配置", "與人爭論行情"),
+        must_not=(_BEHAVIOR_FIREWALL_REMINDER, "賣出任何部位", "修改目標配置", "與人爭論行情"),
     ),
     ProtocolLevelSpec(
         code=PROTOCOL_LEVEL_CODE.L3,
@@ -166,6 +168,7 @@ PROTOCOL_LEVELS: tuple[ProtocolLevelSpec, ...] = (
         band_text="−30% 以上",
         must_do=("照常定期定額", "啟動機動加碼（規則文字，見協定 §2）", "重讀本協定"),
         must_not=(
+            _BEHAVIOR_FIREWALL_REMINDER,
             "賣出任何部位",
             "修改目標配置",
             "與人爭論行情",
