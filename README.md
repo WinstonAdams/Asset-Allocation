@@ -119,3 +119,4 @@ pip-audit       # 依賴漏洞掃描
 - 財務資料完整存於 Turso；`secrets.toml` 內的 Turso 權杖等同資料庫密碼，外洩請立即至 Turso 後台 rotate。
 - app 部署於公開 URL，存取控制僅靠 `st.login()` 登入＋email 允許清單；非清單內帳號登入後即被擋下，看不到任何資料。
 - Turso 免費單庫，建議定期以「匯出 CSV」備份；匯入還原僅支援空庫（目標庫非空會被拒絕，避免污染既有資料）。
+- **已知環境事項**：`app.py` 開頭在 `import streamlit` 之前搶先設定 `os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")`，用意是規避 pyarrow 25 內建 mimalloc 配置器在 macOS arm64 的 thread-init segfault——顯示 DataFrame（`st.dataframe` / `st.data_editor`）觸發 pandas→Arrow 轉換時，曾實測整個 Python 進程 `EXC_BAD_ACCESS` 崩潰；停用 mimalloc、改用系統 malloc 後已驗證穩定。此設定必須早於 Streamlit（連帶 import pyarrow）之前才生效，故 import 順序看似不合慣例，維護者請勿因「風格統一」而移動或刪除這行。

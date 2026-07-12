@@ -410,6 +410,7 @@ class DataIoService:
 - **CSV 為對外契約**：含表頭標準 CSV，欄位即各 model 欄位（AD-9/AD-10）；一旦發布即須維持相容，未來改欄位須考慮回溯相容。
 - **「賣出當月 0、之後缺列」為隱性錄入約定**（AD-10）：須在錄入頁與 README 明確提示，避免使用者誤記成續記 0 列；由 Scenario 覆蓋此錄入行為。
 - **連線存活探測以 `ensure_schema()` 代表整條連線**（t16）：假設同一條連線的 Hrana stream 若已失效，其上任何操作都會以同一樣態失敗，故用它探測即可代表本次 rerun 對所有 Repository 呼叫皆有效，不逐一探測每個 Repository；若未來 libsql 出現「部分操作失效、部分正常」的樣態，此假設需重新檢視。
+- **`app.py` 頂層以環境變數規避 pyarrow 原生記憶體配置器相容性問題**（t17）：pyarrow 25 內建的 mimalloc 配置器在 macOS arm64 有 thread-init segfault，使用者本機操作（編輯月度錄入、切頁）觸發 Streamlit 顯示 DataFrame 的 pandas→Arrow 轉換時，曾實測整個 Python 進程 `EXC_BAD_ACCESS` 崩潰——與本專案業務邏輯無關，是第三方原生套件的平台相容性 bug。`app.py` 在 `import streamlit` 之前搶先 `os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")` 停用 mimalloc、改用系統 malloc，已驗證可規避；因 pyarrow 只在自身被 import 的當下讀取此環境變數，這行必須早於（連帶 import pyarrow 的）Streamlit import，故此檔案 import 順序刻意偏離慣例。此為執行環境層級的防呆，非業務行為，未新增 Scenario；若未來 pyarrow 修正此問題或專案改採其他資料表元件，可評估移除此環境變數設定。
 
 ---
 

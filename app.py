@@ -16,7 +16,20 @@ CLI 參數，故不採 RPA 的 main.py + argparse 模型）。本檔職責限於
 """
 
 # ==== 原生（標準庫） ====
-# 無
+import os
+
+# 規避 pyarrow 25 內建 mimalloc 配置器在 macOS arm64 的 thread-init segfault：
+# Streamlit 顯示 DataFrame（st.dataframe / st.data_editor）時 pandas→Arrow 轉換走
+# arrow::py::ConvertPySequence，恰好在新執行緒配置記憶體即整個 Python 進程 EXC_BAD_ACCESS
+# 崩潰（使用者本機操作月度錄入編輯、切頁時實測重現）。ARROW_DEFAULT_MEMORY_POOL=system
+# 停用 mimalloc、改用系統 malloc 後，同樣的壓力操作已驗證不再崩潰。
+#
+# 這行刻意置於 `import streamlit` 之前、且早於本檔其餘所有 import（打破一般「先 import
+# 後執行程式碼」的慣例）：pyarrow 只在自身被 import 的當下讀取此環境變數一次，之後就
+# 定案，而 Streamlit 一 import 就會連帶 import pyarrow，若這行晚於 `import streamlit`
+# 才執行就已經來不及生效。這是本檔唯一允許「設定先於第三方 import」的例外，非隨意調整
+# import 順序。用 setdefault 而非直接賦值，是為了不覆蓋使用者已透過部署環境明確設定的值。
+os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")
 
 # ==== 第三方套件 ====
 import streamlit as st

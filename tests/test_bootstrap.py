@@ -20,6 +20,7 @@ bootstrap 的 st.cache_resource 包裝與 st.secrets 讀取屬無法純測的 St
 """
 
 # ==== 原生（標準庫） ====
+import ast
 import tomllib
 from pathlib import Path
 from unittest.mock import Mock
@@ -300,3 +301,63 @@ def test_secrets_template_keeps_allowed_emails_at_top_level() -> None:
     assert "allowed_emails" in parsed
     assert "allowed_emails" not in parsed.get("turso", {})
     assert "allowed_emails" not in parsed.get("auth", {})
+
+
+def _arrow_memory_pool_setdefault_call(node: ast.stmt) -> ast.Call | None:
+    """若此頂層敘述是 `os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", ...)` 則回傳該呼叫。"""
+    if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+        return None
+    call = node.value
+    func = call.func
+    is_environ_setdefault = (
+        isinstance(func, ast.Attribute)
+        and func.attr == "setdefault"
+        and isinstance(func.value, ast.Attribute)
+        and func.value.attr == "environ"
+    )
+    if not is_environ_setdefault:
+        return None
+    targets_arrow_key = any(
+        isinstance(arg, ast.Constant) and arg.value == "ARROW_DEFAULT_MEMORY_POOL"
+        for arg in call.args
+    )
+    return call if targets_arrow_key else None
+
+
+def _is_streamlit_import(node: ast.stmt) -> bool:
+    return isinstance(node, ast.Import) and any(alias.name == "streamlit" for alias in node.names)
+
+
+def test_app_disables_pyarrow_mimalloc_before_importing_streamlit() -> None:
+    """app.py 須在 import streamlit 之前，把 ARROW_DEFAULT_MEMORY_POOL 設為 system。
+
+    回歸防呆：pyarrow 25 內建的 mimalloc 配置器在 macOS arm64 有 thread-init segfault，
+    Streamlit 顯示 DataFrame（st.dataframe / st.data_editor）觸發 pandas→Arrow 轉換時，
+    使用者本機操作（編輯月度錄入、切頁）曾實測整個 Python 進程 EXC_BAD_ACCESS 崩潰。
+    設 ARROW_DEFAULT_MEMORY_POOL=system 停用 mimalloc、改用系統 malloc 已驗證可規避，
+    但 pyarrow 只在自身被 import 的當下讀取此環境變數一次——而 Streamlit 一 import 就
+    連帶 import pyarrow，因此這行必須在 `import streamlit` 之前執行才有效、且值須為
+    "system"。segfault 本身難以在單元測試重現，故改以原始碼層級（AST）鎖定兩者的先後
+    順序與設定值，避免日後有人不知情把 import 重新排序或誤刪這行、誤改值。
+    """
+    app_path = APP_DIR / "app.py"
+    tree = ast.parse(app_path.read_text(encoding="utf-8"), filename=str(app_path))
+
+    setdefault_calls = [
+        (node.lineno, call)
+        for node in tree.body
+        if (call := _arrow_memory_pool_setdefault_call(node)) is not None
+    ]
+    streamlit_import_lines = [node.lineno for node in tree.body if _is_streamlit_import(node)]
+
+    assert setdefault_calls, "app.py 應設定 os.environ.setdefault('ARROW_DEFAULT_MEMORY_POOL', ...)"
+    assert streamlit_import_lines, "app.py 應 import streamlit"
+
+    setdefault_line, call = setdefault_calls[0]
+    assert setdefault_line < streamlit_import_lines[0], (
+        "ARROW_DEFAULT_MEMORY_POOL 必須在 import streamlit 之前設定，"
+        "否則 pyarrow 已在 streamlit import 當下讀走舊值，設定不會生效"
+    )
+    assert call.args[1].value == "system", (
+        "ARROW_DEFAULT_MEMORY_POOL 須設為 'system' 才會停用 mimalloc"
+    )
