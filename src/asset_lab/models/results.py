@@ -69,3 +69,21 @@ class DriftRow(BaseModel):
     target_weight: float
     drift: float
     needs_rebalance: bool
+
+
+class ProtocolStatus(BaseModel):
+    """大跌行為協定等級判定結果（回撤 → 等級）。
+
+    level_code 為 'L0'~'L3'；status 為 'ok'（依回撤深度判定）/
+    'insufficient_data'（有資料但未達最低月數）/'no_data'（尚無任何有效節點）。
+    drawdown 為目前自歷史高點回撤（≤0 小數，如 −0.22 表 −22%），資料不足時為
+    None（不誤報大跌）。current_cumulative_twr 為最新有資料月的整體累積 TWR
+    （小數），無任何節點時為 None；此欄位與協定等級判定無關，僅供關鍵指標呈現。
+    data_month_count 為納入判定的累積 TWR 有效節點數。
+    """
+
+    level_code: str
+    status: str
+    drawdown: float | None = None
+    current_cumulative_twr: float | None = None
+    data_month_count: int

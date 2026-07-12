@@ -15,7 +15,7 @@
 
 | Task | 狀態 | 備註 |
 |------|------|------|
-| t01 協定判定引擎（assess 純運算） | 未開始 | SC-043/044/045；models/protocol.py + ProtocolStatus + constants + protocol_service.assess |
+| t01 協定判定引擎（assess 純運算） | 完成 | SC-043/044/045；models/protocol.py + ProtocolStatus + constants + protocol_service.assess；回撤含起始基準1.0、達門檻進較深級、<3月退L0分無資料/資料不足；19 tests，累計 226 綠 |
 | t02 門檻設定端到端 | 未開始 | SC-046/047；驗證/預設補齊 + protocol_threshold_repo + schema 表 + bootstrap + 設定頁 |
 | t03 行為協定唯讀頁 + 文件 Repo | 未開始 | SC-048；ProtocolDocRepository + exceptions + views/protocol.py + app.py nav |
 | t04 總覽落地頁 + 必做/禁止結構化 | 未開始 | SC-049/050；PROTOCOL_LEVELS + views/overview.py + app.py nav default 落地 |

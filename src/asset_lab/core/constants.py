@@ -26,6 +26,9 @@ TIMEZONE = "Asia/Taipei"
 # 再平衡偏離門檻預設值，以「百分點」計（現況% − 目標% 的絕對值超過此值即建議再平衡）。
 DEFAULT_REBALANCE_THRESHOLD = 5.0
 
+# 回撤基準的資料不足下限：累積 TWR 有效節點數低於此值即不判斷回撤深度，一律退回 L0。
+PROTOCOL_MIN_DATA_MONTHS = 3
+
 
 class HOLDING_KIND:
     """持有項目性質。資產計入配置與報酬率；負債僅計入淨值的負向。"""
@@ -53,6 +56,16 @@ class PERIOD_MODE:
     LAST_12M = "last_12m"
     CUSTOM = "custom"
     ALL = (INCEPTION, YTD, LAST_12M, CUSTOM)
+
+
+class PROTOCOL_LEVEL_CODE:
+    """大跌行為協定等級代碼。L0 為平時姿態，L1–L3 依回撤深度遞增而愈趨保守。"""
+
+    L0 = "L0"
+    L1 = "L1"
+    L2 = "L2"
+    L3 = "L3"
+    ALL = (L0, L1, L2, L3)
 
 
 class HOLDINGS_TABLE:
