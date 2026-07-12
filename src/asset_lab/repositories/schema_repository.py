@@ -1,9 +1,10 @@
-"""建表 Repository——首次啟動建立三張表（if not exists）。
+"""建表 Repository——首次啟動建立四張表（if not exists）。
 
-三表結構與設計文件一致：
+四表結構與設計文件一致：
 - holdings：持有項目主檔，holding_id 為自動遞增主鍵（穩定身分，改名不斷裂歷史）。
 - monthly_records：項目 × 月份時間序列，(holding_id, year_month) 為複合主鍵（唯一鍵）。
 - target_allocations：分類目標配置，category 為主鍵，目標比重以百分比儲存。
+- protocol_thresholds：大跌行為協定回撤門檻設定，level 為主鍵，門檻以正幅度百分比儲存。
 
 本層只負責 DDL 執行（純 I/O），不含任何業務判斷。
 """
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING
 from asset_lab.core.constants import (
     HOLDINGS_TABLE,
     MONTHLY_RECORDS_TABLE,
+    PROTOCOL_THRESHOLDS_TABLE,
     TARGET_ALLOCATIONS_TABLE,
 )
 
@@ -56,9 +58,17 @@ CREATE TABLE IF NOT EXISTS {TARGET_ALLOCATIONS_TABLE.TABLE_NAME} (
 )
 """
 
+# 大跌行為協定回撤門檻設定。level 為主鍵；drawdown_threshold 為正回撤幅度百分比。
+_CREATE_PROTOCOL_THRESHOLDS = f"""
+CREATE TABLE IF NOT EXISTS {PROTOCOL_THRESHOLDS_TABLE.TABLE_NAME} (
+    {PROTOCOL_THRESHOLDS_TABLE.LEVEL} TEXT PRIMARY KEY,
+    {PROTOCOL_THRESHOLDS_TABLE.DRAWDOWN_THRESHOLD} REAL NOT NULL
+)
+"""
+
 
 class SchemaRepository:
-    """建表：首次啟動建立三張表（if not exists）。連線由 bootstrap 注入。"""
+    """建表：首次啟動建立四張表（if not exists）。連線由 bootstrap 注入。"""
 
     def __init__(self, *, conn: "Connection") -> None:
         """初始化建表 Repository。
@@ -69,9 +79,10 @@ class SchemaRepository:
         self._conn = conn
 
     def ensure_schema(self) -> None:
-        """建立三張表（if not exists）。重複呼叫安全（idempotent），不影響既有資料。"""
+        """建立四張表（if not exists）。重複呼叫安全（idempotent），不影響既有資料。"""
         cursor = self._conn.cursor()
         cursor.execute(_CREATE_HOLDINGS)
         cursor.execute(_CREATE_MONTHLY_RECORDS)
         cursor.execute(_CREATE_TARGET_ALLOCATIONS)
+        cursor.execute(_CREATE_PROTOCOL_THRESHOLDS)
         self._conn.commit()

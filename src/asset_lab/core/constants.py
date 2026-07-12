@@ -68,6 +68,14 @@ class PROTOCOL_LEVEL_CODE:
     ALL = (L0, L1, L2, L3)
 
 
+class PROTOCOL_LEVEL_DEFAULTS:
+    """回撤門檻預設值（正回撤幅度百分比）；使用者從未設定或缺某級時以此補齊。"""
+
+    L1 = 10.0
+    L2 = 20.0
+    L3 = 30.0
+
+
 class HOLDINGS_TABLE:
     """持有項目主檔資料表結構。"""
 
@@ -97,6 +105,14 @@ class TARGET_ALLOCATIONS_TABLE:
     TABLE_NAME = "target_allocations"
     CATEGORY = "category"
     TARGET_WEIGHT = "target_weight"
+
+
+class PROTOCOL_THRESHOLDS_TABLE:
+    """回撤門檻設定資料表結構。level 為主鍵，drawdown_threshold 為正幅度百分比。"""
+
+    TABLE_NAME = "protocol_thresholds"
+    LEVEL = "level"
+    DRAWDOWN_THRESHOLD = "drawdown_threshold"
 
 
 class CSV_EXPORT:

@@ -32,6 +32,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 # ==== 專案內部 ====
 from asset_lab import bootstrap
 from asset_lab.repositories.holding_repository import HoldingRepository
+from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
@@ -39,6 +40,7 @@ from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 from asset_lab.services.period_service import PeriodService
+from asset_lab.services.protocol_service import ProtocolService
 from asset_lab.services.return_service import ReturnService
 
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -129,11 +131,13 @@ def test_build_container_wires_repositories_to_connection() -> None:
     assert isinstance(container.record_repo, RecordRepository)
     assert isinstance(container.target_repo, TargetRepository)
     assert isinstance(container.schema_repo, SchemaRepository)
+    assert isinstance(container.protocol_threshold_repo, ProtocolThresholdRepository)
     # 所有 Repository 接上同一連線
     assert container.holding_repo._conn is conn
     assert container.record_repo._conn is conn
     assert container.target_repo._conn is conn
     assert container.schema_repo._conn is conn
+    assert container.protocol_threshold_repo._conn is conn
 
 
 def test_build_container_wires_services() -> None:
@@ -147,6 +151,7 @@ def test_build_container_wires_services() -> None:
     assert isinstance(container.period_service, PeriodService)
     assert isinstance(container.data_io_service, DataIoService)
     assert isinstance(container.monthly_input_service, MonthlyInputService)
+    assert isinstance(container.protocol_service, ProtocolService)
     # 月度錄入服務的 I/O 委派接上容器內的 Repository 實例
     assert container.monthly_input_service._record_repo is container.record_repo
     assert container.monthly_input_service._holding_repo is container.holding_repo

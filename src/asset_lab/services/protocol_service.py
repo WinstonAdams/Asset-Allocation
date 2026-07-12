@@ -13,8 +13,9 @@
 # 無
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import PROTOCOL_LEVEL_CODE
-from asset_lab.models.protocol import ProtocolThresholds
+from asset_lab.core.constants import PROTOCOL_LEVEL_CODE, PROTOCOL_LEVEL_DEFAULTS
+from asset_lab.core.exceptions import DataValidationError
+from asset_lab.models.protocol import ProtocolThresholdModel, ProtocolThresholds
 from asset_lab.models.results import CumulativeTwrPoint, ProtocolStatus
 
 # 建倉基準點：起始月尚無報酬，成長指數以 1.0 起算，構成歷史高點路徑的起點。
@@ -36,6 +37,47 @@ class ProtocolService:
 
     def __init__(self) -> None:
         """初始化協定服務。本服務無外部依賴，僅做數值運算。"""
+
+    def effective_thresholds(
+        self, *, stored: list[ProtocolThresholdModel]
+    ) -> ProtocolThresholds:
+        """以已保存的門檻覆蓋預設值，缺哪級就用該級預設補齊。
+
+        使用者從未設定過任何門檻（stored 為空）時全數採預設；已保存的門檻中缺
+        某一等級時，只有該等級補預設，不因缺值崩壞（其餘已保存的等級仍照舊）。
+
+        Args:
+            stored: 已保存的門檻列（可能不完整，0～3 筆，任意順序）。
+
+        Returns:
+            合併預設後的三級有效門檻。
+        """
+        overrides = {threshold.level: threshold.drawdown_threshold for threshold in stored}
+        return ProtocolThresholds(
+            l1=overrides.get(PROTOCOL_LEVEL_CODE.L1, PROTOCOL_LEVEL_DEFAULTS.L1),
+            l2=overrides.get(PROTOCOL_LEVEL_CODE.L2, PROTOCOL_LEVEL_DEFAULTS.L2),
+            l3=overrides.get(PROTOCOL_LEVEL_CODE.L3, PROTOCOL_LEVEL_DEFAULTS.L3),
+        )
+
+    def validate_thresholds(self, *, l1: float, l2: float, l3: float) -> None:
+        """檢查三級門檻是否維持「皆為正、深度嚴格遞增」的合法順序。
+
+        合法順序為 0 < l1 < l2 < l3（等價於回撤深度 −l1 淺於 −l2 淺於 −l3）。
+        呼叫端（設定頁）應在寫入前呼叫本方法，驗證失敗時不落 DB、不變更既有門檻。
+
+        Args:
+            l1: L1 門檻（正回撤幅度百分比）。
+            l2: L2 門檻，須嚴格大於 l1。
+            l3: L3 門檻，須嚴格大於 l2。
+
+        Raises:
+            DataValidationError: 順序顛倒、非嚴格遞增，或任一門檻非正值。
+        """
+        if not (0 < l1 < l2 < l3):
+            raise DataValidationError(
+                f"回撤門檻須滿足 0 < L1 < L2 < L3（皆為正、嚴格遞增），"
+                f"收到 L1={l1}、L2={l2}、L3={l3}"
+            )
 
     def assess(
         self,

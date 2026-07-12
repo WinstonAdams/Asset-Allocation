@@ -28,6 +28,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 
 # ==== 專案內部 ====
 from asset_lab.repositories.holding_repository import HoldingRepository
+from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
@@ -35,6 +36,7 @@ from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 from asset_lab.services.period_service import PeriodService
+from asset_lab.services.protocol_service import ProtocolService
 from asset_lab.services.return_service import ReturnService
 
 if TYPE_CHECKING:
@@ -61,11 +63,13 @@ class Container:
     record_repo: RecordRepository
     target_repo: TargetRepository
     schema_repo: SchemaRepository
+    protocol_threshold_repo: ProtocolThresholdRepository
     return_service: ReturnService
     allocation_service: AllocationService
     period_service: PeriodService
     data_io_service: DataIoService
     monthly_input_service: MonthlyInputService
+    protocol_service: ProtocolService
 
 
 def parse_allowed_emails(raw: object) -> set[str]:
@@ -111,12 +115,14 @@ def build_container(*, conn: "Connection") -> Container:
     record_repo = RecordRepository(conn=conn)
     target_repo = TargetRepository(conn=conn)
     schema_repo = SchemaRepository(conn=conn)
+    protocol_threshold_repo = ProtocolThresholdRepository(conn=conn)
 
     return Container(
         holding_repo=holding_repo,
         record_repo=record_repo,
         target_repo=target_repo,
         schema_repo=schema_repo,
+        protocol_threshold_repo=protocol_threshold_repo,
         return_service=ReturnService(),
         allocation_service=AllocationService(),
         period_service=PeriodService(),
@@ -124,6 +130,7 @@ def build_container(*, conn: "Connection") -> Container:
         monthly_input_service=MonthlyInputService(
             holding_repo=holding_repo, record_repo=record_repo
         ),
+        protocol_service=ProtocolService(),
     )
 
 
