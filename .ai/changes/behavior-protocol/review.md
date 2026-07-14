@@ -139,6 +139,63 @@ Baseline 命中：0 條
 
 ## 3-3 規則符合度審查
 
+審查範圍：本 Change（t01–t05）新增/修改的原始碼與測試，共 19 檔：
+`src/asset_lab/core/constants.py`、`core/exceptions.py`、`models/protocol.py`、`models/results.py`（`ProtocolStatus`）、`services/protocol_service.py`、`repositories/protocol_threshold_repository.py`、`repositories/protocol_doc_repository.py`、`repositories/schema_repository.py`（`protocol_thresholds` 建表）、`overview_presentation.py`、`bootstrap.py`（新增注入）、`views/overview.py`、`views/protocol.py`、`views/settings.py`（新增區段）、`app.py`（nav 新增）、`tests/test_protocol.py`、`test_protocol_thresholds.py`、`test_protocol_doc.py`、`test_overview.py`、`tests/test_bootstrap.py`（新增 wiring 斷言）。
+
+**Diff-base 說明（偏離 dispatch 指定的 `origin/main`）**：本機 `origin/main` 已被前序階段（2-Z/3-1/3-2）持續直接推送，目前 = `dc15a3d`；`git diff origin/main HEAD` 只能看到最後 2 個未推送 commit（3-2 的 2 個 fix），無法涵蓋 t01–t05 全部異動。改以本 Change 真正起點的前一 commit `c10716a`（initial-build 收尾後、behavior-protocol 1-1 提案前）為 diff-base，`git diff c10716a HEAD` 即完整涵蓋 t01–t05。另需排除同期夾雜的**無關** commit `dc15a3d`（`feat(input): 月度錄入年月下拉`，非本 Change 範圍，diff 中已手動剔除其觸及的 `views/input.py`、`tests/test_input_view.py`、`tests/test_core_utils.py`、`src/asset_lab/core/utils.py`）。
+
+核准判定：**通過**（無 CRITICAL / HIGH 真實違規；checker 報出的 103 HIGH + 19 MEDIUM + 2 LOW 經逐條復核，絕大多數為對照 initial-build 既有、已審定架構慣例的偽陽性；未發現本 Change 局部引入的新違規）
+
+### 自動掃描
+
+Checker 命令：`python .claude/skills/spec-driven-flow/scripts/checkers/runner.py --phase 3-3 --project-dir . --diff-base c10716a --json --output .ai/changes/behavior-protocol/.cache/checker_3_3.json`（`--diff-base` 由 `origin/main` 改為 `c10716a`，理由見上）
+退出碼：0（正常完成）
+總違規：124 條（CRITICAL: 0 / HIGH: 103 / MEDIUM: 19 / LOW: 2）
+Baseline 命中：0 條
+完整報告：`.ai/changes/behavior-protocol/.cache/checker_3_3.json`
+
+按 `rule_id` 分組次數：`no_runtime_constants_access`×65、`docstring_returns_section`×15、`import_block_format`×13、`service_no_runtime_constants`×12、`constants_top_level_only`×4、`no_module_level_constants_alias`×3、`model_naming_convention`×2、`no_stdlib_get_logger`×2、`event_name_format`×2、`no_logger_exception`×2、`note_required`×2、`root_main_exists`×1、`src_project_layout_missing`×1。
+
+### 逐條復核（按 rule_id 分組；每組列代表性樣本，判定套用同組全部命中）
+
+- **`no_runtime_constants_access` + `service_no_runtime_constants`（合計 77 條，checker 已標，HIGH）**——「方法 body 內 runtime 存取 constants」，命中遍布 `protocol_service.py`（`PROTOCOL_LEVEL_CODE.*`／`PROTOCOL_LEVEL_DEFAULTS.*`）、`views/overview.py`／`views/settings.py`（`PROTOCOL_MIN_DATA_MONTHS`／`EARLIEST_YEAR_MONTH_SENTINEL`／`PROTOCOL_LEVEL_CODE.*`）、`views/input.py`（`TIMEZONE`，屬 dc15a3d 但一併列此判定供對照）與各測試檔。**判定：不違規（既有慣例延續，非本 Change 新增）**。以 `grep` 核對既有（已通過 initial-build 3-3 審查）的 `allocation_service.py`／`period_service.py`／`data_io_service.py`／`return_service.py` 四個 Service 檔，皆同樣在方法 body 內直接存取 `HOLDING_KIND.ASSET`／`PERIOD_MODE.INCEPTION` 等列舉常數，且該審查明確肯定「constants.py 以嵌套 class + 模組級具名常數組織」「Service 純運算無 I/O」而未對此存取模式提出違規。04-cross-cutting §3.2 表列的違規情境（`ENVIRONMENTS.DEV[...]`、Sheet `COL_NAME` schema 值）針對的是**環境差異值／Repository schema 欄位**——理由是不同實例可能需要不同注入值；`PROTOCOL_LEVEL_CODE`（列舉標籤）與 `PROTOCOL_LEVEL_DEFAULTS`（無 `--env` 差異的固定業務門檻預設）不屬此類，`ProtocolService` 亦無建構子參數、單例組裝、無「不同呼叫端需要不同值」的情境，且 `test_protocol_thresholds.py` 已直接對預設值行為斷言、可測性未受影響。checker 規則對「環境差異值」與「純業務列舉/預設常數」未加區分，屬規則對本專案場景的過度泛化，非本 Change 引入的新問題。
+- **`import_block_format`（13 條，checker 已標，HIGH）**——「缺少 `# ==== AsiaYo 專案內部 ====`」。**判定：不違規（checker 誤判，未辨識專案已改用簡化用語）**。以 `grep` 核對 `allocation_service.py`／`target_repository.py`／`charts.py` 等既有檔案，全部一致使用 `# ==== 專案內部 ====`（無「AsiaYo」前綴）——這是本專案（個人 side project，非 AsiaYo 內部專案）在 initial-build 階段即已建立、且通過該次 3-3 審查的既定用語；01-coding-style.md 範例的「AsiaYo 專案內部」字面文字對非 AsiaYo 專案不適用。本次新增的 13 個檔案（`protocol.py`／`overview_presentation.py`／`protocol_doc_repository.py`／`protocol_threshold_repository.py`／`schema_repository.py`／`protocol_service.py`／`views/overview.py`／`views/protocol.py`／4 個測試檔）皆與既有檔案用語一致，未新增偏離。
+- **`docstring_returns_section`（15 條，checker 已標，MEDIUM）**——私有 helper／測試 helper（`_neutral_message_for`、`_row_to_model`、`_current_drawdown`、`_level_for`、`_container`、`_format_decimal_as_percent`、`_format_percent_value`、`_series`、`_thresholds`、`_approx`、`_status`、`_run_app` 等）缺 `Returns:` 區塊。**判定：不違規（既有慣例延續）**。01-coding-style §3 docstring 規則明文只強制「**public** 函式、方法、類別」；上述全為底線開頭的私有/測試輔助函式。核對既有 `target_repository.py::_row_to_model`（單行 docstring、無 Args/Returns）與 `views/returns.py::_format_percent`（同樣單行、無 Returns），確認本專案對私有 helper 的既定慣例即為簡短單行 docstring，本次新增函式與此完全一致，非新增偏離。
+- **`constants_top_level_only`（4 條，checker 已標，MEDIUM）**——`PROTOCOL_MIN_DATA_MONTHS`、`PROTOCOL_DOC_RELATIVE_PATH`、`_BEHAVIOR_FIREWALL_REMINDER`、`PROTOCOL_LEVELS` 為 constants.py 頂層散變數（非 class）。**部分判定不違規、部分為已知且合理的新結構**：
+  - `PROTOCOL_MIN_DATA_MONTHS`／`PROTOCOL_DOC_RELATIVE_PATH`——與既有 `YEAR_MONTH_FORMAT`／`EARLIEST_YEAR_MONTH_SENTINEL`／`TIMEZONE`／`DEFAULT_REBALANCE_THRESHOLD`（皆為 constants.py 頂層純量常數）同構，initial-build 3-3 審查已明確描述並肯定「constants.py 以嵌套 class + **模組級具名常數**組織」。不違規，與既有慣例一致。
+  - `_BEHAVIOR_FIREWALL_REMINDER`（私有字串常數，避免 3 處 `must_not` tuple 重複「行為防火牆通則」全文）與 `PROTOCOL_LEVELS`（`tuple[ProtocolLevelSpec, ...]`，frozen dataclass 記錄陣列）——**屬本 Change 新結構樣式，非既有純量常數模式的直接延伸**。判定可接受：`PROTOCOL_LEVELS` 本質是「4 列 × 5 欄」的規格表（code/label/band_text/must_do/must_not），以 `frozen dataclass` + `tuple` 表達比硬套嵌套 class 更貼合「多筆同形記錄」的資料形狀，且仍具型別安全與可查表特性（`_LEVEL_SPEC_BY_CODE = {spec.code: spec for spec in PROTOCOL_LEVELS}`），t04 任務卡（`tasks/t04-overview-landing.md`）已將此結構列為明確實作範圍、非事後隨意decision。`_BEHAVIOR_FIREWALL_REMINDER` 為單純 DRY 手法、僅檔內私用。均不影響任何硬性規則，checker 對「頂層皆 class」的字面比對未涵蓋 dataclass/tuple 這種等價形式，非本 Change 局部缺陷。
+- **`no_module_level_constants_alias`（3 條，checker 已標，HIGH）**——`protocol_threshold_repository.py` 模組頂層 `_TABLE = PROTOCOL_THRESHOLDS_TABLE.TABLE_NAME` 等別名賦值。**判定：不違規（既有慣例延續，initial-build 3-3 已明文接受）**。核對既有 `target_repository.py`（`_TABLE = TARGET_ALLOCATIONS_TABLE.TABLE_NAME`、`_CATEGORY = ...`）完全同構，initial-build review.md §3-3 已對此模式做出明確結論：「Repository 的 `from constants import *_TABLE` 為模組級 schema 常數定義用於組 SQL 字串、非 runtime 環境差異值……本專案無 `--env` 多環境、表名為全域固定常數，且 SQL 模板須在模組級組裝，判定可接受、非違規」。本次新 Repository 與既有 Repository 手法一致，非新增偏離。
+- **`model_naming_convention`（2 條，checker 已標，LOW）**——`ProtocolThresholds`、`ProtocolStatus` 未使用 `XxxModel`/`XxxResult` 後綴。**判定：不違規（既有慣例延續）**。核對既有 `models/results.py` 內 `CumulativeTwrPoint`、`AllocationSnapshot`、`NetWorthPoint`、`DriftRow` 四個既有 model 皆為「計算/呈現用值物件」，均未加 `Model`/`Result` 後綴（僅持久化列模型如 `HoldingModel`／`TargetAllocationModel`／`ProtocolThresholdModel` 才加 `Model`）；`ProtocolThresholds`（合併後有效門檻值物件）、`ProtocolStatus`（判定結果值物件）與上述四個既有非持久化 model 屬同一命名類別，一致不加後綴，非新增偏離。
+- **`no_stdlib_get_logger` / `event_name_format` / `no_logger_exception` / `note_required`（合計 8 條，checker 已標，HIGH）**——`views/overview.py`／`views/protocol.py` 用 `logging.getLogger(__name__)` 與 `logger.exception("總覽頁渲染失敗")`（非 structlog kwargs 格式）。**判定：不違規（AD-8 既定偏離，initial-build 3-3 已確認）**。核對既有全部 7 個 view（`input.py`／`data_io.py`／`allocation.py`／`returns.py`／`settings.py` 等）皆同一寫法：`logging.getLogger(__name__)` + `logger.exception(<固定中文訊息>)`。design.md 開頭即載明「本 Change 不新增機密、不新增第三方依賴……沿用 initial-build 的偏離依據（標準 `logging` + Page 層唯一 catch），不另套 v2 工具」。checker 對 structlog kwargs 契約（`note=`／`event_name` 格式／`exc_info=True`）的檢查對本專案（無 utils_v2、無 structlog）不適用，屬既定且已審定的架構偏離，非新增違規。
+- **`root_main_exists` / `src_project_layout_missing`（2 條，checker 已標，HIGH）**——缺 `main.py`、缺 `asset_lab/controllers`。**判定：不違規（initial-build AD-1／AD-2 既定偏離，已於前次 3-3 審查確認）**。本 Change 未變更專案入口模型或分層結構，沿用既有 `app.py` + `st.navigation` + `views/` 扮演 Controller 角色的架構，無需重新論證。
+
+### 規則審查發現（checker 未報出，人工掃描）
+
+未發現本 Change 局部引入、checker 遺漏的額外違規。以下為人工比對established風格後的**觀察性**記錄（非違規）：
+
+- [LOW，供記錄] `src/asset_lab/overview_presentation.py` 定位為「Page 呈現轉換層」，未放在 `services/`——與既有 `src/asset_lab/charts.py`（docstring 明文「不做業務運算，只負責呈現契約」）同一定位，且 `overview_presentation.py` 自身 docstring 已明確聲明「定位比照 charts.py」。判定為既有架構模式的合理延伸：把「狀態 → 呈現資料」的純函式抽離出 View，使 `views/overview.py`（Controller 角色）維持薄委派、不含查表/轉換邏輯，反而比把邏輯留在 View 內更貼合 02-architecture §2「運算/轉換/篩選歸 Service」精神。無需動作。
+- [LOW，供記錄] `src/asset_lab/repositories/protocol_doc_repository.py::read_protocol_markdown` 捕捉 `OSError` 並轉型為 `ProtocolDocError` 後 `raise ... from error`（不 log）。核對既有 `record_repository.py::insert_record` 同樣「catch → 依內容轉譯領域例外類型 → raise，不 log」，且 initial-build 3-3 已明確判定此手法為「轉譯例外類型後 raise 屬合法的加 context 轉拋，非吞例外」。本次新 Repository 手法一致，非違規；3-2 安全審查已另就此檔案的訊息內容（不洩漏伺服器路徑）做過核准。
+
+### 各規則檔逐項符合度結論
+
+- **01-coding-style**：雙引號、`snake_case`/`PascalCase`、kwargs（所有方法呼叫與建構子注入一律 keyword args，含 `ProtocolThresholdModel(level=..., drawdown_threshold=...)`、`protocol_service.assess(series=..., thresholds=..., min_data_months=...)` 等）皆遵守。型別提示全部函式簽名（含私有 helper、`ProtocolService` 全部方法、`overview_presentation` 全部函式）齊備，`float | None`／`list[...]`／`tuple[...]` 現代語法一致（呼應既有 UP045 既定偏離，`Optional[X]` 已全面改 `X | None`）。docstring：public 函式/方法/類別皆有、繁中、含 Args/Returns（`ProtocolService.assess`／`validate_thresholds`／`effective_thresholds` 尤詳盡，含 Raises 說明業務邊界）；私有 helper 沿用既有簡短單行慣例（見上）。註解說明 WHY（如 `protocol_service.py` 對「起始基準 1.0」「四捨五入精度」「達門檻即進入較深級」等業務決策的大量行內註解），未見「已修正」「依你指示」類禁忌註解。Import 三區塊用語與既有一致（`# ==== 專案內部 ====`），空區塊 `# 無` 緊接下一標頭無空行——與既有全庫（`target_repository.py` 等）同一 ruff I001 既定偏離，不重複處理。魔法字串：協定等級代碼、狀態旗標（`_STATUS_NO_DATA` 等）、必做/禁止文字皆具名常數，未見散落魔法字串。
+- **02-architecture**：分層歸屬正確——`ProtocolService` 純運算、建構子無依賴、無 I/O、無 Streamlit 依賴，內部迴圈（`effective_thresholds` 的 dict comprehension）不涉容錯決策，符合 §5。`ProtocolThresholdRepository`／`ProtocolDocRepository` 只做 I/O 與 row↔model 轉換，業務校驗（門檻順序合法性）明確委由 Service（`validate_thresholds`），docstring 亦自陳「本層不判斷」，符合 §6 與既有 AD-9 精神（`target_repository.py` 同構）。`views/overview.py`／`views/protocol.py`／`views/settings.py` 新增區段皆為委派 + 渲染，未見資料篩選/轉換/欄位細部操作留在 View（`_format_*` 屬純顯示格式化，非業務轉換，且與既有 `returns.py::_format_percent` 同構）；`overview_presentation.resolve_presentation` 把「狀態→呈現」查表邏輯抽離 View，比 View 內聯更符合「Controller 不做資料轉換」原則。`bootstrap.py` 新增注入（`protocol_threshold_repo`／`protocol_doc_repo`／`protocol_service`）遵循既有 DI 組裝順序（Repo→Service→Container，keyword args）。main.py/controllers 結構偏離為既有 AD-1/AD-2（見自動掃描復核），本 Change 未擴大偏離面。
+- **03-data-config**：constants.py 新增內容以「業務概念」分組（`PROTOCOL_LEVEL_CODE`／`PROTOCOL_LEVEL_DEFAULTS`／`PROTOCOL_THRESHOLDS_TABLE`），DB schema 常數延續既有扁平 class 模式（`TABLE_NAME`／`LEVEL`／`DRAWDOWN_THRESHOLD`，無 URL 混入、無 SCHEMA 中間層）。`ProtocolLevelSpec`（frozen dataclass）+ `PROTOCOL_LEVELS`（tuple）為新結構樣式，已於上方逐條復核中評估為合理延伸、非違規。Pydantic Model（`ProtocolThresholdModel`／`ProtocolThresholds`／`ProtocolStatus`）皆純資料結構，無業務邏輯、無 I/O、無 field_validator、無 Service/Repository 呼叫；命名慣例與既有非持久化 value object（`DriftRow` 等）一致（見上）。機密治理：本 Change 未新增任何機密欄位，3-2 安全審查已確認。
+- **04-cross-cutting**：Logging 延續既有 stdlib `logging.getLogger(__name__)` + Page 層 `logger.exception`（AD-8 既定偏離，見上）。Error handling：`ProtocolService.validate_thresholds` 拋 `DataValidationError`（純運算業務規則違反，非「轉換例外類型」但屬 Service 合法直接拋出）；`ProtocolDocRepository` 轉譯 `OSError→ProtocolDocError`（既有 Repository 慣例延伸，見上）；`views/*.py` 為唯一 catch 點，`except AssetLabError`（`DataValidationError`／`ProtocolDocError` 皆其子類）統一攔截，不重複 log、不吞例外。DI：`ProtocolService` 建構子無依賴（純運算不需注入），`ProtocolThresholdRepository`／`ProtocolDocRepository` 依賴（`conn`／`doc_path`）皆由 `bootstrap.build_container` keyword 注入；Service/View 方法 body 內對 `PROTOCOL_LEVEL_CODE`／`PROTOCOL_MIN_DATA_MONTHS` 等業務列舉/常數的直接存取，經上方逐條復核判定為既有全庫慣例的延伸、非違規（詳見自動掃描復核第一項）。
+- **05-reference**：作為理想化 RPA/utils_v2 場景的具現化參考，其 structlog／main.py／建構子注入列舉常數等寫法與本專案已確立的偏離（AD-1／AD-2／AD-8，及本次確認的「Service 直接存取列舉常數」既有慣例）已於 initial-build 與本次審查完整論證，不重複裁決。
+
+### 既定偏離延續清單（本次未新增偏離，僅重申已審定項）
+
+- **`X | None` 取代 `Optional[X]`**（ruff UP045）——initial-build 已確認採 ruff 為準，本次新增程式碼全數一致。
+- **`# ==== 專案內部 ====` 取代 `# ==== AsiaYo 專案內部 ====`**——本專案非 AsiaYo 內部專案，既定簡化用語，本次新增檔案一致延續。
+- **AD-1／AD-2／AD-8（Streamlit 入口、Page 即 Controller、stdlib logging）**——design.md 開頭已明文重申沿用，不擴大偏離面。
+- **Repository 模組頂層 schema 常數別名**（`_TABLE = XXX_TABLE.TABLE_NAME`）——initial-build 3-3 已明文接受，本次新 Repository 延續同一手法。
+- **Service／View 方法 body 內直接存取列舉/業務常數**（`HOLDING_KIND.ASSET` 類比 `PROTOCOL_LEVEL_CODE.L0`）——本次審查首度就此模式明確論證並確認為既有慣例（此前 initial-build 3-3 報告未逐字點名此模式，但既有 4 個 Service 檔已一致採此寫法且通過審查），供後續 Change 引用免重複論證。
+
+### 建議 commit message
+
+`docs(behavior-protocol): 3-3 規則符合度審查報告（工程準則全面比對；checker 124 條違規逐條復核，皆為對照 initial-build 既有架構慣例的偽陽性或既定偏離延續，無 CRITICAL/HIGH 真實違規，判定通過）`
+
 <!-- rules-reviewer subagent 產出（工程準則全面符合度檢查）-->
 
 ## 3-4 行為對映審查

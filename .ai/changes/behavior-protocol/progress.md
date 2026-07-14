@@ -28,7 +28,7 @@
 |------|------|------|
 | 3-1 程式碼清理 | 完成 | checker MEDIUM×3 復核皆判 false positive/不建議拆分；SAFE 1 項採納（views/overview.py 移除會失效的 Change 級 ADR 編號引用）、SUGGEST 1 項維持現狀（_series() 重複未達 Rule of Three）；pytest 282 綠、ruff 綠 |
 | 3-2 安全審查 | 完成 | OWASP 全維度通過；checker 3 條 CRITICAL（SQL 注入）復核為 false positive（表名常數插值、資料值皆參數化綁定）；守門不變量（總覽改落地頁後仍先於一切渲染/DB 存取）與密鑰治理查證通過；LOW×2 中採納 1 項（讀檔失敗訊息移除伺服器路徑，路徑細節留 server log）；pip-audit 無 CVE；pytest 282 綠、ruff 綠 |
-| 3-3 規則符合度審查 | 未開始 | 工程準則全面符合度檢查 |
+| 3-3 規則符合度審查 | 完成 | 通過，無需修正；checker 124 條（HIGH103/MEDIUM19/LOW2）逐條復核，全數為既有 initial-build 已審定架構慣例的偽陽性或其延伸（Service/View 直接存取業務常數、logging、Repository 例外轉譯等）；ruff 綠、無源碼改動 |
 | 3-4 行為對映審查 | 未開始 | AI 比對 SC 描述 vs test 內容 |
 | 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
 
