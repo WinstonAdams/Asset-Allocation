@@ -29,4 +29,9 @@ class ProtocolDocRepository:
         try:
             return self._doc_path.read_text(encoding="utf-8")
         except OSError as error:
-            raise ProtocolDocError(f"無法讀取行為協定文件：{self._doc_path}") from error
+            # 使用者可見訊息不含伺服器絕對路徑（避免洩漏部署目錄結構）；完整路徑與底層
+            # OSError 細節經 `from error` 保留在例外鏈，由 Page 層 logger.exception 記入
+            # server log 供除錯（比照 data_io_service 的讀檔/解析失敗處理慣例）。
+            raise ProtocolDocError(
+                "無法讀取行為協定文件，請確認部署包含 docs/PROTOCOL.md。"
+            ) from error
