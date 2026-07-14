@@ -200,4 +200,71 @@ Baseline 命中：0 條
 
 ## 3-4 行為對映審查
 
+審查範圍：8 個 SC（SC-043~SC-050，含 t05 對 SC-050 的文字修訂）× 4 個 test 檔、
+46 個 `@pytest.mark.scenario` 裝飾點（parametrize 展開後實際執行筆數更多：SC-044
+深度邊界 ×8、SC-045 月數不足 ×2、SC-047 非法組合 ×5、SC-050 防火牆繼承 ×3）——
+tests/test_protocol.py（SC-043×5／SC-044×2／SC-045×4）、tests/test_protocol_thresholds.py
+（SC-046×6／SC-047×3）、tests/test_protocol_doc.py（SC-048×6）、tests/test_overview.py
+（SC-050×8／SC-049×12）。
+
+比對方式：逐張讀 SC 卡片 GIVEN/WHEN/THEN + 邊界/錯誤，對照對映 test 函式的實際輸入值
+（series 建構、thresholds 值）與 assert 斷言內容；並回溯 `ProtocolService.assess`／
+`validate_thresholds`、`overview_presentation.resolve_presentation`、`constants.PROTOCOL_LEVELS`
+與 `docs/PROTOCOL.md` 原文，確認 test 斷言不是空判或弱斷言，而是真的鎖住 SC 描述的數值/文案。
+
+核准判定：**通過**（不對齊清單為空；下方列一項非「不對齊」但值得記錄的既有慣例觀察）
+
+### 不對齊
+
+（無）
+
+### 對齊
+
+| SC | test 函式 | 判斷依據 |
+|----|----------|---------|
+| SC-043 | test_sc043_drawdown_from_growth_index_with_inception_baseline | series=[+5%,−8%,−22%]，斷言 drawdown≈0.78/1.05−1、current_cumulative_twr≈−22%、data_month_count=3、status=ok，逐項對齊 SC 例題 |
+| SC-043 | test_sc043_only_losses_peak_still_anchored_at_inception | **直接鎖定「歷史高點納入起始基準 1.0」本身**：series=[−6%,−13%,−19%]（只跌不漲），斷言 drawdown≈−19%（=0.81/1.00−1）而非誤把首月 0.94 當高點的 −13.8%——回溯 `_current_drawdown()` 原始碼確認 `index_path=[1.0, *(1+twr)]`、`peak=max(index_path)` 確實把 1.0 併入取最大值運算，test 若拿掉基準 1.0 會斷言失敗，非空跑一般回撤 |
+| SC-043 | test_sc043_new_high_has_zero_drawdown | series 全正且遞增，斷言 drawdown≈0 且 level_code=L0，對齊「投組正處歷史新高」邊界 |
+| SC-043 | test_sc043_peak_in_middle_of_series | series=[+10%,+20%,+5%]，斷言 drawdown≈1.05/1.20−1（以中段高點量測），對齊「歷史高點在中段」邊界 |
+| SC-043 | test_sc043_extreme_gain_then_crash_still_measures_from_true_peak | 極端值 9.0→4.0（暴漲後腰斬），斷言 drawdown=−50%，SC 卡片未列此邊界但屬同一行為的延伸覆蓋，不牴觸 |
+| SC-044 | test_sc044_depth_maps_to_expected_level（parametrize×8：0.0/9.99/10.0/19.99/20.0/29.99/30.0/35.0） | **精確覆蓋 SC 邊界表全部 8 個值**，含 3 個「恰等於門檻」邊界（10.0→L1、20.0→L2、30.0→L3）與 3 個「差一絲未達」邊界（9.99/19.99/29.99）；series 以固定小跌鎖定高點於 1.0、末月精確跌到 `depth_percent/100`，回溯 `_level_for()` 用 `depth >= threshold` 的 `>=` 語意確認「達門檻進較深級」實作與測試斷言方向一致，非只測中間值 |
+| SC-044 | test_sc044_same_input_yields_same_level_across_calls | 額外驗證純函式無隱藏狀態（同輸入重複呼叫結果一致），非 SC-044 核心邊界但斷言的 level_code=L2 仍與深度 20% 對應正確，不牴觸 |
+| SC-045 | test_sc045_no_record_returns_no_data_status | series=[]，斷言 status="no_data"（與下一項 "insufficient_data" 為不同字串），level=L0、drawdown=None、current_cumulative_twr=None，對齊「有效月數=0／完全無紀錄」邊界 |
+| SC-045 | test_sc045_below_minimum_months_returns_insufficient_data_despite_huge_drop（parametrize month_count=[1,2]） | series 單月/雙月暴跌 90%，斷言 status="insufficient_data"（與上一項 "no_data" 字串不同）、level=L0、drawdown=None，但 current_cumulative_twr 仍可讀取 −90%；對齊「有效月數=1或2／有資料但不足」邊界，且證明「不因少數月雜訊誤報大跌」 |
+| SC-045 | test_sc045_at_minimum_months_assesses_by_drawdown_depth | 有效月數=3，斷言 status="ok"、正式依深度判定 L2，對齊「達下限」邊界 |
+| SC-045 | test_sc045_min_data_months_is_caller_configurable_not_hardcoded | 額外驗證 min_data_months 為呼叫端注入參數非寫死，SC 未列但不牴觸 |
+| SC-045（文案部分） | test_overview.py::test_sc049_no_record_shows_l0_with_no_record_message_and_no_drawdown／test_sc049_below_minimum_months_shows_l0_with_distinct_message／test_sc049_no_data_and_insufficient_data_messages_are_distinct（掛 SC-049，非 SC-045 marker） | **「無紀錄」與「資料不足」兩種文案確實分別被覆蓋，t05 前後皆完整、無遺漏**：`NO_DATA_MESSAGE = "尚無資料，請先至月度錄入輸入"`／`INSUFFICIENT_DATA_MESSAGE = "資料尚不足，暫不評估大跌等級"` 逐字比對 SC-045／SC-049 卡片原文完全相符，並有專門測試斷言兩文案不相等；SC-045 卡片本身「測試對映」只寫 tests/test_protocol.py（服務層 no_data/insufficient_data 兩狀態），文案呈現層留給 SC-049（呈現層職責），兩者合起來完整覆蓋、非遺漏，只是分散在兩個 SC 的 marker 下 |
+| SC-046 | test_sc046_never_configured_uses_all_defaults／test_sc046_missing_level_falls_back_to_default／test_sc046_all_levels_stored_overrides_all_defaults | 分別覆蓋「全未設定」「缺一級」「三級皆設」，對齊 SC 邊界「缺值以預設補齊」 |
+| SC-046 | test_sc046_saved_thresholds_persist_across_repository_reload | 存值後另建 Repository 實例重讀同一連線，模擬重啟重建 Repo，對齊「持久化」 |
+| SC-046 | test_sc046_thresholds_persist_across_container_rebuild | 端到端以 `bootstrap.build_container` 重建整個容器（非只重建 Repository）驗證門檻仍在，對齊「重啟後生效」比 Repository 級測試更貼近真實部署路徑 |
+| SC-046 | test_sc046_new_thresholds_change_level_assessment | 新門檻 L1=12/L2=25/L3=35，回撤 26% 斷言判為 L2，逐字對齊 SC 例題 |
+| SC-047 | test_sc047_invalid_order_raises_validation_error（parametrize×5，含 L2=L3 額外邊界） | 覆蓋 SC 錯誤清單全部 4 種（順序顛倒/相等/零/負值）+1 個 SC 未列但同語意的 L2=L3 邊界，皆斷言拋 DataValidationError |
+| SC-047 | test_sc047_valid_strictly_increasing_thresholds_pass | 合法值 12/25/35 通過，對齊「合法設定」邊界 |
+| SC-047 | test_sc047_rejected_save_does_not_change_persisted_thresholds | **端到端持久化不受影響，非只測驗證函式本身**：先以 Repository 把合法值 10/20/30 落地寫入記憶體 DB，呼叫 `validate_thresholds(20,10,30)` 確認拋例外後，**重新讀 DB**（`repo.read_thresholds()`）斷言仍是 10/20/30 未被更動；模擬「view 驗證失敗不會呼叫 upsert」的呼叫慣例（比照 target_allocations 既有測法），非空泛只測 validate_thresholds 拋例外 |
+| SC-048 | test_sc048_reads_full_markdown_text_from_real_file | 讀真實 docs/PROTOCOL.md，逐次重讀磁碟原文比對，非快取舊值，對齊「顯示文件當前最新內容」 |
+| SC-048 | test_sc048_content_covers_all_protocol_sections | 逐一斷言 6 個標題字串存在於全文，逐字核對 docs/PROTOCOL.md 實際標題（本協定存在的理由/情境分級與對應動作/機動加碼規則/行為防火牆/事前授權的例外/檢核）完全相符，對齊 THEN 條列 |
+| SC-048 | test_sc048_missing_file_raises_protocol_doc_error／test_sc048_directory_path_raises_protocol_doc_error_not_raw_os_error | 分別覆蓋檔案缺失與路徑為目錄（IsADirectoryError）兩種底層例外，皆須轉為統一的 ProtocolDocError，對齊錯誤 THEN「不顯示技術堆疊」的前置條件（Repository 層不外洩底層例外型別） |
+| SC-048 | test_sc048_container_protocol_doc_repo_reads_real_file／test_sc048_module_level_path_resolves_to_repo_root_docs_file | 端到端經 bootstrap 容器組裝仍讀到真實檔案，對齊「文件存在於系統可存取位置」不依賴 CWD |
+| SC-049 | test_sc049_l2_shows_level_band_and_metrics | status=L2/ok/drawdown=−25%，斷言 label=熊市、band=−20%~−30%、show_alert=True、drawdown_percent=−25.0，對齊 SC 例題（L2 燈號與回撤帶） |
+| SC-049 | test_sc049_l0_with_sufficient_data_has_no_alert | 資料充足但 L0：斷言 show_alert=False，對齊「警示只在 L1–L3」隱含前提 |
+| SC-049 | test_sc049_l3_must_do_is_rule_reference_text_not_computed_amount／test_sc049_presentation_struct_carries_no_computed_amount_field | 斷言 L3 必做文字不含金額語彙（$/元），且 `OverviewPresentation` dataclass 欄位集合鎖定為僅 4 個（無任何加碼金額/現金地板欄位），結構性防止日後誤加，精確對齊「僅顯示規則文字，不計算/顯示加碼金額」邊界 |
+| SC-049 | test_sc049_l3_status_still_shows_alert_and_drawdown | L3 仍顯示警示與回撤數值（−35%），對齊「L3 只是必做內容不同，非整體隱藏」 |
+| SC-049 | test_sc049_no_record_shows_l0_with_no_record_message_and_no_drawdown | status=no_data，斷言 level=L0、show_alert=False、drawdown_percent=None、neutral_message=NO_DATA_MESSAGE，對齊「完全無紀錄」邊界 |
+| SC-049 | test_sc049_below_minimum_months_shows_l0_with_distinct_message | status=insufficient_data，即使 current_cumulative_twr=−90% 仍斷言不顯示回撤數值/警示、文案為 INSUFFICIENT_DATA_MESSAGE，對齊「有資料但不足」邊界 |
+| SC-049 | test_sc049_no_data_and_insufficient_data_messages_are_distinct | 直接斷言兩文案字串不相等，鎖定「兩種情況需不同文案」不被日後改成同一句 |
+| SC-049 | test_sc049_overview_view_file_exists／test_sc049_overview_registered_as_first_page_with_default_true／test_sc049_existing_pages_still_registered_after_reorder | 以 app.py 原始碼正則掃描，斷言 overview.py 為第一個 `st.Page` 且唯一 `default=True`、其餘既有頁面仍註冊，對齊「總覽為登入落地頁、取代月度錄入」且未破壞既有導覽 |
+| SC-050 | test_sc050_four_levels_present_in_ascending_order | PROTOCOL_LEVELS 順序=L0→L1→L2→L3，對齊四級結構 |
+| SC-050 | test_sc050_l0_must_do_and_label／test_sc050_l1_matches_protocol_table／test_sc050_l2_matches_protocol_table／test_sc050_l3_prohibitions_equal_l2_plus_cooldown | 逐級逐字比對 must_do/must_not/label/band_text，與 `docs/PROTOCOL.md` §1 表原文（回溯核對：L1「照常定期定額，什麼都不改」「增加看盤頻率;閱讀「崩盤將至」類內容」、L2/L3 同理）逐字相符，對齊「摘要須與協定表一致」 |
+| SC-050 | test_sc050_l0_must_not_is_not_blank_and_states_no_special_prohibition | 斷言 L0 must_not 非空且含「無特別禁止」字樣，對齊「不得呈現為空白」邊界 |
+| SC-050 | test_sc050_l0_stays_clean_without_firewall_or_crash_wording | **t05 修訂後的核心斷言**：斷言 L0 的 must_do/must_not 全部項目皆不含「券商 App」「行為防火牆」字樣；回溯 `constants.py` PROTOCOL_LEVELS 的 L0.must_not 目前僅為 `("無特別禁止事項（平時姿態，維持既定計畫）",)`，不含防火牆提醒，test 與修訂後常數/SC-050 文字三方一致，非仍測舊版（舊版把防火牆提醒掛在 L0.must_not） |
+| SC-050 | test_sc050_l1_and_above_include_firewall_reminder（parametrize L1/L2/L3） | 斷言 L1/L2/L3 的 must_not 皆含「行為防火牆通則：只看本系統，不看券商 App」，對齊「自 L1 起顯示、L2/L3 皆沿用（L3 透過同 L2 繼承）」修訂後語意 |
+
+### 觀察（非不對齊，列出供參考，不影響本次核准判定）
+
+- SC-049 THEN 條列的「關鍵指標」含三項：最新累積 TWR、目前淨值、目前自高點回撤百分比。目前只有「回撤百分比」經 `overview_presentation.resolve_presentation` 純函式被 test 直接鎖定數值（`drawdown_percent`）；「最新累積 TWR」與「目前淨值」實際渲染邏輯在 `views/overview.py::_render()`（呼叫 `st.metric("最新累積 TWR", ...)`／`st.metric("目前淨值", ...)`），該檔案模組尾端無條件呼叫 `render()`，依本專案既有慣例（見 test_overview.py 檔案開頭註解，比照 test_page_config.py／test_navigation_guard.py 的作法）不直接 import 測試，因此這兩項指標「有沒有真的顯示、標籤文字/來源值是否正確」目前沒有任何測試鎖定（無論是純函式測試或 app.py 原始碼掃描）。經確認此為既有專案架構慣例（views/*.py 渲染細節普遍不被單元測試，只測抽出的純函式層），非本 Change 新引入的特有缺口（views/protocol.py、views/input.py 等既有頁面亦同），故不列為「不對齊」、不建議在本輪回頭補測試；若未來要補強，建議做法是仿照 test_sc049_overview_registered_as_first_page_with_default_true 的原始碼正則掃描手法，斷言 `views/overview.py` 原始碼含 `st.metric("最新累積 TWR"` 與 `st.metric("目前淨值"` 字樣。
+
+### 建議 commit message
+
+（本階段僅產出審查報告，無程式碼異動，不需 commit；若第二段有修正，屆時再補對應 commit message）
+
 <!-- scenario-mapper subagent 產出（AI 比對 SC 描述 vs test 內容，分「不對齊」「對齊」兩類）-->
