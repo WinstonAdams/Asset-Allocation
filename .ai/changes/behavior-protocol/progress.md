@@ -26,7 +26,7 @@
 
 | 步驟 | 狀態 | 備註 |
 |------|------|------|
-| 3-1 程式碼清理 | 未開始 | 依規模判斷是否執行 |
+| 3-1 程式碼清理 | 完成 | checker MEDIUM×3 復核皆判 false positive/不建議拆分；SAFE 1 項採納（views/overview.py 移除會失效的 Change 級 ADR 編號引用）、SUGGEST 1 項維持現狀（_series() 重複未達 Rule of Three）；pytest 282 綠、ruff 綠 |
 | 3-2 安全審查 | 未開始 | 涉及認證/付款/個資時才執行 |
 | 3-3 規則符合度審查 | 未開始 | 工程準則全面符合度檢查 |
 | 3-4 行為對映審查 | 未開始 | AI 比對 SC 描述 vs test 內容 |

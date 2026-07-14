@@ -9,7 +9,8 @@ catch 點。
 
 等級判定與回撤計算的業務正確性由 ProtocolService 的 SC 測試保證；level_code 查表與
 狀態轉呈現資料的邏輯由 overview_presentation 的 SC 測試保證；本頁只做委派、資料組裝
-與渲染，不算任何業務值（AD-6：只消費既有 ReturnService/AllocationService 輸出）。
+與渲染，不算任何業務值（只消費既有 ReturnService/AllocationService 既有輸出，
+不改動報酬率/配置引擎邏輯）。
 """
 
 # ==== 原生（標準庫） ====
