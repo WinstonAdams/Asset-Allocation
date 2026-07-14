@@ -1,12 +1,32 @@
 # ==== 原生（標準庫） ====
-# 無
+from datetime import date
 
 # ==== 第三方套件 ====
 import pytest
 
 # ==== 專案內部 ====
 from asset_lab.core.exceptions import DataValidationError
-from asset_lab.core.utils import parse_year_month, year_month_add
+from asset_lab.core.utils import current_year_month, parse_year_month, year_month_add
+
+
+class TestCurrentYearMonth:
+    """current_year_month：將指定日期格式化為所屬 'YYYY-MM'（純函式，注入固定日期）。"""
+
+    def test_formats_mid_month_date(self):
+        assert current_year_month(date(2026, 6, 15)) == "2026-06"
+
+    def test_pads_single_digit_month(self):
+        assert current_year_month(date(2026, 1, 5)) == "2026-01"
+
+    def test_first_day_of_month_same_result_as_last_day(self):
+        # 同月不同日應得到相同年月字串（只取年月，不受日影響）
+        assert current_year_month(date(2026, 3, 1)) == current_year_month(date(2026, 3, 31))
+
+    def test_year_end_boundary_stays_in_old_year(self):
+        assert current_year_month(date(2025, 12, 31)) == "2025-12"
+
+    def test_year_start_boundary_rolls_into_new_year(self):
+        assert current_year_month(date(2026, 1, 1)) == "2026-01"
 
 
 class TestParseYearMonth:

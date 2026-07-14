@@ -6,17 +6,35 @@ Service 與 Repository 皆可呼叫（見架構合約 §8）。
 
 # ==== 原生（標準庫） ====
 import re
+from datetime import date
 
 # ==== 第三方套件 ====
 import pandas as pd
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import HOLDING_KIND, MONTHLY_RECORDS_TABLE
+from asset_lab.core.constants import HOLDING_KIND, MONTHLY_RECORDS_TABLE, YEAR_MONTH_FORMAT
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.holding import HoldingModel
 
 # 'YYYY-MM'：四位數年、兩位數補零的月（01–12）；用於從介面攔下格式不合的年月。
 _YEAR_MONTH_PATTERN = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
+
+
+def current_year_month(today: date) -> str:
+    """將指定日期格式化為所屬的 'YYYY-MM' 年月字串。
+
+    時區判定（「今天」是哪一天）由呼叫端提供的 today 決定（如
+    period_service.today_in_timezone 依 Asia/Taipei 換算）；本函式僅做日期到年月字串
+    的純轉換，脫離時鐘與時區依賴，使月度錄入頁「預設帶入當月」的推導可注入固定日期做
+    單元測試（含跨年邊界）。
+
+    Args:
+        today: 用於推導所屬年月的基準日期。
+
+    Returns:
+        'YYYY-MM' 格式字串。
+    """
+    return today.strftime(YEAR_MONTH_FORMAT)
 
 
 def parse_year_month(year_month: str) -> tuple[int, int]:
