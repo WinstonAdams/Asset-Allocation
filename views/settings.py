@@ -37,6 +37,13 @@ from asset_lab.services.protocol_service import ProtocolService
 
 logger = logging.getLogger(__name__)
 
+# 內部值（HOLDING_KIND.ASSET/LIABILITY）供 DB 與業務判斷使用，不可異動；
+# 此對照僅供畫面顯示中文，不影響選取後取得的內部值。
+_HOLDING_KIND_LABEL = {
+    HOLDING_KIND.ASSET: "資產",
+    HOLDING_KIND.LIABILITY: "負債",
+}
+
 
 def _container() -> Container:
     """取放行後存入 session 的依賴容器。"""
@@ -80,14 +87,23 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
 
     st.markdown("#### 新增項目")
     name = st.text_input("名稱", key="new_name")
-    kind = st.selectbox("性質", options=list(HOLDING_KIND.ALL), key="new_kind")
+    kind = st.selectbox(
+        "性質",
+        options=list(HOLDING_KIND.ALL),
+        format_func=lambda k: _HOLDING_KIND_LABEL[k],
+        key="new_kind",
+    )
     category = None
     initial_market_value = None
     initial_cost = None
     if kind == HOLDING_KIND.ASSET:
         category = st.selectbox("分類", options=list(ASSET_CATEGORIES.ALL), key="new_cat")
-        initial_market_value = st.number_input("初始市值", value=0.0, step=1000.0)
-        initial_cost = st.number_input("初始成本", value=0.0, step=1000.0)
+        initial_market_value = st.number_input(
+            "初始市值", value=0.0, step=1000.0, format="%.0f", key="new_market_value"
+        )
+        initial_cost = st.number_input(
+            "初始成本", value=0.0, step=1000.0, format="%.0f", key="new_cost"
+        )
 
     if st.button("新增") and name:
         holding_repo.add_holding(
@@ -107,8 +123,10 @@ def _render_targets(*, target_repo: TargetRepository) -> None:
     st.subheader("目標比重")
     current = {t.category: t.target_weight for t in target_repo.read_targets()}
     for category in ASSET_CATEGORIES.ALL:
+        # st.number_input 的 format 需能還原成合法 float（Streamlit 內部驗證），無法附加 "%"
+        # 文字後綴，因此改在 label 加註「（%）」呈現單位，不影響輸入值本身。
         weight = st.number_input(
-            category,
+            f"{category}（%）",
             value=float(current.get(category, 0.0)),
             min_value=0.0,
             max_value=100.0,
