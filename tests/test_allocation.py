@@ -145,7 +145,10 @@ class TestSnapshotWeights:
     @pytest.mark.scenario("SC-025")
     def test_sc025_holding_weights_sum_to_hundred_percent(self):
         # 台積電 530000、現金 470000：分母 1000000 → 53%、47%（佔比以 % 表示）
-        holdings = [_asset_in(1, ASSET_CATEGORIES.TW_STOCK), _asset_in(2, ASSET_CATEGORIES.CASH)]
+        holdings = [
+            _asset_in(1, ASSET_CATEGORIES.TW_STOCK),
+            _asset_in(2, ASSET_CATEGORIES.DEMAND_DEPOSIT),
+        ]
         month_records = [_record(1, "2026-05", 530000.0), _record(2, "2026-05", 470000.0)]
         snapshot = AllocationService().snapshot(
             month_records=month_records, holdings=holdings, by="holding"
@@ -164,7 +167,7 @@ class TestSnapshotWeights:
         holdings = [
             _asset_in(1, ASSET_CATEGORIES.TW_STOCK),
             _asset_in(2, ASSET_CATEGORIES.TW_STOCK),
-            _asset_in(3, ASSET_CATEGORIES.CASH),
+            _asset_in(3, ASSET_CATEGORIES.DEMAND_DEPOSIT),
         ]
         month_records = [
             _record(1, "2026-05", 600000.0),
@@ -177,7 +180,7 @@ class TestSnapshotWeights:
         by_category = {row.dimension_key: row for row in snapshot}
         assert by_category[ASSET_CATEGORIES.TW_STOCK].market_value == 700000.0
         assert by_category[ASSET_CATEGORIES.TW_STOCK].weight == pytest.approx(70.0)
-        assert by_category[ASSET_CATEGORIES.CASH].weight == pytest.approx(30.0)
+        assert by_category[ASSET_CATEGORIES.DEMAND_DEPOSIT].weight == pytest.approx(30.0)
 
     @pytest.mark.scenario("SC-025")
     def test_sc025_empty_month_yields_empty_snapshot(self):
@@ -190,7 +193,10 @@ class TestSnapshotWeights:
     @pytest.mark.scenario("SC-025")
     def test_sc025_none_market_value_does_not_contribute(self):
         # 月內列出但市值留空（仍持有未更新）：不貢獻分子，分母僅含有值資產
-        holdings = [_asset_in(1, ASSET_CATEGORIES.TW_STOCK), _asset_in(2, ASSET_CATEGORIES.CASH)]
+        holdings = [
+            _asset_in(1, ASSET_CATEGORIES.TW_STOCK),
+            _asset_in(2, ASSET_CATEGORIES.DEMAND_DEPOSIT),
+        ]
         month_records = [_record(1, "2026-05", 800000.0), _record(2, "2026-05", None)]
         snapshot = AllocationService().snapshot(
             month_records=month_records, holdings=holdings, by="holding"
@@ -207,7 +213,10 @@ class TestDriftSeries:
     @pytest.mark.scenario("SC-026")
     def test_sc026_category_weights_change_over_months(self):
         # 台股與現金兩分類跨兩月：各月各分類佔比（%），同月總和 100%
-        holdings = [_asset_in(1, ASSET_CATEGORIES.TW_STOCK), _asset_in(2, ASSET_CATEGORIES.CASH)]
+        holdings = [
+            _asset_in(1, ASSET_CATEGORIES.TW_STOCK),
+            _asset_in(2, ASSET_CATEGORIES.DEMAND_DEPOSIT),
+        ]
         range_df = _range_df(
             [
                 {"holding_id": 1, "year_month": "2026-03", "market_value": 600000.0,
@@ -226,10 +235,10 @@ class TestDriftSeries:
             (row.year_month, row.dimension_key): row.weight for row in drift.itertuples(index=False)
         }
         assert cell[("2026-03", ASSET_CATEGORIES.TW_STOCK)] == pytest.approx(60.0)
-        assert cell[("2026-03", ASSET_CATEGORIES.CASH)] == pytest.approx(40.0)
+        assert cell[("2026-03", ASSET_CATEGORIES.DEMAND_DEPOSIT)] == pytest.approx(40.0)
         # 次月台股佔比上升、現金下降，反映配置漂移
         assert cell[("2026-04", ASSET_CATEGORIES.TW_STOCK)] == pytest.approx(80.0)
-        assert cell[("2026-04", ASSET_CATEGORIES.CASH)] == pytest.approx(20.0)
+        assert cell[("2026-04", ASSET_CATEGORIES.DEMAND_DEPOSIT)] == pytest.approx(20.0)
 
     @pytest.mark.scenario("SC-026")
     def test_sc026_nodes_are_data_months_with_gap_skipped(self):
@@ -286,7 +295,10 @@ class TestZeroTotalAssetWeight:
     @pytest.mark.scenario("SC-036")
     def test_sc036_snapshot_skips_month_with_zero_total(self):
         # 該月所有資產市值皆為 0（全數出清）：snapshot 不產生任何佔比列
-        holdings = [_asset_in(1, ASSET_CATEGORIES.TW_STOCK), _asset_in(2, ASSET_CATEGORIES.CASH)]
+        holdings = [
+            _asset_in(1, ASSET_CATEGORIES.TW_STOCK),
+            _asset_in(2, ASSET_CATEGORIES.DEMAND_DEPOSIT),
+        ]
         month_records = [_record(1, "2026-05", 0.0), _record(2, "2026-05", 0.0)]
         snapshot = AllocationService().snapshot(
             month_records=month_records, holdings=holdings, by="holding"
@@ -296,7 +308,10 @@ class TestZeroTotalAssetWeight:
     @pytest.mark.scenario("SC-036")
     def test_sc036_drift_series_skips_zero_total_month_keeps_others(self):
         # 2026-03 全數出清（合計 0）→ 略過該月；2026-04 正常 → 照常呈現
-        holdings = [_asset_in(1, ASSET_CATEGORIES.TW_STOCK), _asset_in(2, ASSET_CATEGORIES.CASH)]
+        holdings = [
+            _asset_in(1, ASSET_CATEGORIES.TW_STOCK),
+            _asset_in(2, ASSET_CATEGORIES.DEMAND_DEPOSIT),
+        ]
         range_df = _range_df(
             [
                 {"holding_id": 1, "year_month": "2026-03", "market_value": 0.0,

@@ -58,7 +58,7 @@ class TestNetWorthSeries:
         # 台積電 530000 + 現金 470000 = 總資產 1000000；信用卡 200000 = 總負債
         holdings = [
             _asset(1, "台股/台股ETF"),
-            _asset(2, "現金/定存"),
+            _asset(2, "活存"),
             _liability(3),
         ]
         range_df = _range_df(
@@ -83,7 +83,7 @@ class TestNetWorthSeries:
     @pytest.mark.scenario("SC-010")
     def test_sc010_no_liability_means_net_worth_equals_assets(self):
         # 無任何負債項目時，淨值等於總資產（總負債為 0）
-        holdings = [_asset(1, "台股/台股ETF"), _asset(2, "現金/定存")]
+        holdings = [_asset(1, "台股/台股ETF"), _asset(2, "活存")]
         range_df = _range_df(
             [
                 {"holding_id": 1, "year_month": "2026-05", "market_value": 530000.0,
@@ -99,7 +99,7 @@ class TestNetWorthSeries:
     @pytest.mark.scenario("SC-010")
     def test_sc010_net_worth_can_be_negative_when_liabilities_exceed_assets(self):
         # 負債大於資產：淨值為負數（淨值公式不設下限）
-        holdings = [_asset(1, "現金/定存"), _liability(2)]
+        holdings = [_asset(1, "活存"), _liability(2)]
         range_df = _range_df(
             [
                 {"holding_id": 1, "year_month": "2026-05", "market_value": 100000.0,
@@ -168,7 +168,7 @@ class TestLiabilityExcludedFromWeights:
         # 同月有資產與一筆負債：佔比分母僅資產 1000000，負債不出現也不稀釋
         holdings = [
             _asset(1, "台股/台股ETF"),
-            _asset(2, "現金/定存"),
+            _asset(2, "活存"),
             _liability(3),
         ]
         month_records = [
@@ -190,7 +190,7 @@ class TestLiabilityExcludedFromWeights:
         # 按分類彙總時，負債（分類為 None）不形成任何分類佔比列
         holdings = [
             _asset(1, ASSET_CATEGORIES.TW_STOCK),
-            _asset(2, ASSET_CATEGORIES.CASH),
+            _asset(2, ASSET_CATEGORIES.DEMAND_DEPOSIT),
             _liability(3),
         ]
         month_records = [
@@ -202,8 +202,8 @@ class TestLiabilityExcludedFromWeights:
             month_records=month_records, holdings=holdings, by="category"
         )
         categories = {row.dimension_key for row in snapshot}
-        assert categories == {ASSET_CATEGORIES.TW_STOCK, ASSET_CATEGORIES.CASH}
+        assert categories == {ASSET_CATEGORIES.TW_STOCK, ASSET_CATEGORIES.DEMAND_DEPOSIT}
         # 分母僅資產 1000000：台股 60%、現金 40%
         weights = {row.dimension_key: row.weight for row in snapshot}
         assert weights[ASSET_CATEGORIES.TW_STOCK] == pytest.approx(60.0)
-        assert weights[ASSET_CATEGORIES.CASH] == pytest.approx(40.0)
+        assert weights[ASSET_CATEGORIES.DEMAND_DEPOSIT] == pytest.approx(40.0)

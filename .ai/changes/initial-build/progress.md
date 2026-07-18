@@ -35,6 +35,7 @@
 | t17 規避 pyarrow mimalloc segfault | 完成 | 驗收回饋：Streamlit 顯示 DataFrame 時 pandas→arrow 轉換觸發 pyarrow 25 內建 mimalloc 在 macOS arm64 的 thread-init segfault（EXC_BAD_ACCESS），整個進程崩潰。設 ARROW_DEFAULT_MEMORY_POOL=system 停用 mimalloc 已驗證可穩住；需在 import streamlit 前於 app.py 頂層設好，使自跑與 Cloud 部署都自動帶上 |
 | t18 錄入月份預設當月＋年月下拉選擇 | 完成 | 使用者需求：月度錄入頁「錄入月份」改年+月下拉、預設帶入當月（沿用 Asia/Taipei 時區工具，抽純函式 core/utils.current_year_month 可測；年份範圍當年往前 5 年）；下游 YYYY-MM 介面與 SC-005/008/009/037 行為不變；純 view UX 無新 SC；新增 tests/test_input_view.py（AppTest 驅動）為第三個已接受孤兒測試檔（同 test_core_utils/test_bootstrap 偏差）；12 tests，累計 282 綠 |
 | t19 設定頁呈現層調整（性質中文/市值成本無小數/目標比重加%） | 完成 | ①性質 selectbox 用 format_func 顯示中文「資產/負債」、內部值仍 asset/liability；②初始市值/成本 number_input format="%.0f" 去小數、內部仍 float；③目標比重因 Streamlit number_input format 無法附加 % 字面後綴（實測會拋 StreamlitInvalidNumberFormatError），改於 label 加註「（%）」。純呈現層無新 SC；新增 tests/test_settings_view.py（AppTest）為第 4 個已知可接受孤兒測試檔；7 tests，累計 289 綠 |
+| t20 現金/定存分類拆為活存/定存＋成本自動帶入＋既有項目編輯入口 | 完成 | ASSET_CATEGORIES.CASH="現金/定存" 拆為 DEMAND_DEPOSIT="活存"/TIME_DEPOSIT="定存"（無既有資料遷移）；5 個測試檔的 ASSET_CATEGORIES.CASH 引用同步改為 DEMAND_DEPOSIT（test_monthly_input.py 實際未引用，無需改）。新增活存/定存分類新增或編輯項目時成本自動帶入市值（可手動覆蓋）：SC-PENDING-004 經使用者採用為 SC-043（適用新增＋改分類、僅活存/定存）。追加需求：`_render_holdings()` 補上既有項目編輯入口（st.expander 每列一個編輯區塊，可改名/分類/市值/成本，委派 HoldingRepository.update_holding），編輯 UI 本身為純委派層不掛 SC（業務正確性已由 SC-003/004 覆蓋），成本同步行為併入 SC-043。304 tests 綠、ruff 綠、scenario-lint marker 綁定正確 |
 
 ## Phase 3：審查
 

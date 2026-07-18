@@ -195,9 +195,9 @@ class TestRecategorizeIsNotTimeVersioned:
 
     @pytest.mark.scenario("SC-004")
     def test_sc004_category_change_applies_to_all_history(self, holding_repo, record_repo):
-        # 項目原分類「現金/定存」，已有 1~3 月市值紀錄
+        # 項目原分類「活存」，已有 1~3 月市值紀錄
         original_id = holding_repo.add_holding(
-            holding=_asset("活存", ASSET_CATEGORIES.CASH, 100000.0, 100000.0)
+            holding=_asset("活存", ASSET_CATEGORIES.DEMAND_DEPOSIT, 100000.0, 100000.0)
         )
         for ym in ("2026-01", "2026-02", "2026-03"):
             record_repo.upsert_record(
@@ -221,7 +221,7 @@ class TestRecategorizeIsNotTimeVersioned:
     def test_sc004_no_per_month_category_snapshot_stored(self, holding_repo, record_repo):
         # 分類改兩次後，主檔僅反映最後一次（不累積任何歷史分類版本）
         original_id = holding_repo.add_holding(
-            holding=_asset("活存", ASSET_CATEGORIES.CASH, 100000.0, 100000.0)
+            holding=_asset("活存", ASSET_CATEGORIES.DEMAND_DEPOSIT, 100000.0, 100000.0)
         )
         record_repo.upsert_record(
             record=MonthlyRecordModel(

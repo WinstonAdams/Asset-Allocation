@@ -36,18 +36,18 @@ class TestComputeDrift:
         # 目標台股60/現金40，現況台股68/現金32：偏離 = 現況% − 目標% → +8、−8
         snapshot = [
             _snapshot(ASSET_CATEGORIES.TW_STOCK, 68.0),
-            _snapshot(ASSET_CATEGORIES.CASH, 32.0),
+            _snapshot(ASSET_CATEGORIES.DEMAND_DEPOSIT, 32.0),
         ]
         targets = [
             _target(ASSET_CATEGORIES.TW_STOCK, 60.0),
-            _target(ASSET_CATEGORIES.CASH, 40.0),
+            _target(ASSET_CATEGORIES.DEMAND_DEPOSIT, 40.0),
         ]
         rows = AllocationService().compute_drift(
             snapshot=snapshot, targets=targets, threshold=DEFAULT_REBALANCE_THRESHOLD
         )
         by_category = _by_category(rows)
         assert by_category[ASSET_CATEGORIES.TW_STOCK].drift == pytest.approx(8.0)
-        assert by_category[ASSET_CATEGORIES.CASH].drift == pytest.approx(-8.0)
+        assert by_category[ASSET_CATEGORIES.DEMAND_DEPOSIT].drift == pytest.approx(-8.0)
 
     @pytest.mark.scenario("SC-029")
     def test_sc029_carries_current_and_target_weights_as_percent(self):
@@ -66,15 +66,15 @@ class TestComputeDrift:
         snapshot = [_snapshot(ASSET_CATEGORIES.TW_STOCK, 100.0)]
         targets = [
             _target(ASSET_CATEGORIES.TW_STOCK, 60.0),
-            _target(ASSET_CATEGORIES.CASH, 40.0),
+            _target(ASSET_CATEGORIES.DEMAND_DEPOSIT, 40.0),
         ]
         by_category = _by_category(
             AllocationService().compute_drift(
                 snapshot=snapshot, targets=targets, threshold=DEFAULT_REBALANCE_THRESHOLD
             )
         )
-        assert by_category[ASSET_CATEGORIES.CASH].current_weight == pytest.approx(0.0)
-        assert by_category[ASSET_CATEGORIES.CASH].drift == pytest.approx(-40.0)
+        assert by_category[ASSET_CATEGORIES.DEMAND_DEPOSIT].current_weight == pytest.approx(0.0)
+        assert by_category[ASSET_CATEGORIES.DEMAND_DEPOSIT].drift == pytest.approx(-40.0)
 
 
 class TestRebalanceFlag:
@@ -114,8 +114,8 @@ class TestRebalanceFlag:
     @pytest.mark.scenario("SC-030")
     def test_sc030_negative_drift_uses_absolute_value(self):
         # 偏離 −8（現況低於目標）、門檻 5：取絕對值 |−8| > 5 → 標示需再平衡
-        snapshot = [_snapshot(ASSET_CATEGORIES.CASH, 32.0)]
-        targets = [_target(ASSET_CATEGORIES.CASH, 40.0)]
+        snapshot = [_snapshot(ASSET_CATEGORIES.DEMAND_DEPOSIT, 32.0)]
+        targets = [_target(ASSET_CATEGORIES.DEMAND_DEPOSIT, 40.0)]
         row = AllocationService().compute_drift(
             snapshot=snapshot, targets=targets, threshold=5.0
         )[0]

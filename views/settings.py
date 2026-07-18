@@ -44,6 +44,27 @@ _HOLDING_KIND_LABEL = {
     HOLDING_KIND.LIABILITY: "負債",
 }
 
+# 活存/定存無明顯已實現損益概念，成本與市值理論上應相等，新增與編輯表單皆比照預設帶入。
+_CASH_LIKE_CATEGORIES = (ASSET_CATEGORIES.DEMAND_DEPOSIT, ASSET_CATEGORIES.TIME_DEPOSIT)
+
+# 新增表單三個欄位固定的 session_state key，供 _sync_cost_to_market_value 的 on_change 共用。
+_NEW_HOLDING_SYNC_KEYS = {
+    "cat_key": "new_cat",
+    "market_value_key": "new_market_value",
+    "cost_key": "new_cost",
+}
+
+
+def _sync_cost_to_market_value(*, cat_key: str, market_value_key: str, cost_key: str) -> None:
+    """活存/定存分類下，初始成本預設帶入初始市值；使用者仍可事後手動改成別的值。
+
+    新增與編輯既有項目共用此同步邏輯：只要當下選定分類為活存/定存，改市值或改分類
+    皆會觸發（呼叫方以 on_change + kwargs 掛在對應的分類 selectbox 與市值
+    number_input 上，key 依表單而異——新增用固定 key，編輯用各項目的 holding_id 前綴 key）。
+    """
+    if st.session_state.get(cat_key) in _CASH_LIKE_CATEGORIES:
+        st.session_state[cost_key] = st.session_state[market_value_key]
+
 
 def _container() -> Container:
     """取放行後存入 session 的依賴容器。"""
@@ -83,7 +104,9 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
     """持有項目主檔的新增與編輯（改名/改分類不更動 holding_id）。"""
     st.subheader("持有項目主檔")
     for holding in holding_repo.list_holdings():
-        st.write(f"#{holding.holding_id} {holding.name}（{holding.kind}）")
+        label = f"#{holding.holding_id} {holding.name}（{_HOLDING_KIND_LABEL[holding.kind]}）"
+        with st.expander(label):
+            _render_edit_holding(holding=holding, holding_repo=holding_repo)
 
     st.markdown("#### 新增項目")
     name = st.text_input("名稱", key="new_name")
@@ -97,9 +120,21 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
     initial_market_value = None
     initial_cost = None
     if kind == HOLDING_KIND.ASSET:
-        category = st.selectbox("分類", options=list(ASSET_CATEGORIES.ALL), key="new_cat")
+        category = st.selectbox(
+            "分類",
+            options=list(ASSET_CATEGORIES.ALL),
+            key="new_cat",
+            on_change=_sync_cost_to_market_value,
+            kwargs=_NEW_HOLDING_SYNC_KEYS,
+        )
         initial_market_value = st.number_input(
-            "初始市值", value=0.0, step=1000.0, format="%.0f", key="new_market_value"
+            "初始市值",
+            value=0.0,
+            step=1000.0,
+            format="%.0f",
+            key="new_market_value",
+            on_change=_sync_cost_to_market_value,
+            kwargs=_NEW_HOLDING_SYNC_KEYS,
         )
         initial_cost = st.number_input(
             "初始成本", value=0.0, step=1000.0, format="%.0f", key="new_cost"
@@ -116,6 +151,63 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
             )
         )
         st.success("已新增項目")
+
+
+def _render_edit_holding(*, holding: HoldingModel, holding_repo: HoldingRepository) -> None:
+    """既有項目的編輯區塊：可改名、改分類（資產）、改初始市值/成本，holding_id 不變。"""
+    prefix = f"edit_{holding.holding_id}_"
+    sync_keys = {
+        "cat_key": f"{prefix}cat",
+        "market_value_key": f"{prefix}market_value",
+        "cost_key": f"{prefix}cost",
+    }
+
+    name = st.text_input("名稱", value=holding.name, key=f"{prefix}name")
+
+    category = holding.category
+    initial_market_value = holding.initial_market_value
+    initial_cost = holding.initial_cost
+    if holding.kind == HOLDING_KIND.ASSET:
+        options = list(ASSET_CATEGORIES.ALL)
+        # 既有分類理應皆落在受控清單內；不在清單內時（如未來清單變動）退回第一項，不崩畫面。
+        current_index = options.index(holding.category) if holding.category in options else 0
+        category = st.selectbox(
+            "分類",
+            options=options,
+            index=current_index,
+            key=sync_keys["cat_key"],
+            on_change=_sync_cost_to_market_value,
+            kwargs=sync_keys,
+        )
+        initial_market_value = st.number_input(
+            "初始市值",
+            value=float(holding.initial_market_value or 0.0),
+            step=1000.0,
+            format="%.0f",
+            key=sync_keys["market_value_key"],
+            on_change=_sync_cost_to_market_value,
+            kwargs=sync_keys,
+        )
+        initial_cost = st.number_input(
+            "初始成本",
+            value=float(holding.initial_cost or 0.0),
+            step=1000.0,
+            format="%.0f",
+            key=sync_keys["cost_key"],
+        )
+
+    if st.button("儲存變更", key=f"{prefix}save"):
+        holding_repo.update_holding(
+            holding=HoldingModel(
+                holding_id=holding.holding_id,
+                name=name,
+                kind=holding.kind,
+                category=category,
+                initial_market_value=initial_market_value,
+                initial_cost=initial_cost,
+            )
+        )
+        st.success("已更新項目")
 
 
 def _render_targets(*, target_repo: TargetRepository) -> None:

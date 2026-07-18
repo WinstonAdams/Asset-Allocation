@@ -57,7 +57,7 @@ def _targets() -> list[TargetAllocationModel]:
     """一份各分類目標配置（總和 100%）。"""
     return [
         TargetAllocationModel(category=ASSET_CATEGORIES.TW_STOCK, target_weight=60.0),
-        TargetAllocationModel(category=ASSET_CATEGORIES.CASH, target_weight=40.0),
+        TargetAllocationModel(category=ASSET_CATEGORIES.DEMAND_DEPOSIT, target_weight=40.0),
     ]
 
 
@@ -107,7 +107,7 @@ class TestExportImportRoundTrip:
         assert list(df.columns) == ["category", "target_weight"]
         assert dict(zip(df["category"], df["target_weight"], strict=True)) == {
             ASSET_CATEGORIES.TW_STOCK: 60.0,
-            ASSET_CATEGORIES.CASH: 40.0,
+            ASSET_CATEGORIES.DEMAND_DEPOSIT: 40.0,
         }
 
     @pytest.mark.scenario("SC-031")

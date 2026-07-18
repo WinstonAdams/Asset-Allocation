@@ -46,9 +46,10 @@ class ASSET_CATEGORIES:
 
     TW_STOCK = "台股/台股ETF"
     US_STOCK = "美股/美股ETF"
-    CASH = "現金/定存"
+    DEMAND_DEPOSIT = "活存"
+    TIME_DEPOSIT = "定存"
     INSURANCE = "保險"
-    ALL = (TW_STOCK, US_STOCK, CASH, INSURANCE)
+    ALL = (TW_STOCK, US_STOCK, DEMAND_DEPOSIT, TIME_DEPOSIT, INSURANCE)
 
 
 class PERIOD_MODE:
