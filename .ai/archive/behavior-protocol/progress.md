@@ -38,6 +38,6 @@
 |------|------|------|
 | 4-1 README 同步 | 完成 | 增量更新：新增大跌行為協定說明（SIPOC/功能/架構/關鍵邏輯/專案結構），同時一併補齊 initial-build t12-t20 累積但尚未反映的變更（views/ 命名、streamlit[auth]、連線自動重連、pyarrow 規避、月度錄入年月下拉、設定頁性質中文/市值成本無小數/目標比重%、活存定存分類）；pytest 304 綠 |
 | 4-2 Windows 啟動器 | 跳過 | 比照 initial-build：雲端部署（Community Cloud）、macOS、非 uv，本機僅 streamlit run，不需 Windows 啟動器 |
-| 4-3 歸檔 | 未開始 | — |
+| 4-3 歸檔 | 完成 | 8 張 SC（SC-043~050）合併入 .ai/scenarios/ SSoT（此時已含 initial-build 的 43 張，共 51 張），逐檔比對內容完全一致，無 REMOVED 標記；即將執行 archiver.py 搬移至 .ai/archive/ |
 
 **狀態值**：未開始 / 進行中 / 完成 / 跳過

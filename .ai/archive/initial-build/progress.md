@@ -53,6 +53,6 @@
 |------|------|------|
 | 4-1 README 同步 | 完成 | 全量生成 README.md（SIPOC、功能、架構、報酬率口徑、機密設定、部署）；2026-07-19 隨 behavior-protocol 4-1 一併增量更新，補齊 t12-t20 累積變更 |
 | 4-2 Windows 啟動器 | 跳過 | 雲端部署（Community Cloud）、macOS、非 uv，本機僅 streamlit run，不需 Windows 啟動器 |
-| 4-3 歸檔 | 未開始 | — |
+| 4-3 歸檔 | 完成 | 43 張 SC（SC-001~042、SC-051）合併入 .ai/scenarios/ SSoT，逐檔比對內容完全一致，無 REMOVED 標記；即將執行 archiver.py 搬移至 .ai/archive/ |
 
 **狀態值**：未開始 / 進行中 / 完成 / 跳過
