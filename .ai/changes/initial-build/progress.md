@@ -51,7 +51,7 @@
 
 | 步驟 | 狀態 | 備註 |
 |------|------|------|
-| 4-1 README 同步 | 完成 | 全量生成 README.md（SIPOC、功能、架構、報酬率口徑、機密設定、部署） |
+| 4-1 README 同步 | 完成 | 全量生成 README.md（SIPOC、功能、架構、報酬率口徑、機密設定、部署）；2026-07-19 隨 behavior-protocol 4-1 一併增量更新，補齊 t12-t20 累積變更 |
 | 4-2 Windows 啟動器 | 跳過 | 雲端部署（Community Cloud）、macOS、非 uv，本機僅 streamlit run，不需 Windows 啟動器 |
 | 4-3 歸檔 | 未開始 | — |
 
