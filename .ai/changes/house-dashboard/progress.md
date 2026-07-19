@@ -7,7 +7,7 @@
 | 1-1 提案 | 完成 | 2026-07-19 使用者確認（BR-1~BR-9；個人化預設值出庫至私人參數檔）。平台層背景見 docs/ROADMAP.md 與 docs/DECISIONS.md |
 | 1-2a 技術選型 | 跳過 | 純確定性數學＋既有 Streamlit/Turso 模式，無新技術選型 |
 | 1-2b 架構分析 | 跳過 | 沿用既有分層（views→services→repositories），無架構議題 |
-| 1-2 設計 | 未開始 | — |
+| 1-2 設計 | 完成 | 2026-07-19 使用者確認（10 AD＋2 TD；AD-7 政策比率拍板為通用值公開保留） |
 | 1-3 行為規格化 | 未開始 | scenario-author 產 scenarios/ 卡片 |
 | 1-4 任務拆解 | 未開始 | — |
 
