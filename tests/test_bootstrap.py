@@ -26,11 +26,14 @@ from pathlib import Path
 from unittest.mock import Mock
 
 # ==== 第三方套件 ====
+import libsql
 import pytest
 from streamlit.errors import StreamlitSecretNotFoundError
 
 # ==== 專案內部 ====
 from asset_lab import bootstrap
+from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND, HOLDING_PURPOSE, HOLDINGS_TABLE
+from asset_lab.models.holding import HoldingModel
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
 from asset_lab.repositories.record_repository import RecordRepository
@@ -157,6 +160,178 @@ def test_build_container_wires_services() -> None:
     # 月度錄入服務的 I/O 委派接上容器內的 Repository 實例
     assert container.monthly_input_service._record_repo is container.record_repo
     assert container.monthly_input_service._holding_repo is container.holding_repo
+
+
+# === holdings 用途欄位加欄遷移：舊庫升級 / 新庫直建 / 重複啟動三路徑（SC-059）===
+
+# 本 Change 之前（無 purpose 欄）的 holdings 表結構，直接以原始 SQL 建出，模擬既有部署
+# 資料庫；不可呼叫現行 SchemaRepository._CREATE_HOLDINGS（其已含 purpose 欄，無法重現
+# 舊庫缺欄的情境）。
+_LEGACY_CREATE_HOLDINGS = f"""
+CREATE TABLE {HOLDINGS_TABLE.TABLE_NAME} (
+    {HOLDINGS_TABLE.HOLDING_ID} INTEGER PRIMARY KEY AUTOINCREMENT,
+    {HOLDINGS_TABLE.NAME} TEXT NOT NULL,
+    {HOLDINGS_TABLE.KIND} TEXT NOT NULL,
+    {HOLDINGS_TABLE.CATEGORY} TEXT,
+    {HOLDINGS_TABLE.INITIAL_MARKET_VALUE} REAL,
+    {HOLDINGS_TABLE.INITIAL_COST} REAL,
+    {HOLDINGS_TABLE.CREATED_AT} TEXT
+)
+"""
+
+
+def _seed_legacy_holdings_db() -> "libsql.Connection":
+    """建一個模擬「本 Change 之前」的既有資料庫：holdings 表無 purpose 欄，已有 3 筆項目。"""
+    connection = libsql.connect(":memory:")
+    cursor = connection.cursor()
+    cursor.execute(_LEGACY_CREATE_HOLDINGS)
+    for name, category, market_value in (
+        ("範例定存", ASSET_CATEGORIES.TIME_DEPOSIT, 10000.0),
+        ("範例活存", ASSET_CATEGORIES.DEMAND_DEPOSIT, 20000.0),
+        ("範例房貸", None, None),
+    ):
+        cursor.execute(
+            f"INSERT INTO {HOLDINGS_TABLE.TABLE_NAME} "
+            f"({HOLDINGS_TABLE.NAME}, {HOLDINGS_TABLE.KIND}, {HOLDINGS_TABLE.CATEGORY}, "
+            f"{HOLDINGS_TABLE.INITIAL_MARKET_VALUE}, {HOLDINGS_TABLE.INITIAL_COST}) "
+            f"VALUES (?, ?, ?, ?, ?)",
+            (
+                name,
+                HOLDING_KIND.LIABILITY if category is None else HOLDING_KIND.ASSET,
+                category,
+                market_value,
+                market_value,
+            ),
+        )
+    connection.commit()
+    return connection
+
+
+class TestHoldingsPurposeMigrationLegacyUpgrade:
+    """既有（本 Change 之前）資料庫首次啟動升級：既有項目自動補一般用途，資料無遺失。"""
+
+    @pytest.mark.scenario("SC-059")
+    def test_sc059_legacy_db_upgrade_backfills_general_purpose(self) -> None:
+        connection = _seed_legacy_holdings_db()
+
+        SchemaRepository(conn=connection).ensure_schema()
+
+        holdings = HoldingRepository(conn=connection).list_holdings()
+        assert len(holdings) == 3
+        assert {h.purpose for h in holdings} == {HOLDING_PURPOSE.GENERAL}
+
+    @pytest.mark.scenario("SC-059")
+    def test_sc059_legacy_db_upgrade_preserves_existing_fields(self) -> None:
+        connection = _seed_legacy_holdings_db()
+
+        SchemaRepository(conn=connection).ensure_schema()
+
+        holdings = {h.name: h for h in HoldingRepository(conn=connection).list_holdings()}
+        deposit = holdings["範例定存"]
+        assert deposit.category == ASSET_CATEGORIES.TIME_DEPOSIT
+        assert deposit.initial_market_value == 10000.0
+        assert deposit.initial_cost == 10000.0
+        liability = holdings["範例房貸"]
+        assert liability.kind == HOLDING_KIND.LIABILITY
+        assert liability.category is None
+        assert liability.initial_market_value is None
+
+    @pytest.mark.scenario("SC-059")
+    def test_sc059_upgraded_legacy_holding_can_be_edited_to_house_purpose(self) -> None:
+        # 升級後舊庫的既有項目可正常編輯為「購屋」用途
+        connection = _seed_legacy_holdings_db()
+        SchemaRepository(conn=connection).ensure_schema()
+        repo = HoldingRepository(conn=connection)
+        deposit = next(h for h in repo.list_holdings() if h.name == "範例定存")
+
+        deposit.purpose = HOLDING_PURPOSE.HOUSE
+        repo.update_holding(holding=deposit)
+
+        reloaded = repo.get_holding(holding_id=deposit.holding_id)
+        assert reloaded.purpose == HOLDING_PURPOSE.HOUSE
+
+    @pytest.mark.scenario("SC-059")
+    def test_sc059_repeated_ensure_schema_on_upgraded_db_is_idempotent(self) -> None:
+        # 重複啟動安全：升級後再跑 2、3 次 ensure_schema 不報錯、既有資料不重複變更
+        connection = _seed_legacy_holdings_db()
+        schema_repo = SchemaRepository(conn=connection)
+
+        schema_repo.ensure_schema()
+        schema_repo.ensure_schema()
+        schema_repo.ensure_schema()
+
+        holdings = HoldingRepository(conn=connection).list_holdings()
+        assert len(holdings) == 3
+        assert {h.purpose for h in holdings} == {HOLDING_PURPOSE.GENERAL}
+
+
+class TestHoldingsPurposeMigrationFreshDb:
+    """全新資料庫首次啟動：直接支援用途標記，行為與升級後的舊庫一致。"""
+
+    @pytest.mark.scenario("SC-059")
+    def test_sc059_fresh_db_supports_purpose_immediately(self) -> None:
+        connection = libsql.connect(":memory:")
+
+        SchemaRepository(conn=connection).ensure_schema()
+
+        repo = HoldingRepository(conn=connection)
+        new_id = repo.add_holding(
+            holding=HoldingModel(
+                name="新建定存",
+                kind=HOLDING_KIND.ASSET,
+                category=ASSET_CATEGORIES.TIME_DEPOSIT,
+                initial_market_value=5000.0,
+                initial_cost=5000.0,
+                purpose=HOLDING_PURPOSE.HOUSE,
+            )
+        )
+
+        stored = repo.get_holding(holding_id=new_id)
+        assert stored.purpose == HOLDING_PURPOSE.HOUSE
+
+    @pytest.mark.scenario("SC-059")
+    def test_sc059_fresh_db_new_holding_without_explicit_purpose_defaults_to_general(
+        self,
+    ) -> None:
+        connection = libsql.connect(":memory:")
+        SchemaRepository(conn=connection).ensure_schema()
+        repo = HoldingRepository(conn=connection)
+
+        new_id = repo.add_holding(
+            holding=HoldingModel(
+                name="新建活存",
+                kind=HOLDING_KIND.ASSET,
+                category=ASSET_CATEGORIES.DEMAND_DEPOSIT,
+                initial_market_value=1000.0,
+                initial_cost=1000.0,
+            )
+        )
+
+        assert repo.get_holding(holding_id=new_id).purpose == HOLDING_PURPOSE.GENERAL
+
+    @pytest.mark.scenario("SC-059")
+    def test_sc059_repeated_ensure_schema_on_fresh_db_is_idempotent(self) -> None:
+        # 重複啟動安全：全新庫也可重跑 ensure_schema 多次，不報錯、既有資料不受影響
+        connection = libsql.connect(":memory:")
+        schema_repo = SchemaRepository(conn=connection)
+        schema_repo.ensure_schema()
+        repo = HoldingRepository(conn=connection)
+        new_id = repo.add_holding(
+            holding=HoldingModel(
+                name="新建定存",
+                kind=HOLDING_KIND.ASSET,
+                category=ASSET_CATEGORIES.TIME_DEPOSIT,
+                initial_market_value=2000.0,
+                initial_cost=2000.0,
+            )
+        )
+
+        schema_repo.ensure_schema()
+        schema_repo.ensure_schema()
+
+        stored = repo.get_holding(holding_id=new_id)
+        assert stored is not None
+        assert stored.purpose == HOLDING_PURPOSE.GENERAL
 
 
 class _FakeSchemaRepo:

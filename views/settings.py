@@ -1,6 +1,6 @@
 """設定頁（View / Controller）。
 
-職責：持有項目主檔的新增/編輯（含改名、改分類，holding_id 穩定不斷裂歷史）、各分類目標
+職責：持有項目主檔的新增/編輯（含改名、改分類、改用途，holding_id 穩定不斷裂歷史）、各分類目標
 比重設定（百分比 0–100）、大跌行為協定回撤門檻設定（正幅度%，存前驗證）、買房參數設定
 （金額/比率/年份，存前驗證），並以 AllocationService.compute_drift 呈現當月各分類相對
 目標的偏離與是否需再平衡。委派 HoldingRepository、TargetRepository、
@@ -24,6 +24,7 @@ from asset_lab.core.constants import (
     ASSET_CATEGORIES,
     DEFAULT_REBALANCE_THRESHOLD,
     HOLDING_KIND,
+    HOLDING_PURPOSE,
     HOUSE_PARAM_KEY,
     PROTOCOL_LEVEL_CODE,
 )
@@ -48,6 +49,13 @@ logger = logging.getLogger(__name__)
 _HOLDING_KIND_LABEL = {
     HOLDING_KIND.ASSET: "資產",
     HOLDING_KIND.LIABILITY: "負債",
+}
+
+# 內部值（HOLDING_PURPOSE.GENERAL/HOUSE）供 DB 與買房功能判斷使用，不可異動；
+# 此對照僅供畫面顯示中文，不影響選取後取得的內部值。
+_HOLDING_PURPOSE_LABEL = {
+    HOLDING_PURPOSE.GENERAL: "一般",
+    HOLDING_PURPOSE.HOUSE: "購屋",
 }
 
 # 活存/定存無明顯已實現損益概念，成本與市值理論上應相等，新增與編輯表單皆比照預設帶入。
@@ -152,6 +160,13 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
             "初始成本", value=0.0, step=1000.0, format="%.0f", key="new_cost"
         )
 
+    purpose = st.selectbox(
+        "用途",
+        options=list(HOLDING_PURPOSE.ALL),
+        format_func=lambda p: _HOLDING_PURPOSE_LABEL[p],
+        key="new_purpose",
+    )
+
     if st.button("新增") and name:
         holding_repo.add_holding(
             holding=HoldingModel(
@@ -160,6 +175,7 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
                 category=category,
                 initial_market_value=initial_market_value,
                 initial_cost=initial_cost,
+                purpose=purpose,
             )
         )
         st.success("已新增項目")
@@ -208,6 +224,19 @@ def _render_edit_holding(*, holding: HoldingModel, holding_repo: HoldingReposito
             key=sync_keys["cost_key"],
         )
 
+    purpose_options = list(HOLDING_PURPOSE.ALL)
+    # 既有用途理應皆落在受控清單內；不在清單內時退回第一項（一般），不崩畫面。
+    purpose_index = (
+        purpose_options.index(holding.purpose) if holding.purpose in purpose_options else 0
+    )
+    purpose = st.selectbox(
+        "用途",
+        options=purpose_options,
+        index=purpose_index,
+        format_func=lambda p: _HOLDING_PURPOSE_LABEL[p],
+        key=f"{prefix}purpose",
+    )
+
     if st.button("儲存變更", key=f"{prefix}save"):
         holding_repo.update_holding(
             holding=HoldingModel(
@@ -217,6 +246,7 @@ def _render_edit_holding(*, holding: HoldingModel, holding_repo: HoldingReposito
                 category=category,
                 initial_market_value=initial_market_value,
                 initial_cost=initial_cost,
+                purpose=purpose,
             )
         )
         st.success("已更新項目")

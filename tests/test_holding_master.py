@@ -6,12 +6,15 @@ import libsql
 import pytest
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND
+from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND, HOLDING_PURPOSE
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
+from asset_lab.models.target import TargetAllocationModel
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
+from asset_lab.services.allocation_service import AllocationService
+from asset_lab.services.return_service import ReturnService
 
 
 @pytest.fixture
@@ -235,3 +238,163 @@ class TestRecategorizeIsNotTimeVersioned:
         holding_repo.update_holding(holding=holding)
         latest = holding_repo.get_holding(holding_id=original_id)
         assert latest.category == ASSET_CATEGORIES.US_STOCK
+
+
+class TestHoldingPurposeIsPurelyAdditive:
+    """SC-058：用途標記為純附加，不改變既有分類、報酬與配置計算結果。"""
+
+    @pytest.mark.scenario("SC-058")
+    def test_sc058_new_holding_defaults_to_general_purpose(self, holding_repo):
+        # 新增時未特別指定用途 → 預設為一般
+        new_id = holding_repo.add_holding(
+            holding=_asset("範例定存", ASSET_CATEGORIES.TIME_DEPOSIT, 600000.0, 600000.0)
+        )
+        stored = holding_repo.get_holding(holding_id=new_id)
+        assert stored.purpose == HOLDING_PURPOSE.GENERAL
+
+    @pytest.mark.scenario("SC-058")
+    def test_sc058_changing_purpose_does_not_alter_other_stored_fields(self, holding_repo):
+        # 將用途從一般改為購屋：分類、初始市值、初始成本、名稱皆不受影響
+        new_id = holding_repo.add_holding(
+            holding=_asset("範例定存", ASSET_CATEGORIES.TIME_DEPOSIT, 600000.0, 600000.0)
+        )
+        holding = holding_repo.get_holding(holding_id=new_id)
+        holding.purpose = HOLDING_PURPOSE.HOUSE
+        holding_repo.update_holding(holding=holding)
+
+        after = holding_repo.get_holding(holding_id=new_id)
+        assert after.purpose == HOLDING_PURPOSE.HOUSE
+        assert after.name == "範例定存"
+        assert after.category == ASSET_CATEGORIES.TIME_DEPOSIT
+        assert after.initial_market_value == 600000.0
+        assert after.initial_cost == 600000.0
+
+    @pytest.mark.scenario("SC-058")
+    def test_sc058_purpose_can_be_reverted_from_house_back_to_general(self, holding_repo):
+        new_id = holding_repo.add_holding(
+            holding=_asset("範例定存", ASSET_CATEGORIES.TIME_DEPOSIT, 600000.0, 600000.0)
+        )
+        holding = holding_repo.get_holding(holding_id=new_id)
+        holding.purpose = HOLDING_PURPOSE.HOUSE
+        holding_repo.update_holding(holding=holding)
+
+        reverted = holding_repo.get_holding(holding_id=new_id)
+        reverted.purpose = HOLDING_PURPOSE.GENERAL
+        holding_repo.update_holding(holding=reverted)
+
+        assert holding_repo.get_holding(holding_id=new_id).purpose == HOLDING_PURPOSE.GENERAL
+
+    @pytest.mark.scenario("SC-058")
+    def test_sc058_category_allocation_snapshot_unaffected_by_purpose_change(
+        self, holding_repo, record_repo
+    ):
+        # 分類佔比計算結果：標記用途前後完全一致
+        holding_id = holding_repo.add_holding(
+            holding=_asset("範例定存", ASSET_CATEGORIES.TIME_DEPOSIT, 600000.0, 600000.0)
+        )
+        record_repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=holding_id, year_month="2026-01", market_value=600000.0
+            )
+        )
+        service = AllocationService()
+        month_records = record_repo.read_month(year_month="2026-01")
+        before = service.snapshot(
+            month_records=month_records, holdings=holding_repo.list_holdings(), by="category"
+        )
+
+        holding = holding_repo.get_holding(holding_id=holding_id)
+        holding.purpose = HOLDING_PURPOSE.HOUSE
+        holding_repo.update_holding(holding=holding)
+
+        after = service.snapshot(
+            month_records=month_records, holdings=holding_repo.list_holdings(), by="category"
+        )
+        assert after == before
+
+    @pytest.mark.scenario("SC-058")
+    def test_sc058_allocation_drift_unaffected_by_purpose_change(
+        self, holding_repo, record_repo
+    ):
+        # 配置偏離計算結果：標記用途前後完全一致
+        holding_id = holding_repo.add_holding(
+            holding=_asset("範例定存", ASSET_CATEGORIES.TIME_DEPOSIT, 600000.0, 600000.0)
+        )
+        record_repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=holding_id, year_month="2026-01", market_value=600000.0
+            )
+        )
+        service = AllocationService()
+        targets = [
+            TargetAllocationModel(category=ASSET_CATEGORIES.TIME_DEPOSIT, target_weight=50.0)
+        ]
+        month_records = record_repo.read_month(year_month="2026-01")
+
+        def _drift(holdings):
+            snapshot = service.snapshot(
+                month_records=month_records, holdings=holdings, by="category"
+            )
+            return service.compute_drift(snapshot=snapshot, targets=targets, threshold=5.0)
+
+        before = _drift(holding_repo.list_holdings())
+
+        holding = holding_repo.get_holding(holding_id=holding_id)
+        holding.purpose = HOLDING_PURPOSE.HOUSE
+        holding_repo.update_holding(holding=holding)
+
+        after = _drift(holding_repo.list_holdings())
+        assert after == before
+
+    @pytest.mark.scenario("SC-058")
+    def test_sc058_net_worth_unaffected_by_purpose_change(self, holding_repo, record_repo):
+        # 淨值計算結果：標記用途前後完全一致
+        holding_id = holding_repo.add_holding(
+            holding=_asset("範例定存", ASSET_CATEGORIES.TIME_DEPOSIT, 600000.0, 600000.0)
+        )
+        record_repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=holding_id, year_month="2026-01", market_value=600000.0
+            )
+        )
+        service = AllocationService()
+        range_df = record_repo.read_range(start_ym="2026-01", end_ym="2026-01")
+        before = service.net_worth_series(range_df=range_df, holdings=holding_repo.list_holdings())
+
+        holding = holding_repo.get_holding(holding_id=holding_id)
+        holding.purpose = HOLDING_PURPOSE.HOUSE
+        holding_repo.update_holding(holding=holding)
+
+        after = service.net_worth_series(range_df=range_df, holdings=holding_repo.list_holdings())
+        assert after == before
+
+    @pytest.mark.scenario("SC-058")
+    def test_sc058_return_rate_unaffected_by_purpose_change(self, holding_repo, record_repo):
+        # 報酬率計算結果：標記用途前後完全一致
+        holding_id = holding_repo.add_holding(
+            holding=_asset("範例定存", ASSET_CATEGORIES.TIME_DEPOSIT, 600000.0, 600000.0)
+        )
+        for ym, mv in (("2026-01", 600000.0), ("2026-02", 610000.0)):
+            record_repo.upsert_record(
+                record=MonthlyRecordModel(holding_id=holding_id, year_month=ym, market_value=mv)
+            )
+        service = ReturnService()
+        range_df = record_repo.read_range(start_ym="2026-01", end_ym="2026-02")
+
+        def _returns(holdings):
+            return service.compute_returns(
+                range_df=range_df,
+                holdings=holdings,
+                dimension="category",
+                start_ym="2026-01",
+                end_ym="2026-02",
+            )
+
+        before = _returns(holding_repo.list_holdings())
+
+        holding = holding_repo.get_holding(holding_id=holding_id)
+        holding.purpose = HOLDING_PURPOSE.HOUSE
+        holding_repo.update_holding(holding=holding)
+
+        after = _returns(holding_repo.list_holdings())
+        assert after == before

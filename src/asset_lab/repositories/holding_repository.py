@@ -18,7 +18,8 @@ from asset_lab.models.holding import HoldingModel
 if TYPE_CHECKING:
     from libsql import Connection
 
-# 主檔欄位讀取順序；row tuple 依此順序對映回 HoldingModel。
+# 主檔欄位讀取順序；row tuple 依此順序對映回 HoldingModel。purpose 為純附加用途標記，
+# 既有分類/報酬/配置計算完全不讀此欄（BR-9/D14），僅供買房功能讀寫。
 _COLUMNS = (
     HOLDINGS_TABLE.HOLDING_ID,
     HOLDINGS_TABLE.NAME,
@@ -26,6 +27,7 @@ _COLUMNS = (
     HOLDINGS_TABLE.CATEGORY,
     HOLDINGS_TABLE.INITIAL_MARKET_VALUE,
     HOLDINGS_TABLE.INITIAL_COST,
+    HOLDINGS_TABLE.PURPOSE,
 )
 _SELECT_COLUMNS = ", ".join(_COLUMNS)
 
@@ -41,12 +43,13 @@ _INSERT = (
     f"INSERT INTO {HOLDINGS_TABLE.TABLE_NAME} "
     f"({HOLDINGS_TABLE.NAME}, {HOLDINGS_TABLE.KIND}, {HOLDINGS_TABLE.CATEGORY}, "
     f"{HOLDINGS_TABLE.INITIAL_MARKET_VALUE}, {HOLDINGS_TABLE.INITIAL_COST}, "
-    f"{HOLDINGS_TABLE.CREATED_AT}) VALUES (?, ?, ?, ?, ?, ?)"
+    f"{HOLDINGS_TABLE.CREATED_AT}, {HOLDINGS_TABLE.PURPOSE}) VALUES (?, ?, ?, ?, ?, ?, ?)"
 )
 _UPDATE = (
     f"UPDATE {HOLDINGS_TABLE.TABLE_NAME} SET "
     f"{HOLDINGS_TABLE.NAME} = ?, {HOLDINGS_TABLE.KIND} = ?, {HOLDINGS_TABLE.CATEGORY} = ?, "
-    f"{HOLDINGS_TABLE.INITIAL_MARKET_VALUE} = ?, {HOLDINGS_TABLE.INITIAL_COST} = ? "
+    f"{HOLDINGS_TABLE.INITIAL_MARKET_VALUE} = ?, {HOLDINGS_TABLE.INITIAL_COST} = ?, "
+    f"{HOLDINGS_TABLE.PURPOSE} = ? "
     f"WHERE {HOLDINGS_TABLE.HOLDING_ID} = ?"
 )
 _DELETE_ALL = f"DELETE FROM {HOLDINGS_TABLE.TABLE_NAME}"
@@ -54,7 +57,7 @@ _DELETE_ALL = f"DELETE FROM {HOLDINGS_TABLE.TABLE_NAME}"
 
 def _row_to_model(row: tuple) -> HoldingModel:
     """把主檔 row tuple 依固定欄序組回 HoldingModel。"""
-    holding_id, name, kind, category, initial_market_value, initial_cost = row
+    holding_id, name, kind, category, initial_market_value, initial_cost, purpose = row
     return HoldingModel(
         holding_id=holding_id,
         name=name,
@@ -62,6 +65,7 @@ def _row_to_model(row: tuple) -> HoldingModel:
         category=category,
         initial_market_value=initial_market_value,
         initial_cost=initial_cost,
+        purpose=purpose,
     )
 
 
@@ -109,13 +113,14 @@ class HoldingRepository:
                 holding.initial_market_value,
                 holding.initial_cost,
                 created_at,
+                holding.purpose,
             ),
         )
         self._conn.commit()
         return cursor.lastrowid
 
     def update_holding(self, *, holding: HoldingModel) -> None:
-        """更新既有項目（改名 / 改分類 / 改初始值）。holding_id 不變，歷史紀錄不斷裂。"""
+        """更新既有項目（改名 / 改分類 / 改初始值 / 改用途）。holding_id 不變，歷史紀錄不斷裂。"""
         cursor = self._conn.cursor()
         cursor.execute(
             _UPDATE,
@@ -125,6 +130,7 @@ class HoldingRepository:
                 holding.category,
                 holding.initial_market_value,
                 holding.initial_cost,
+                holding.purpose,
                 holding.holding_id,
             ),
         )
@@ -139,7 +145,8 @@ class HoldingRepository:
                 f"INSERT INTO {HOLDINGS_TABLE.TABLE_NAME} "
                 f"({HOLDINGS_TABLE.HOLDING_ID}, {HOLDINGS_TABLE.NAME}, {HOLDINGS_TABLE.KIND}, "
                 f"{HOLDINGS_TABLE.CATEGORY}, {HOLDINGS_TABLE.INITIAL_MARKET_VALUE}, "
-                f"{HOLDINGS_TABLE.INITIAL_COST}) VALUES (?, ?, ?, ?, ?, ?)",
+                f"{HOLDINGS_TABLE.INITIAL_COST}, {HOLDINGS_TABLE.PURPOSE}) "
+                f"VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     holding.holding_id,
                     holding.name,
@@ -147,6 +154,7 @@ class HoldingRepository:
                     holding.category,
                     holding.initial_market_value,
                     holding.initial_cost,
+                    holding.purpose,
                 ),
             )
         self._conn.commit()

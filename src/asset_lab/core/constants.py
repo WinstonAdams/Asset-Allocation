@@ -41,6 +41,15 @@ class HOLDING_KIND:
     ALL = (ASSET, LIABILITY)
 
 
+class HOLDING_PURPOSE:
+    """持有項目用途。純附加標記，既有分類/報酬/配置計算完全不讀此欄（BR-9/D14），
+    只供買房功能（bucket 推導、現金保留計算）讀取。"""
+
+    GENERAL = "general"
+    HOUSE = "house"
+    ALL = (GENERAL, HOUSE)
+
+
 class ASSET_CATEGORIES:
     """資產分類受控清單初始值。負債不歸類（category 為 None）。"""
 
@@ -91,6 +100,7 @@ class HOLDINGS_TABLE:
     INITIAL_MARKET_VALUE = "initial_market_value"
     INITIAL_COST = "initial_cost"
     CREATED_AT = "created_at"
+    PURPOSE = "purpose"
 
 
 class MONTHLY_RECORDS_TABLE:

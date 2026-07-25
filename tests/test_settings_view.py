@@ -13,6 +13,10 @@ test_holding_master.py 的 SC-003/SC-004 覆蓋，本檔只驗證 UI 到 Reposit
 ②SC-051（活存/定存分類初始成本預設帶入初始市值）——新增或編輯資產項目時，只要當下
 分類為活存/定存，初始成本欄位即自動帶入與初始市值相同的數字，使用者仍可手動覆蓋。
 
+③SC-057（新增與編輯持有項目可標記用途）——新增/編輯表單皆提供「用途」selectbox
+（一般／購屋，預設一般），選取後的內部值為 HOLDING_PURPOSE.GENERAL="general"/
+HOUSE="house"；純附加標記不受性質（資產/負債）分支限制，兩者皆可標記。
+
 比照 test_input_view.py 的做法：以 AppTest 直接載入 views/settings.py，改以替身容器
 （含最小可用替身）注入 session_state["container"]，脫離真實 Turso 依賴。
 """
@@ -25,24 +29,25 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND
+from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND, HOLDING_PURPOSE
 from asset_lab.models.holding import HoldingModel
 from asset_lab.services.house_service import HouseService
 from asset_lab.services.protocol_service import ProtocolService
 
 
 class _StubHoldingRepo:
-    """主檔替身：可注入既有項目清單；update_holding 呼叫會被記錄供斷言。"""
+    """主檔替身：可注入既有項目清單；add_holding / update_holding 呼叫會被記錄供斷言。"""
 
     def __init__(self, holdings: list[HoldingModel] | None = None):
         self._holdings = list(holdings) if holdings else []
+        self.added: list[HoldingModel] = []
         self.updated: list[HoldingModel] = []
 
     def list_holdings(self):
         return self._holdings
 
     def add_holding(self, *, holding):
-        pass
+        self.added.append(holding)
 
     def update_holding(self, *, holding):
         self.updated.append(holding)
@@ -398,3 +403,137 @@ class TestEditExistingHoldingCashLikeCategoryCostDefaultsToMarketValue:
         save_button.click().run()
         assert repo.updated[0].initial_market_value == 120000.0
         assert repo.updated[0].initial_cost == 120000.0
+
+
+class TestNewHoldingPurposeSelectbox:
+    """SC-057（新增流程）：新增持有項目可標記用途（一般／購屋），預設一般。"""
+
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_purpose_options_are_chinese_labels_general_and_house_only(self):
+        # 用途值域僅有「一般」與「購屋」兩種，介面不提供其他選項
+        at = _run_app()
+        purpose_select = at.selectbox(key="new_purpose")
+        assert purpose_select.options == ["一般", "購屋"]
+
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_default_purpose_is_general(self):
+        # 新增時未特別選擇用途 → 預設為一般
+        at = _run_app()
+        purpose_select = at.selectbox(key="new_purpose")
+        assert purpose_select.value == HOLDING_PURPOSE.GENERAL
+
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_new_holding_with_house_purpose_selected_persists_house(self):
+        repo = _StubHoldingRepo()
+        at = _run_app(holding_repo=repo)
+        at.text_input(key="new_name").set_value("範例定存").run()
+        at.selectbox(key="new_purpose").select(HOLDING_PURPOSE.HOUSE).run()
+        add_button = next(b for b in at.button if b.label == "新增")
+        add_button.click().run()
+
+        assert len(repo.added) == 1
+        assert repo.added[0].purpose == HOLDING_PURPOSE.HOUSE
+
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_new_holding_without_selecting_purpose_defaults_to_general(self):
+        repo = _StubHoldingRepo()
+        at = _run_app(holding_repo=repo)
+        at.text_input(key="new_name").set_value("範例活存").run()
+        add_button = next(b for b in at.button if b.label == "新增")
+        add_button.click().run()
+
+        assert repo.added[0].purpose == HOLDING_PURPOSE.GENERAL
+
+
+class TestEditExistingHoldingPurposeSelectbox:
+    """SC-057（編輯流程）：編輯既有項目可將用途從一般改為購屋、或反向改回。"""
+
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_edit_purpose_selectbox_shows_current_value(self):
+        holding = HoldingModel(
+            holding_id=9,
+            name="範例定存",
+            kind=HOLDING_KIND.ASSET,
+            category=ASSET_CATEGORIES.TIME_DEPOSIT,
+            initial_market_value=600000.0,
+            initial_cost=600000.0,
+            purpose=HOLDING_PURPOSE.GENERAL,
+        )
+        at = _run_app(holding_repo=_StubHoldingRepo(holdings=[holding]))
+        purpose_select = at.selectbox(key="edit_9_purpose")
+        assert purpose_select.value == HOLDING_PURPOSE.GENERAL
+
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_editing_purpose_from_general_to_house_persists(self):
+        holding = HoldingModel(
+            holding_id=10,
+            name="範例定存",
+            kind=HOLDING_KIND.ASSET,
+            category=ASSET_CATEGORIES.TIME_DEPOSIT,
+            initial_market_value=600000.0,
+            initial_cost=600000.0,
+            purpose=HOLDING_PURPOSE.GENERAL,
+        )
+        repo = _StubHoldingRepo(holdings=[holding])
+        at = _run_app(holding_repo=repo)
+        at.selectbox(key="edit_10_purpose").select(HOLDING_PURPOSE.HOUSE).run()
+        save_button = next(b for b in at.button if b.key == "edit_10_save")
+        save_button.click().run()
+
+        assert repo.updated[0].purpose == HOLDING_PURPOSE.HOUSE
+
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_editing_purpose_from_house_back_to_general_persists(self):
+        holding = HoldingModel(
+            holding_id=11,
+            name="範例定存",
+            kind=HOLDING_KIND.ASSET,
+            category=ASSET_CATEGORIES.TIME_DEPOSIT,
+            initial_market_value=600000.0,
+            initial_cost=600000.0,
+            purpose=HOLDING_PURPOSE.HOUSE,
+        )
+        repo = _StubHoldingRepo(holdings=[holding])
+        at = _run_app(holding_repo=repo)
+        at.selectbox(key="edit_11_purpose").select(HOLDING_PURPOSE.GENERAL).run()
+        save_button = next(b for b in at.button if b.key == "edit_11_save")
+        save_button.click().run()
+
+        assert repo.updated[0].purpose == HOLDING_PURPOSE.GENERAL
+
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_editing_other_fields_does_not_change_purpose(self):
+        # 只改名字、不動用途：儲存後用途維持原值（購屋）
+        holding = HoldingModel(
+            holding_id=12,
+            name="範例定存",
+            kind=HOLDING_KIND.ASSET,
+            category=ASSET_CATEGORIES.TIME_DEPOSIT,
+            initial_market_value=600000.0,
+            initial_cost=600000.0,
+            purpose=HOLDING_PURPOSE.HOUSE,
+        )
+        repo = _StubHoldingRepo(holdings=[holding])
+        at = _run_app(holding_repo=repo)
+        at.text_input(key="edit_12_name").set_value("改名定存").run()
+        save_button = next(b for b in at.button if b.key == "edit_12_save")
+        save_button.click().run()
+
+        assert repo.updated[0].name == "改名定存"
+        assert repo.updated[0].purpose == HOLDING_PURPOSE.HOUSE
+
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_liability_edit_also_shows_purpose_selectbox(self):
+        # 用途為純附加標記，負債項目同樣可標記用途（不受性質分支限制）
+        holding = HoldingModel(
+            holding_id=13,
+            name="房貸",
+            kind=HOLDING_KIND.LIABILITY,
+            category=None,
+            initial_market_value=None,
+            initial_cost=None,
+            purpose=HOLDING_PURPOSE.GENERAL,
+        )
+        at = _run_app(holding_repo=_StubHoldingRepo(holdings=[holding]))
+        purpose_select = at.selectbox(key="edit_13_purpose")
+        assert purpose_select.value == HOLDING_PURPOSE.GENERAL
