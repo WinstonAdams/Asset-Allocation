@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND
+from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND, HOLDING_PURPOSE
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
@@ -71,7 +71,7 @@ class TestExportImportRoundTrip:
 
     @pytest.mark.scenario("SC-031")
     def test_sc031_export_holdings_has_header_and_full_records(self, service):
-        # 匯出主檔 CSV：第一列為表頭，含全部項目（資產與負債）與其性質/初始市值/初始成本/分類
+        # 匯出主檔 CSV：第一列為表頭，含全部項目（資產與負債）與其性質/初始市值/初始成本/分類/用途
         csv_bytes = service.export_holdings_csv(holdings=_holdings())
         df = _read_csv_bytes(csv_bytes)
         assert list(df.columns) == [
@@ -81,6 +81,7 @@ class TestExportImportRoundTrip:
             "category",
             "initial_market_value",
             "initial_cost",
+            "purpose",
         ]
         assert list(df["holding_id"]) == [1, 2]
         assert list(df["name"]) == ["台積電", "房貸"]
@@ -307,6 +308,157 @@ class TestImportValidationRejectsBadData:
                 targets_csv=targets_csv,
                 target_db_empty=True,
             )
+
+
+def _empty_records_csv(service: DataIoService) -> bytes:
+    """一份僅含表頭、無資料列的月度紀錄 CSV（測試用，聚焦持有項目主檔行為）。"""
+    return service.export_records_csv(
+        records=pd.DataFrame(
+            columns=["holding_id", "year_month", "market_value", "net_investment"]
+        )
+    )
+
+
+def _legacy_holdings_csv_bytes() -> bytes:
+    """模擬本 Change 之前匯出的持有項目 CSV：僅含既有 6 欄，無「用途」欄。"""
+    df = pd.DataFrame(
+        [
+            (
+                1,
+                "範例定存",
+                HOLDING_KIND.ASSET,
+                ASSET_CATEGORIES.TIME_DEPOSIT,
+                200000.0,
+                200000.0,
+            ),
+            (
+                2,
+                "範例股票",
+                HOLDING_KIND.ASSET,
+                ASSET_CATEGORIES.TW_STOCK,
+                100000.0,
+                80000.0,
+            ),
+        ],
+        columns=[
+            "holding_id",
+            "name",
+            "kind",
+            "category",
+            "initial_market_value",
+            "initial_cost",
+        ],
+    )
+    return df.to_csv(index=False).encode("utf-8")
+
+
+class TestHoldingsCsvPurposeRoundtrip:
+    """SC-060：持有項目 CSV 匯出含用途欄，匯出入往返後用途保留。"""
+
+    def _holdings_with_purpose(self) -> list[HoldingModel]:
+        """兩筆項目（虛構值）：一筆用途購屋、一筆用途一般。"""
+        return [
+            HoldingModel(
+                holding_id=1,
+                name="範例定存",
+                kind=HOLDING_KIND.ASSET,
+                category=ASSET_CATEGORIES.TIME_DEPOSIT,
+                initial_market_value=200000.0,
+                initial_cost=200000.0,
+                purpose=HOLDING_PURPOSE.HOUSE,
+            ),
+            HoldingModel(
+                holding_id=2,
+                name="範例股票",
+                kind=HOLDING_KIND.ASSET,
+                category=ASSET_CATEGORIES.TW_STOCK,
+                initial_market_value=100000.0,
+                initial_cost=80000.0,
+                purpose=HOLDING_PURPOSE.GENERAL,
+            ),
+        ]
+
+    @pytest.mark.scenario("SC-060")
+    def test_sc060_export_holdings_csv_appends_purpose_column_at_end(self, service):
+        # 用途欄附加於既有欄位之後，既有欄序不變
+        csv_bytes = service.export_holdings_csv(holdings=self._holdings_with_purpose())
+        df = _read_csv_bytes(csv_bytes)
+        assert list(df.columns) == [
+            "holding_id",
+            "name",
+            "kind",
+            "category",
+            "initial_market_value",
+            "initial_cost",
+            "purpose",
+        ]
+        assert list(df["purpose"]) == [HOLDING_PURPOSE.HOUSE, HOLDING_PURPOSE.GENERAL]
+
+    @pytest.mark.scenario("SC-060")
+    def test_sc060_roundtrip_preserves_purpose_after_export_then_reimport(self, service):
+        # 匯出→清空→重新匯入，用途不遺失（純附加欄位須於備份鏈路中保存，AD-8）
+        holdings_csv = service.export_holdings_csv(holdings=self._holdings_with_purpose())
+
+        holdings, _, _ = service.parse_and_validate(
+            holdings_csv=holdings_csv,
+            records_csv=_empty_records_csv(service),
+            targets_csv=service.export_targets_csv(targets=[]),
+            target_db_empty=True,
+        )
+        assert holdings == self._holdings_with_purpose()
+
+
+class TestLegacyHoldingsCsvWithoutPurposeColumn:
+    """SC-061：舊版 CSV（無用途欄）仍可匯入，用途補為一般。"""
+
+    @pytest.mark.scenario("SC-061")
+    def test_sc061_legacy_csv_without_purpose_column_imports_and_defaults_to_general(
+        self, service
+    ):
+        # 缺「用途」欄不觸發表頭驗證失敗（強制欄位維持既有 6 欄），匯入成功並補一般
+        holdings, _, _ = service.parse_and_validate(
+            holdings_csv=_legacy_holdings_csv_bytes(),
+            records_csv=_empty_records_csv(service),
+            targets_csv=service.export_targets_csv(targets=[]),
+            target_db_empty=True,
+        )
+        assert len(holdings) == 2
+        assert all(holding.purpose == HOLDING_PURPOSE.GENERAL for holding in holdings)
+
+    @pytest.mark.scenario("SC-061")
+    def test_sc061_blank_purpose_value_in_new_format_csv_defaults_to_general(self, service):
+        # 用途欄存在但個別列留白：比照缺欄語意補一般（缺值等同缺欄，皆視為未填）
+        csv_bytes = (
+            b"holding_id,name,kind,category,initial_market_value,initial_cost,purpose\n"
+            b"1,X,asset,,100.0,100.0,\n"
+        )
+        holdings, _, _ = service.parse_and_validate(
+            holdings_csv=csv_bytes,
+            records_csv=_empty_records_csv(service),
+            targets_csv=service.export_targets_csv(targets=[]),
+            target_db_empty=True,
+        )
+        assert holdings[0].purpose == HOLDING_PURPOSE.GENERAL
+
+
+class TestHoldingsCsvInvalidPurposeValue:
+    """SC-073：用途欄值非法（非一般/購屋）時拒絕整批匯入，比照既有性質/分類驗證慣例。"""
+
+    @pytest.mark.scenario("SC-073")
+    def test_sc073_invalid_purpose_value_is_rejected(self, service):
+        # 用途欄出現既非一般也非購屋的值 → 拒絕整批匯入並點名非法值
+        csv_bytes = (
+            b"holding_id,name,kind,category,initial_market_value,initial_cost,purpose\n"
+            b"1,X,asset,,100.0,100.0,vacation\n"
+        )
+        with pytest.raises(DataValidationError) as exc:
+            service.parse_and_validate(
+                holdings_csv=csv_bytes,
+                records_csv=_empty_records_csv(service),
+                targets_csv=service.export_targets_csv(targets=[]),
+                target_db_empty=True,
+            )
+        assert "vacation" in str(exc.value)
 
 
 class TestImportDanglingRecordReference:

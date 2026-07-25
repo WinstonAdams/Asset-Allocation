@@ -18,7 +18,7 @@ import math
 import pandas as pd
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import ASSET_CATEGORIES, CSV_EXPORT, HOLDING_KIND
+from asset_lab.core.constants import ASSET_CATEGORIES, CSV_EXPORT, HOLDING_KIND, HOLDING_PURPOSE
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
@@ -57,6 +57,7 @@ class DataIoService:
                 "category": holding.category,
                 "initial_market_value": holding.initial_market_value,
                 "initial_cost": holding.initial_cost,
+                "purpose": holding.purpose,
             }
             for holding in holdings
         ]
@@ -113,7 +114,7 @@ class DataIoService:
         targets_df = self._read_csv(label="分類目標配置", raw=targets_csv)
 
         self._require_headers(
-            label="持有項目主檔", df=holdings_df, expected=CSV_EXPORT.HOLDINGS_COLUMNS
+            label="持有項目主檔", df=holdings_df, expected=CSV_EXPORT.HOLDINGS_REQUIRED_COLUMNS
         )
         self._require_headers(
             label="月度紀錄", df=records_df, expected=CSV_EXPORT.RECORDS_COLUMNS
@@ -148,7 +149,12 @@ class DataIoService:
 
     @staticmethod
     def _build_holdings(df: pd.DataFrame) -> list[HoldingModel]:
-        """逐列還原主檔並驗證性質與分類合法；空欄正規化為 None。"""
+        """逐列還原主檔並驗證性質/分類/用途合法；空欄正規化為 None。
+
+        purpose 為向後相容附加欄位：舊版 CSV 無此欄，或新版 CSV 個別列留白，
+        皆視為未填、補一般；欄位存在且有值時須落在合法用途清單內。
+        """
+        has_purpose_column = "purpose" in df.columns
         holdings: list[HoldingModel] = []
         for row in df.to_dict(orient="records"):
             kind = _optional_str(row["kind"])
@@ -164,6 +170,12 @@ class DataIoService:
                 and category not in ASSET_CATEGORIES.ALL
             ):
                 raise DataValidationError(f"資產分類非法：{category}（不在受控清單內）。")
+            purpose = _optional_str(row["purpose"]) if has_purpose_column else None
+            purpose = purpose or HOLDING_PURPOSE.GENERAL
+            if purpose not in HOLDING_PURPOSE.ALL:
+                raise DataValidationError(
+                    f"持有項目用途非法：{purpose}（僅允許一般或購屋）。"
+                )
             holdings.append(
                 HoldingModel(
                     holding_id=int(row["holding_id"]),
@@ -172,6 +184,7 @@ class DataIoService:
                     category=category,
                     initial_market_value=_optional_float(row["initial_market_value"]),
                     initial_cost=_optional_float(row["initial_cost"]),
+                    purpose=purpose,
                 )
             )
         return holdings

@@ -258,6 +258,9 @@ class CSV_EXPORT:
     """CSV 匯出/匯入的對外欄位契約（含表頭標準 CSV，三類資料各一份）。
 
     欄位即各 model 的欄位、欄序固定；此為對外契約，發布後改欄位須維持相容。
+    HOLDINGS_COLUMNS 末端附加 purpose（純附加，既有欄序不變）；HOLDINGS_REQUIRED_COLUMNS
+    為匯入表頭驗證的強制欄位集，不含 purpose——舊版 CSV 缺此欄仍能通過表頭驗證並匯入，
+    缺欄視為未填、補一般（向後相容）。
     """
 
     HOLDINGS_COLUMNS = (
@@ -267,7 +270,9 @@ class CSV_EXPORT:
         "category",
         "initial_market_value",
         "initial_cost",
+        "purpose",
     )
+    HOLDINGS_REQUIRED_COLUMNS = HOLDINGS_COLUMNS[:-1]
     RECORDS_COLUMNS = (
         "holding_id",
         "year_month",
