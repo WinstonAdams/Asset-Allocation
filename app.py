@@ -95,6 +95,7 @@ def main() -> None:
             st.Page("views/allocation.py", title="資產配置", icon=":material/donut_large:"),
             st.Page("views/returns.py", title="報酬率", icon=":material/trending_up:"),
             st.Page("views/protocol.py", title="行為協定", icon=":material/menu_book:"),
+            st.Page("views/house.py", title="買房", icon=":material/home:"),
             st.Page("views/settings.py", title="設定", icon=":material/settings:"),
             st.Page("views/data_io.py", title="匯出入", icon=":material/import_export:"),
         ]

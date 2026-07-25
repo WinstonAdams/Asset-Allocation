@@ -1,20 +1,34 @@
-"""買房 bucket 口徑、進度、組成警示與觸發條件檢核：純運算測試（SC-056/062~065/069/070）。
+"""買房 bucket 口徑、進度、組成警示、觸發條件檢核與買房頁呈現測試
+（SC-056/062~065/066/067/069/070）。
 
 HouseService 各方法皆為純函式，直接餵虛構的 HoldingModel/MonthlyRecordModel/
 HouseParams/SubjectiveTriggerModel/AffordabilityResult 驗證，不連任何 DB。
 所有金額、年份皆為虛構值，不含任何個人化真實數字。
+
+檔案末段（SC-066/067）改以 AppTest 直接載入 views/house.py，比照 test_settings_view.py
+的替身容器慣例，注入 session_state["container"]（house_service/affordability_service
+用真正的純運算實作，僅 Repository 層替身），驗證買房頁編排全鏈路（讀參數/主檔/月度紀錄
+→ 算 bucket/可負擔性/觸發檢核 → 渲染）接線正確，並覆蓋頁面級呈現行為：5/5 顯示「可啟動
+購屋」、未全數達成時顯示缺口清單（含實際值與門檻值）。
 """
 
 # ==== 原生（標準庫） ====
-# 無
+from types import SimpleNamespace
 
 # ==== 第三方套件 ====
+import pandas as pd
 import pytest
+from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_PURPOSE, HOUSE_TRIGGER
+from asset_lab.core.constants import (
+    ASSET_CATEGORIES,
+    HOLDING_PURPOSE,
+    HOUSE_PARAM_KEY,
+    HOUSE_TRIGGER,
+)
 from asset_lab.models.holding import HoldingModel
-from asset_lab.models.house import HouseParams, SubjectiveTriggerModel
+from asset_lab.models.house import HouseParamModel, HouseParams, SubjectiveTriggerModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.results import AffordabilityResult
 from asset_lab.services.affordability_service import AffordabilityService
@@ -746,3 +760,258 @@ class TestAssessTriggersExactBoundaryEquality:
 
         payment = next(c for c in checklist.conditions if c.key == HOUSE_TRIGGER.PAYMENT)
         assert payment.met is False
+
+
+# ---------------------------------------------------------------------------
+# 買房頁（views/house.py）呈現測試：SC-066/SC-067
+# ---------------------------------------------------------------------------
+
+
+class _StubHouseParamRepo:
+    """買房參數替身：以 dict（key=HOUSE_PARAM_KEY 值域）注入已存參數。"""
+
+    def __init__(self, params: dict[str, float]):
+        self._params = params
+
+    def read_params(self):
+        return [
+            HouseParamModel(param_key=key, param_value=float(value))
+            for key, value in self._params.items()
+        ]
+
+    def upsert_param(self, *, param):
+        pass
+
+
+class _StubHoldingRepo:
+    """項目主檔替身：固定回傳注入的持有項目清單。"""
+
+    def __init__(self, holdings: list[HoldingModel]):
+        self._holdings = holdings
+
+    def list_holdings(self):
+        return self._holdings
+
+
+class _StubRecordRepo:
+    """月度紀錄替身：read_all 回傳注入的 DataFrame（比照 Repository.read_all 的形狀）。"""
+
+    def __init__(self, records_df: pd.DataFrame):
+        self._records_df = records_df
+
+    def read_all(self):
+        return self._records_df
+
+
+class _StubSubjectiveTriggerRepo:
+    """主觀觸發替身：read_triggers 回傳已存勾選狀態；upsert_trigger 呼叫供斷言記錄。"""
+
+    def __init__(self, triggers: list[SubjectiveTriggerModel]):
+        self._triggers = list(triggers)
+        self.upserted: list[SubjectiveTriggerModel] = []
+
+    def read_triggers(self):
+        return self._triggers
+
+    def upsert_trigger(self, *, trigger):
+        self.upserted.append(trigger)
+
+
+def _house_page_params(**overrides: float) -> dict[str, float]:
+    """五條觸發條件全數可達成的一組虛構買房參數，供 SC-066/067 以 kwargs 覆寫單一欄位。
+
+    自備比率 30% × 目標總價 500 萬＝目標金額 150 萬（與 bucket 現值 160 萬搭配達標）；
+    月付上限 40%、驗算利率 2.5%、貸款 30 年（與 AD-7 政策方法論預設同值）。
+    """
+    base = {
+        HOUSE_PARAM_KEY.TARGET_TOTAL_PRICE: 5_000_000.0,
+        HOUSE_PARAM_KEY.DOWN_PAYMENT_RATIO: 30.0,
+        HOUSE_PARAM_KEY.CASH_FLOOR: 300_000.0,
+        HOUSE_PARAM_KEY.INCOME_THRESHOLD: 90_000.0,
+        HOUSE_PARAM_KEY.MONTHLY_AFTER_TAX_INCOME: 100_000.0,
+        HOUSE_PARAM_KEY.PAYMENT_CAP_RATIO: 40.0,
+        HOUSE_PARAM_KEY.TEST_ANNUAL_RATE: 2.5,
+        HOUSE_PARAM_KEY.LOAN_YEARS: 30.0,
+    }
+    base.update(overrides)
+    return base
+
+
+def _house_page_holdings() -> list[HoldingModel]:
+    """一個購屋標記定存（bucket）＋一個一般用途活存（現金預備金）。"""
+    return [
+        HoldingModel(
+            holding_id=1,
+            name="範例購屋定存",
+            kind="asset",
+            category=ASSET_CATEGORIES.TIME_DEPOSIT,
+            purpose=HOLDING_PURPOSE.HOUSE,
+        ),
+        HoldingModel(
+            holding_id=2,
+            name="範例一般活存",
+            kind="asset",
+            category=ASSET_CATEGORIES.DEMAND_DEPOSIT,
+            purpose=HOLDING_PURPOSE.GENERAL,
+        ),
+    ]
+
+
+def _house_page_records() -> pd.DataFrame:
+    """對應 _house_page_holdings 的最新月市值：bucket 160 萬、現金預備金 40 萬。"""
+    return pd.DataFrame(
+        [
+            {
+                "holding_id": 1,
+                "year_month": "2026-06",
+                "market_value": 1_600_000.0,
+                "net_investment": 0.0,
+            },
+            {
+                "holding_id": 2,
+                "year_month": "2026-06",
+                "market_value": 400_000.0,
+                "net_investment": 0.0,
+            },
+        ]
+    )
+
+
+def _run_house_page(
+    *,
+    params: dict[str, float],
+    holdings: list[HoldingModel],
+    records_df: pd.DataFrame,
+    triggers: list[SubjectiveTriggerModel],
+) -> AppTest:
+    """以替身容器跑 views/house.py，回傳已 run() 完成的 AppTest。
+
+    house_service / affordability_service 皆用真正的純運算實作（非替身），使測試走
+    完整的頁面編排 → Service 運算鏈路，覆蓋接線正確性；僅 Repository 層以替身脫離
+    真實 Turso 依賴。
+    """
+    container = SimpleNamespace(
+        house_param_repo=_StubHouseParamRepo(params),
+        holding_repo=_StubHoldingRepo(holdings),
+        record_repo=_StubRecordRepo(records_df),
+        subjective_trigger_repo=_StubSubjectiveTriggerRepo(triggers),
+        affordability_service=AffordabilityService(),
+        house_service=HouseService(),
+    )
+    at = AppTest.from_file("views/house.py")
+    at.session_state["container"] = container
+    at.run()
+    return at
+
+
+class TestHousePageAllTriggersMetShowsCanStart:
+    """SC-066：五條觸發條件全部成立時，買房頁顯示 5/5 與「可啟動購屋」。"""
+
+    @pytest.mark.scenario("SC-066")
+    def test_sc066_all_five_conditions_met_shows_5_of_5_and_can_start_message(self):
+        at = _run_house_page(
+            params=_house_page_params(),
+            holdings=_house_page_holdings(),
+            records_df=_house_page_records(),
+            triggers=[
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.ANCHOR, checked=True),
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.COGNITION, checked=True),
+            ],
+        )
+
+        assert not at.exception
+        met_count_metric = next(m for m in at.metric if m.label == "達成計數")
+        assert met_count_metric.value == "5/5"
+        assert any(s.value == "可啟動購屋" for s in at.success)
+
+    @pytest.mark.scenario("SC-066")
+    def test_sc066_each_condition_individually_shows_achieved(self):
+        at = _run_house_page(
+            params=_house_page_params(),
+            holdings=_house_page_holdings(),
+            records_df=_house_page_records(),
+            triggers=[
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.ANCHOR, checked=True),
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.COGNITION, checked=True),
+            ],
+        )
+
+        status_lines = {m.value for m in at.markdown}
+        assert "✅ 收入：達成" in status_lines
+        assert "✅ 自備：達成" in status_lines
+        assert "✅ 月付：達成" in status_lines
+        assert at.checkbox(key="house_trigger_anchor").value is True
+        assert at.checkbox(key="house_trigger_cognition").value is True
+
+
+class TestHousePageNotAllTriggersMetShowsGapList:
+    """SC-067：任一觸發條件不成立時，買房頁顯示缺口清單、不顯示「可啟動購屋」。"""
+
+    @pytest.mark.scenario("SC-067")
+    def test_sc067_income_and_cognition_unmet_shows_3_of_5_no_can_start_message(self):
+        at = _run_house_page(
+            params=_house_page_params(monthly_after_tax_income=80_000.0),
+            holdings=_house_page_holdings(),
+            records_df=_house_page_records(),
+            triggers=[
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.ANCHOR, checked=True),
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.COGNITION, checked=False),
+            ],
+        )
+
+        assert not at.exception
+        met_count_metric = next(m for m in at.metric if m.label == "達成計數")
+        assert met_count_metric.value == "3/5"
+        assert not any(s.value == "可啟動購屋" for s in at.success)
+
+    @pytest.mark.scenario("SC-067")
+    def test_sc067_gap_list_shows_actual_and_required_for_objective_condition(self):
+        at = _run_house_page(
+            params=_house_page_params(monthly_after_tax_income=80_000.0),
+            holdings=_house_page_holdings(),
+            records_df=_house_page_records(),
+            triggers=[
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.ANCHOR, checked=True),
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.COGNITION, checked=False),
+            ],
+        )
+
+        gap_lines = {m.value for m in at.markdown}
+        assert "- 收入（實際 80,000 元 vs 門檻 90,000 元）" in gap_lines
+
+    @pytest.mark.scenario("SC-067")
+    def test_sc067_gap_list_shows_unchecked_for_subjective_condition(self):
+        at = _run_house_page(
+            params=_house_page_params(monthly_after_tax_income=80_000.0),
+            holdings=_house_page_holdings(),
+            records_df=_house_page_records(),
+            triggers=[
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.ANCHOR, checked=True),
+                SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.COGNITION, checked=False),
+            ],
+        )
+
+        gap_lines = {m.value for m in at.markdown}
+        assert "- 認知（未勾選）" in gap_lines
+
+
+class TestHousePageEmptyStateDoesNotCrash:
+    """買房頁首次使用（全無參數/主檔/紀錄/勾選）時不得崩潰（純呈現健壯性，不掛 SC marker）。
+
+    此邊界為既有業務語意（HouseService 對未設定參數 fail-closed，見 SC-056）在頁面層的
+    自然延伸，非新業務決策，故不另建待認可 SC。
+    """
+
+    def test_completely_empty_state_renders_without_exception(self):
+        empty_columns = ["holding_id", "year_month", "market_value", "net_investment"]
+        at = _run_house_page(
+            params={},
+            holdings=[],
+            records_df=pd.DataFrame(columns=empty_columns),
+            triggers=[],
+        )
+
+        assert not at.exception
+        met_count_metric = next(m for m in at.metric if m.label == "達成計數")
+        assert met_count_metric.value == "0/5"
+        assert not any(s.value == "可啟動購屋" for s in at.success)
