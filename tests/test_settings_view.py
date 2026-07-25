@@ -27,6 +27,7 @@ from streamlit.testing.v1 import AppTest
 # ==== 專案內部 ====
 from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND
 from asset_lab.models.holding import HoldingModel
+from asset_lab.services.house_service import HouseService
 from asset_lab.services.protocol_service import ProtocolService
 
 
@@ -71,6 +72,13 @@ class _StubProtocolThresholdRepo:
         return []
 
 
+class _StubHouseParamRepo:
+    """買房參數替身：無既有保存值，HouseService 會補上中性/方法論預設值。"""
+
+    def read_params(self):
+        return []
+
+
 def _run_app(*, holding_repo: _StubHoldingRepo | None = None) -> AppTest:
     """以替身容器跑 views/settings.py，回傳已 run() 完成的 AppTest。"""
     container = SimpleNamespace(
@@ -80,6 +88,8 @@ def _run_app(*, holding_repo: _StubHoldingRepo | None = None) -> AppTest:
         allocation_service=None,
         protocol_threshold_repo=_StubProtocolThresholdRepo(),
         protocol_service=ProtocolService(),
+        house_param_repo=_StubHouseParamRepo(),
+        house_service=HouseService(),
     )
     at = AppTest.from_file("views/settings.py")
     at.session_state["container"] = container

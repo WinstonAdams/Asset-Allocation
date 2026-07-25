@@ -1,13 +1,15 @@
 """設定頁（View / Controller）。
 
 職責：持有項目主檔的新增/編輯（含改名、改分類，holding_id 穩定不斷裂歷史）、各分類目標
-比重設定（百分比 0–100）、大跌行為協定回撤門檻設定（正幅度%，存前驗證），並以
-AllocationService.compute_drift 呈現當月各分類相對目標的偏離與是否需再平衡。委派
-HoldingRepository、TargetRepository、ProtocolThresholdRepository/ProtocolService 與
+比重設定（百分比 0–100）、大跌行為協定回撤門檻設定（正幅度%，存前驗證）、買房參數設定
+（金額/比率/年份，存前驗證），並以 AllocationService.compute_drift 呈現當月各分類相對
+目標的偏離與是否需再平衡。委派 HoldingRepository、TargetRepository、
+ProtocolThresholdRepository/ProtocolService、HouseParamRepository/HouseService 與
 AllocationService。本頁為唯一 catch 點。
 
-主檔身分穩定性、偏離口徑（百分點、嚴格大於門檻）、門檻合法性（0 < L1 < L2 < L3）等業務
-正確性由下層的 SC 測試保證；本頁只做委派與呈現。
+主檔身分穩定性、偏離口徑（百分點、嚴格大於門檻）、門檻合法性（0 < L1 < L2 < L3）、買房
+參數合法域（比率開區間、金額/年份非負）等業務正確性由下層的 SC 測試保證；本頁只做委派
+與呈現。
 """
 
 # ==== 原生（標準庫） ====
@@ -22,17 +24,21 @@ from asset_lab.core.constants import (
     ASSET_CATEGORIES,
     DEFAULT_REBALANCE_THRESHOLD,
     HOLDING_KIND,
+    HOUSE_PARAM_KEY,
     PROTOCOL_LEVEL_CODE,
 )
 from asset_lab.core.exceptions import AssetLabError
 from asset_lab.models.holding import HoldingModel
+from asset_lab.models.house import HouseParamModel, HouseParams
 from asset_lab.models.protocol import ProtocolThresholdModel
 from asset_lab.models.target import TargetAllocationModel
 from asset_lab.repositories.holding_repository import HoldingRepository
+from asset_lab.repositories.house_param_repository import HouseParamRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.services.allocation_service import AllocationService
+from asset_lab.services.house_service import HouseService
 from asset_lab.services.protocol_service import ProtocolService
 
 logger = logging.getLogger(__name__)
@@ -81,6 +87,8 @@ def render() -> None:
     allocation_service = container.allocation_service
     protocol_threshold_repo = container.protocol_threshold_repo
     protocol_service = container.protocol_service
+    house_param_repo = container.house_param_repo
+    house_service = container.house_service
 
     try:
         _render_holdings(holding_repo=holding_repo)
@@ -88,6 +96,10 @@ def render() -> None:
         _render_protocol_thresholds(
             protocol_threshold_repo=protocol_threshold_repo,
             protocol_service=protocol_service,
+        )
+        _render_house_params(
+            house_param_repo=house_param_repo,
+            house_service=house_service,
         )
         _render_drift(
             holding_repo=holding_repo,
@@ -263,6 +275,119 @@ def _render_protocol_thresholds(
                 threshold=ProtocolThresholdModel(level=level, drawdown_threshold=value)
             )
         st.success("已儲存回撤門檻")
+
+
+def _render_house_params(
+    *,
+    house_param_repo: HouseParamRepository,
+    house_service: HouseService,
+) -> None:
+    """買房政策與個人化參數設定。存前驗證，失敗即拒絕、不落 DB。
+
+    個人化參數（金額/收入/年份）初值一律中性 0（尚未設定），真實值僅由使用者
+    於此頁輸入後落 DB，程式碼不內建任何個人化預設數字。
+    """
+    st.subheader("買房參數")
+    current = house_service.effective_params(stored=house_param_repo.read_params())
+
+    target_total_price = st.number_input(
+        "目標總價（TWD）",
+        value=float(current.target_total_price),
+        min_value=0.0,
+        step=10000.0,
+        format="%.0f",
+        key="house_target_total_price",
+    )
+    target_year = st.number_input(
+        "目標購屋年份",
+        value=int(current.target_year),
+        min_value=0,
+        step=1,
+        key="house_target_year",
+    )
+    monthly_after_tax_income = st.number_input(
+        "家庭稅後月收（TWD）",
+        value=float(current.monthly_after_tax_income),
+        min_value=0.0,
+        step=1000.0,
+        format="%.0f",
+        key="house_monthly_after_tax_income",
+    )
+    income_threshold = st.number_input(
+        "收入門檻（TWD/月）",
+        value=float(current.income_threshold),
+        min_value=0.0,
+        step=1000.0,
+        format="%.0f",
+        key="house_income_threshold",
+    )
+    cash_floor = st.number_input(
+        "現金地板（TWD）",
+        value=float(current.cash_floor),
+        min_value=0.0,
+        step=10000.0,
+        format="%.0f",
+        key="house_cash_floor",
+    )
+    down_payment_ratio = st.number_input(
+        "自備比率（%）",
+        value=float(current.down_payment_ratio),
+        min_value=0.0,
+        max_value=100.0,
+        step=1.0,
+        key="house_down_payment_ratio",
+    )
+    payment_cap_ratio = st.number_input(
+        "月付上限比率（%）",
+        value=float(current.payment_cap_ratio),
+        min_value=0.0,
+        max_value=100.0,
+        step=1.0,
+        key="house_payment_cap_ratio",
+    )
+    test_annual_rate = st.number_input(
+        "驗算利率（年化%）",
+        value=float(current.test_annual_rate),
+        min_value=0.0,
+        step=0.1,
+        key="house_test_annual_rate",
+    )
+    loan_years = st.number_input(
+        "貸款年限（年）",
+        value=int(current.loan_years),
+        min_value=1,
+        step=1,
+        key="house_loan_years",
+    )
+
+    if st.button("儲存買房參數"):
+        candidate = HouseParams(
+            target_total_price=target_total_price,
+            target_year=int(target_year),
+            monthly_after_tax_income=monthly_after_tax_income,
+            income_threshold=income_threshold,
+            cash_floor=cash_floor,
+            down_payment_ratio=down_payment_ratio,
+            payment_cap_ratio=payment_cap_ratio,
+            test_annual_rate=test_annual_rate,
+            loan_years=int(loan_years),
+        )
+        house_service.validate_params(params=candidate)
+        for key, value in (
+            (HOUSE_PARAM_KEY.TARGET_TOTAL_PRICE, candidate.target_total_price),
+            (HOUSE_PARAM_KEY.TARGET_YEAR, float(candidate.target_year)),
+            (HOUSE_PARAM_KEY.MONTHLY_AFTER_TAX_INCOME, candidate.monthly_after_tax_income),
+            (HOUSE_PARAM_KEY.INCOME_THRESHOLD, candidate.income_threshold),
+            (HOUSE_PARAM_KEY.CASH_FLOOR, candidate.cash_floor),
+            (HOUSE_PARAM_KEY.DOWN_PAYMENT_RATIO, candidate.down_payment_ratio),
+            (HOUSE_PARAM_KEY.PAYMENT_CAP_RATIO, candidate.payment_cap_ratio),
+            (HOUSE_PARAM_KEY.TEST_ANNUAL_RATE, candidate.test_annual_rate),
+            (HOUSE_PARAM_KEY.LOAN_YEARS, float(candidate.loan_years)),
+        ):
+            house_param_repo.upsert_param(
+                param=HouseParamModel(param_key=key, param_value=value)
+            )
+        st.success("已儲存買房參數")
 
 
 def _render_drift(

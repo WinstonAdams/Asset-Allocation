@@ -119,6 +119,71 @@ class PROTOCOL_THRESHOLDS_TABLE:
     DRAWDOWN_THRESHOLD = "drawdown_threshold"
 
 
+class HOUSE_PARAM_KEY:
+    """買房政策與個人化參數鍵（house_params 表 param_key 值域）。
+
+    個人化參數（金額/收入/時點）攸關使用者實際財務狀況；政策方法論比率
+    （自備比率/月付上限比率/驗算利率/貸款年限）為財務規劃通則，非個人化資訊，
+    可保留具體預設值（見 HOUSE_PARAM_DEFAULTS）。
+    """
+
+    TARGET_TOTAL_PRICE = "target_total_price"
+    TARGET_YEAR = "target_year"
+    MONTHLY_AFTER_TAX_INCOME = "monthly_after_tax_income"
+    INCOME_THRESHOLD = "income_threshold"
+    CASH_FLOOR = "cash_floor"
+    DOWN_PAYMENT_RATIO = "down_payment_ratio"
+    PAYMENT_CAP_RATIO = "payment_cap_ratio"
+    TEST_ANNUAL_RATE = "test_annual_rate"
+    LOAN_YEARS = "loan_years"
+
+
+class HOUSE_PARAM_DEFAULTS:
+    """effective_params 缺鍵時的中性補值。
+
+    個人化參數（金額/收入/時點）一律為 0，代表「尚未設定」的中性姿態，不洩漏
+    任何真實財務數字；政策方法論比率為財務規劃通則預設值，非個人化資訊。
+    """
+
+    TARGET_TOTAL_PRICE = 0.0
+    TARGET_YEAR = 0
+    MONTHLY_AFTER_TAX_INCOME = 0.0
+    INCOME_THRESHOLD = 0.0
+    CASH_FLOOR = 0.0
+    DOWN_PAYMENT_RATIO = 33.0
+    PAYMENT_CAP_RATIO = 35.0
+    TEST_ANNUAL_RATE = 2.5
+    LOAN_YEARS = 30
+
+
+class HOUSE_TRIGGER:
+    """買房觸發條件鍵。定錨與認知為使用者手動勾選的主觀條件；其餘三條為客觀自動判定。"""
+
+    ANCHOR = "anchor"
+    INCOME = "income"
+    DOWN_PAYMENT = "down_payment"
+    PAYMENT = "payment"
+    COGNITION = "cognition"
+    ALL = (ANCHOR, INCOME, DOWN_PAYMENT, PAYMENT, COGNITION)
+    SUBJECTIVE = (ANCHOR, COGNITION)
+
+
+class HOUSE_PARAMS_TABLE:
+    """買房參數設定資料表結構。param_key 為主鍵，param_value 統一以 REAL 儲存。"""
+
+    TABLE_NAME = "house_params"
+    PARAM_KEY = "param_key"
+    PARAM_VALUE = "param_value"
+
+
+class SUBJECTIVE_TRIGGERS_TABLE:
+    """主觀觸發勾選狀態資料表結構。trigger_key 為主鍵，checked 以 0/1 儲存。"""
+
+    TABLE_NAME = "subjective_triggers"
+    TRIGGER_KEY = "trigger_key"
+    CHECKED = "checked"
+
+
 @dataclass(frozen=True)
 class ProtocolLevelSpec:
     """單一協定等級的展示規格（必做/禁止結構化編碼）。

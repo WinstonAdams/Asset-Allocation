@@ -30,14 +30,17 @@ from streamlit.errors import StreamlitSecretNotFoundError
 # ==== 專案內部 ====
 from asset_lab.core.constants import PROTOCOL_DOC_RELATIVE_PATH
 from asset_lab.repositories.holding_repository import HoldingRepository
+from asset_lab.repositories.house_param_repository import HouseParamRepository
 from asset_lab.repositories.protocol_doc_repository import ProtocolDocRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
+from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
 from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.data_io_service import DataIoService
+from asset_lab.services.house_service import HouseService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 from asset_lab.services.period_service import PeriodService
 from asset_lab.services.protocol_service import ProtocolService
@@ -74,6 +77,8 @@ class Container:
     schema_repo: SchemaRepository
     protocol_threshold_repo: ProtocolThresholdRepository
     protocol_doc_repo: ProtocolDocRepository
+    house_param_repo: HouseParamRepository
+    subjective_trigger_repo: SubjectiveTriggerRepository
     return_service: ReturnService
     allocation_service: AllocationService
     period_service: PeriodService
@@ -81,6 +86,7 @@ class Container:
     monthly_input_service: MonthlyInputService
     protocol_service: ProtocolService
     affordability_service: AffordabilityService
+    house_service: HouseService
 
 
 def parse_allowed_emails(raw: object) -> set[str]:
@@ -128,6 +134,8 @@ def build_container(*, conn: "Connection") -> Container:
     schema_repo = SchemaRepository(conn=conn)
     protocol_threshold_repo = ProtocolThresholdRepository(conn=conn)
     protocol_doc_repo = ProtocolDocRepository(doc_path=_PROTOCOL_DOC_PATH)
+    house_param_repo = HouseParamRepository(conn=conn)
+    subjective_trigger_repo = SubjectiveTriggerRepository(conn=conn)
 
     return Container(
         holding_repo=holding_repo,
@@ -136,6 +144,8 @@ def build_container(*, conn: "Connection") -> Container:
         schema_repo=schema_repo,
         protocol_threshold_repo=protocol_threshold_repo,
         protocol_doc_repo=protocol_doc_repo,
+        house_param_repo=house_param_repo,
+        subjective_trigger_repo=subjective_trigger_repo,
         return_service=ReturnService(),
         allocation_service=AllocationService(),
         period_service=PeriodService(),
@@ -145,6 +155,7 @@ def build_container(*, conn: "Connection") -> Container:
         ),
         protocol_service=ProtocolService(),
         affordability_service=AffordabilityService(),
+        house_service=HouseService(),
     )
 
 
