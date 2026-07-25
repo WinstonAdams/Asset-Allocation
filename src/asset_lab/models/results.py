@@ -89,6 +89,34 @@ class AffordabilityResult(BaseModel):
     monthly_payment_cap: float | None = None
 
 
+class TriggerCondition(BaseModel):
+    """單一觸發條件判定結果（BR-5）。
+
+    kind 為 'subjective'（定錨/認知，取自使用者勾選）或 'objective'（收入/自備/
+    月付，由參數與資產現況判定）。actual/required 供客觀條件呈現缺口；required
+    為 None 代表對應個人化參數尚未設定（如收入門檻/現金地板/目標總價為 0），
+    區別於「已設定但未達標」的具體門檻值。主觀條件的 actual/required 恆為 None。
+    """
+
+    key: str
+    kind: str
+    met: bool
+    actual: float | None = None
+    required: float | None = None
+
+
+class TriggerChecklist(BaseModel):
+    """五條觸發條件彙總（BR-5）。
+
+    conditions 恆列五條（分母固定為 5，未設定的條件仍計入清單並列為未達成，
+    不縮減分母）。all_met 全數成立才對應「可啟動購屋」，呈現文案由頁面決定。
+    """
+
+    conditions: list[TriggerCondition]
+    met_count: int
+    all_met: bool
+
+
 class BucketProgress(BaseModel):
     """自備款 bucket 進度（BR-3/4/6）。
 

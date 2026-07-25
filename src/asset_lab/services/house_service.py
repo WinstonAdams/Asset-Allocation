@@ -1,8 +1,8 @@
-"""買房參數的合併驗證、自備款 bucket 口徑與進度評估（純運算）。
+"""買房參數的合併驗證、自備款 bucket 口徑、進度評估與觸發條件檢核（純運算）。
 
-本檔涵蓋買房參數持久化（已存值 + 中性預設合併、落庫前驗證）與自備款 bucket
-（購屋標記項目市值合計、目標進度、組成序列風險提示）兩條垂直切片；觸發條件
-檢核、總覽摘要等買房評估邏輯由後續擴充補上同一個 HouseService。
+本檔涵蓋買房參數持久化（已存值 + 中性預設合併、落庫前驗證）、自備款 bucket
+（購屋標記項目市值合計、目標進度、組成序列風險提示）與觸發條件檢核（BR-5 五條
+混合判定）三條垂直切片；總覽摘要等買房評估邏輯由後續擴充補上同一個 HouseService。
 """
 
 # ==== 原生（標準庫） ====
@@ -17,12 +17,19 @@ from asset_lab.core.constants import (
     HOLDING_PURPOSE,
     HOUSE_PARAM_DEFAULTS,
     HOUSE_PARAM_KEY,
+    HOUSE_TRIGGER,
 )
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.holding import HoldingModel
-from asset_lab.models.house import HouseParamModel, HouseParams
+from asset_lab.models.house import HouseParamModel, HouseParams, SubjectiveTriggerModel
 from asset_lab.models.record import MonthlyRecordModel
-from asset_lab.models.results import BucketCompositionWarning, BucketProgress
+from asset_lab.models.results import (
+    AffordabilityResult,
+    BucketCompositionWarning,
+    BucketProgress,
+    TriggerChecklist,
+    TriggerCondition,
+)
 
 # 比率型參數（自備比率、月付上限比率）的合法域為開區間：恰為 0（等同未設定/無自備）
 # 或 100（等同無貸款）皆非有效的政策比率，須嚴格介於兩端點之間。
@@ -150,8 +157,37 @@ class HouseService:
             購屋標記項目現值合計（TWD）。
         """
         house_holdings = [h for h in holdings if h.purpose == HOLDING_PURPOSE.HOUSE]
-        values = self._current_house_values(
-            house_holdings=house_holdings, month_records=month_records
+        values = self._current_market_values(
+            holdings=house_holdings, month_records=month_records
+        )
+        return sum(values.values())
+
+    def cash_reserve_value(
+        self,
+        *,
+        month_records: list[MonthlyRecordModel],
+        holdings: list[HoldingModel],
+    ) -> float:
+        """現金地板比較用的預備金：未標記購屋且分類為活存/定存的最新月市值合計（BR-4）。
+
+        購屋標記項目一律不計入（無論金額多寡）；一般用途但非活存/定存分類（如
+        股票）亦不計入。此口徑與 bucket_value 互斥（同一項目不可能同時計入兩者），
+        現金地板本身永遠不計入 bucket。
+
+        Args:
+            month_records: 全部項目的月度紀錄（可橫跨多月，供判定「是否曾有紀錄」）。
+            holdings: 項目主檔清單，用於篩選一般用途的活存/定存項目。
+
+        Returns:
+            一般用途活存＋定存現值合計（TWD）。
+        """
+        cash_holdings = [
+            h
+            for h in holdings
+            if h.purpose == HOLDING_PURPOSE.GENERAL and h.category in _CASH_CATEGORIES
+        ]
+        values = self._current_market_values(
+            holdings=cash_holdings, month_records=month_records
         )
         return sum(values.values())
 
@@ -221,8 +257,8 @@ class HouseService:
         Returns:
             bucket 組成警示結果模型。
         """
-        values = self._current_house_values(
-            house_holdings=house_holdings, month_records=month_records
+        values = self._current_market_values(
+            holdings=house_holdings, month_records=month_records
         )
         non_cash_value = sum(
             values.get(holding.holding_id, 0.0)
@@ -236,13 +272,101 @@ class HouseService:
             non_cash_value=non_cash_value,
         )
 
-    def _current_house_values(
+    def assess_triggers(
         self,
         *,
-        house_holdings: list[HoldingModel],
+        params: HouseParams,
+        bucket_value: float,
+        cash_reserve_value: float,
+        forward_result: AffordabilityResult,
+        subjective: list[SubjectiveTriggerModel],
+    ) -> TriggerChecklist:
+        """五條觸發條件混合檢核：全部成立才可啟動購屋（BR-5）。
+
+        定錨／認知取自使用者手動勾選（未曾勾選視為未達成）；收入／自備／月付為
+        客觀數值判定，恰等於門檻一律視為成立（≥ 或 ≤ 含等號）。任一對應的個人化
+        參數未設定（中性值 0）時，該條 fail-closed 視為未達成——不因未設定值恰好
+        使不等式恆真而誤判達標：收入門檻為 0 時收入條件不成立；目標總價為 0 時
+        自備與月付條件皆不成立；現金地板為 0 時自備條件（預備金半邊）不成立；
+        月收未設定使月付占比為 None 時月付條件不成立。五條恆列入清單、分母固定
+        為 5，不因未設定而縮減。
+
+        Args:
+            params: 有效買房參數。
+            bucket_value: 自備款 bucket 現值（TWD），由 bucket_value() 算得。
+            cash_reserve_value: 一般用途現金預備金現值（TWD），由 cash_reserve_value() 算得。
+            forward_result: 以目標總價正算的可負擔性結果，供月付占比判定。
+            subjective: 已存的主觀觸發勾選狀態（可能不完整）。
+
+        Returns:
+            五條觸發條件彙總結果模型。
+        """
+        checked = {row.trigger_key: row.checked for row in subjective}
+
+        target_amount = params.target_total_price * params.down_payment_ratio / 100.0
+        down_payment_met = (
+            params.target_total_price > 0
+            and params.cash_floor > 0
+            and bucket_value >= target_amount
+            and cash_reserve_value >= params.cash_floor
+        )
+        income_met = (
+            params.income_threshold > 0
+            and params.monthly_after_tax_income >= params.income_threshold
+        )
+        payment_met = (
+            params.target_total_price > 0
+            and forward_result.income_share_pct is not None
+            and forward_result.income_share_pct <= params.payment_cap_ratio
+        )
+
+        conditions = [
+            TriggerCondition(
+                key=HOUSE_TRIGGER.ANCHOR,
+                kind="subjective",
+                met=checked.get(HOUSE_TRIGGER.ANCHOR, False),
+            ),
+            TriggerCondition(
+                key=HOUSE_TRIGGER.INCOME,
+                kind="objective",
+                met=income_met,
+                actual=params.monthly_after_tax_income,
+                required=params.income_threshold if params.income_threshold > 0 else None,
+            ),
+            TriggerCondition(
+                key=HOUSE_TRIGGER.DOWN_PAYMENT,
+                kind="objective",
+                met=down_payment_met,
+                actual=bucket_value,
+                required=target_amount if params.target_total_price > 0 else None,
+            ),
+            TriggerCondition(
+                key=HOUSE_TRIGGER.PAYMENT,
+                kind="objective",
+                met=payment_met,
+                actual=forward_result.income_share_pct,
+                required=params.payment_cap_ratio if params.target_total_price > 0 else None,
+            ),
+            TriggerCondition(
+                key=HOUSE_TRIGGER.COGNITION,
+                kind="subjective",
+                met=checked.get(HOUSE_TRIGGER.COGNITION, False),
+            ),
+        ]
+        met_count = sum(1 for condition in conditions if condition.met)
+        return TriggerChecklist(
+            conditions=conditions,
+            met_count=met_count,
+            all_met=met_count == len(conditions),
+        )
+
+    def _current_market_values(
+        self,
+        *,
+        holdings: list[HoldingModel],
         month_records: list[MonthlyRecordModel],
     ) -> dict[int, float]:
-        """算各購屋標記項目在最新月快照的現值，供 bucket 合計與組成細分共用同一口徑。
+        """算各項目在最新月快照的現值，供 bucket 合計、組成細分與預備金口徑共用。
 
         項目完全無任何月度紀錄時以初始市值補（尚未有市場波動的起始部位）；項目在
         最新月有紀錄時採該筆市值（留空視為未更新、不貢獻，即 0，與 AllocationService
@@ -250,7 +374,7 @@ class HouseService:
         「從無任何月度紀錄」的情形，不回退已出清項目的初始市值。
 
         Args:
-            house_holdings: 購屋標記項目主檔清單。
+            holdings: 項目主檔清單（呼叫端已依用途/分類篩選）。
             month_records: 全部項目的月度紀錄（可橫跨多月）。
 
         Returns:
@@ -263,7 +387,7 @@ class HouseService:
         latest_year_month = self._latest_year_month(month_records)
 
         values: dict[int, float] = {}
-        for holding in house_holdings:
+        for holding in holdings:
             records = records_by_holding.get(holding.holding_id, [])
             if not records:
                 values[holding.holding_id] = holding.initial_market_value or 0.0
