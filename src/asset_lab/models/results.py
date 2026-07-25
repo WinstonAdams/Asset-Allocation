@@ -89,6 +89,40 @@ class AffordabilityResult(BaseModel):
     monthly_payment_cap: float | None = None
 
 
+class BucketProgress(BaseModel):
+    """自備款 bucket 進度（BR-3/4/6）。
+
+    target_amount＝目標總價×自備比率；gap 不為負值（bucket 超標時為 0）；
+    progress_pct 以 target_amount 為分母，target_amount 為 0（目標未設定）時為 None，
+    超標時呈現實際值、不封頂 100%。years_to_target 為 target_year − current_year，
+    target_year 未設定（0）時為 None。reached_target_year 為 True 時
+    （目標年已到或已過）required_annual_accumulation 為 None，避免除以零；
+    target_year 未設定時兩者皆為中性姿態（reached_target_year=False、
+    required_annual_accumulation=None）。
+    """
+
+    bucket_value: float
+    target_amount: float
+    gap: float
+    progress_pct: float | None = None
+    years_to_target: int | None = None
+    reached_target_year: bool
+    required_annual_accumulation: float | None = None
+
+
+class BucketCompositionWarning(BaseModel):
+    """bucket 組成序列風險提示（BR-8/D15）。只提示、不強制，不阻擋任何操作。
+
+    has_non_cash 為 bucket 含非活存/定存分類資產（以現值判定，已出清的非現金項目
+    不觸發）；intensified 為距目標購屋年 ≤5 年（含已到/已過）時的強化提示，
+    目標年未設定時一律不強化。non_cash_value 為非活存/定存部分市值合計，供呈現。
+    """
+
+    has_non_cash: bool
+    intensified: bool
+    non_cash_value: float
+
+
 class ProtocolStatus(BaseModel):
     """大跌行為協定等級判定結果（回撤 → 等級）。
 
