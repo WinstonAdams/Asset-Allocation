@@ -36,6 +36,7 @@ from asset_lab.repositories.protocol_threshold_repository import ProtocolThresho
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
+from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.monthly_input_service import MonthlyInputService
@@ -152,6 +153,7 @@ def test_build_container_wires_services() -> None:
     assert isinstance(container.data_io_service, DataIoService)
     assert isinstance(container.monthly_input_service, MonthlyInputService)
     assert isinstance(container.protocol_service, ProtocolService)
+    assert isinstance(container.affordability_service, AffordabilityService)
     # 月度錄入服務的 I/O 委派接上容器內的 Repository 實例
     assert container.monthly_input_service._record_repo is container.record_repo
     assert container.monthly_input_service._holding_repo is container.holding_repo

@@ -71,6 +71,24 @@ class DriftRow(BaseModel):
     needs_rebalance: bool
 
 
+class AffordabilityResult(BaseModel):
+    """可負擔性試算輸出（本息均攤引擎）。
+
+    direction 為 'forward'（由目標總價正算月付）或 'reverse'（由月付上限反推可負擔
+    總價）；未適用於該方向的欄位為 None（如 forward 結果的 affordable_total_price）。
+    金額為 TWD，income_share_pct 為百分比（0–100）。
+    """
+
+    direction: str
+    monthly_payment: float | None = None
+    income_share_pct: float | None = None
+    loan_amount: float | None = None
+    down_payment: float | None = None
+    affordable_total_price: float | None = None
+    loan_ceiling: float | None = None
+    monthly_payment_cap: float | None = None
+
+
 class ProtocolStatus(BaseModel):
     """大跌行為協定等級判定結果（回撤 → 等級）。
 

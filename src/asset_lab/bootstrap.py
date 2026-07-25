@@ -35,6 +35,7 @@ from asset_lab.repositories.protocol_threshold_repository import ProtocolThresho
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
+from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.monthly_input_service import MonthlyInputService
@@ -79,6 +80,7 @@ class Container:
     data_io_service: DataIoService
     monthly_input_service: MonthlyInputService
     protocol_service: ProtocolService
+    affordability_service: AffordabilityService
 
 
 def parse_allowed_emails(raw: object) -> set[str]:
@@ -142,6 +144,7 @@ def build_container(*, conn: "Connection") -> Container:
             holding_repo=holding_repo, record_repo=record_repo
         ),
         protocol_service=ProtocolService(),
+        affordability_service=AffordabilityService(),
     )
 
 
