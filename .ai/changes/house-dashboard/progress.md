@@ -32,7 +32,7 @@
 |------|------|------|
 | 3-1 程式碼清理 | 完成 | Checker 57 條（HIGH 6/MEDIUM 50/LOW 1）+ 人工掃描；SAFE 項全數修正（6 條 `#` Change 級編號註解 + 17 處 docstring BR-N/AD-N/SC-N 引用 + affordability_service.py 過時 SC-PENDING-001→改寫；schema_repository.py 補 cursor 型別提示）；CAREFUL/SUGGEST 依主 AI 決策暫緩不動（測試固定資料重複為慣例、house/overview 編排重疊為 design.md §8 已知限制、3 個 function_too_large + 1 個 file_too_long 留待未來）；修正後 pytest 421 passed、ruff 全過、checker 複跑 HIGH 降至 0 |
 | 3-2 安全審查 | 跳過 | 本次變更未涉及認證/付款；個人財務數值走既有私人參數出庫機制與 fail-closed 中性預設，比照既有 holdings/protocol_thresholds 慣例不觸發 |
-| 3-3 規則符合度審查 | 未開始 | 工程準則全面符合度檢查（因規模達門檻故必做）。原已知待修的 affordability_service.py 過時 SC 註解已於 3-1 一併修正 |
+| 3-3 規則符合度審查 | 完成 | 676 條 checker 原始發現逐條核對 baseline，675 條為既有慣例誤判排除，2 條真違規已修正：HoldingModel 預設值改字面值移除 constants import；bucket_composition_warning 的 purpose 篩選邏輯移入 Service（比照 bucket_value()）。修正後 pytest 421 passed、ruff 全過、checker HIGH 降至 0。核准判定：通過 |
 | 3-4 行為對映審查 | 未開始 | AI 比對 SC 描述 vs test 內容 |
 | 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
 

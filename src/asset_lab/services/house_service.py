@@ -241,7 +241,7 @@ class HouseService:
     def bucket_composition_warning(
         self,
         *,
-        house_holdings: list[HoldingModel],
+        holdings: list[HoldingModel],
         month_records: list[MonthlyRecordModel],
         years_to_target: int | None,
     ) -> BucketCompositionWarning:
@@ -251,13 +251,15 @@ class HouseService:
         剩餘年數未知，一律不強化；已到/已過目標年（≤0）視為比剩 5 年更緊迫，同樣強化。
 
         Args:
-            house_holdings: 購屋標記項目主檔清單（呼叫端已篩選 purpose=house）。
+            holdings: 項目主檔清單，本方法內部篩選 purpose=house（比照 bucket_value，
+                呼叫端不需預先篩選）。
             month_records: 全部項目的月度紀錄（可橫跨多月，供判定現值口徑）。
             years_to_target: 距目標購屋年剩餘年數，未設定目標年時為 None。
 
         Returns:
             bucket 組成警示結果模型。
         """
+        house_holdings = [h for h in holdings if h.purpose == HOLDING_PURPOSE.HOUSE]
         values = self._current_market_values(
             holdings=house_holdings, month_records=month_records
         )

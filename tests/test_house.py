@@ -344,7 +344,7 @@ class TestBucketCompositionWarning:
         ]
 
         warning = service.bucket_composition_warning(
-            house_holdings=house_holdings, month_records=month_records, years_to_target=8
+            holdings=house_holdings, month_records=month_records, years_to_target=8
         )
 
         assert warning.has_non_cash is True
@@ -365,7 +365,7 @@ class TestBucketCompositionWarning:
         month_records = [_record(1, "2026-06", 400_000.0)]
 
         warning = service.bucket_composition_warning(
-            house_holdings=house_holdings,
+            holdings=house_holdings,
             month_records=month_records,
             years_to_target=years_to_target,
         )
@@ -381,7 +381,7 @@ class TestBucketCompositionWarning:
         month_records = [_record(1, "2026-06", 400_000.0)]
 
         warning = service.bucket_composition_warning(
-            house_holdings=house_holdings,
+            holdings=house_holdings,
             month_records=month_records,
             years_to_target=years_to_target,
         )
@@ -402,7 +402,7 @@ class TestBucketCompositionWarning:
         ]
 
         warning = service.bucket_composition_warning(
-            house_holdings=house_holdings, month_records=month_records, years_to_target=8
+            holdings=house_holdings, month_records=month_records, years_to_target=8
         )
 
         assert warning.has_non_cash is False
@@ -416,7 +416,7 @@ class TestBucketCompositionWarning:
         month_records = [_record(1, "2026-06", 400_000.0)]
 
         warning = service.bucket_composition_warning(
-            house_holdings=house_holdings, month_records=month_records, years_to_target=None
+            holdings=house_holdings, month_records=month_records, years_to_target=None
         )
 
         assert warning.has_non_cash is True

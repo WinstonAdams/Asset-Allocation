@@ -20,7 +20,7 @@ import streamlit as st
 
 # ==== 專案內部 ====
 from asset_lab.bootstrap import Container
-from asset_lab.core.constants import HOLDING_PURPOSE, HOUSE_TRIGGER, TIMEZONE
+from asset_lab.core.constants import HOUSE_TRIGGER, TIMEZONE
 from asset_lab.core.exceptions import AssetLabError
 from asset_lab.models.house import SubjectiveTriggerModel
 from asset_lab.models.record import MonthlyRecordModel
@@ -89,9 +89,8 @@ def render() -> None:
             params=params,
             current_year=today_in_timezone(TIMEZONE).year,
         )
-        house_holdings = [h for h in holdings if h.purpose == HOLDING_PURPOSE.HOUSE]
         warning = house_service.bucket_composition_warning(
-            house_holdings=house_holdings,
+            holdings=holdings,
             month_records=month_records,
             years_to_target=progress.years_to_target,
         )

@@ -95,6 +95,91 @@ Baseline 命中：0 條（全數為本 Change 新增）
 
 ## 3-3 規則符合度審查
 
+審查範圍：23 個檔案（app.py 1、src/asset_lab 11、tests/ 8、views/ 3），88afa9e..HEAD（與 3-1 掃描範圍一致；docs/\*.md 與 .ai/changes/\* 非 Python，不列入規則審查）
+核准判定：**通過**（第二段已修正僅有的 1 條 HIGH + 1 條 MEDIUM，複跑驗證全過，詳見下方「執行結果」）
+
+### 自動掃描
+
+**Diff-base 偏離說明（先於命令交代）**：標準命令的 `--diff-base origin/main` 在本次執行時已失真——`git fetch origin main` 後 `origin/main` 落在 `1a1f4c4`（本 Change 3-2 skip 標記提交），僅落後 HEAD 一個 commit（`dbdad1b`，3-1 清理），因為此 repo 有「Phase 邊界順手 push 到 GitHub 備份」的習慣，origin/main 並不代表「本 Change 開始前」的基準。若照字面用 `origin/main`，`git diff` 只會顯示 3-1 清理那 14 個檔案的 115 行改動，完全漏掉 Phase 2 八個 Task 產出的全部業務程式碼——不符合 3-3「工程準則全面符合度審查」的職責範圍。故改以 `88afa9e`（house-dashboard Change 的真正起點，1-1 提案提交的父 commit，`git merge-base --is-ancestor` 已驗證，且與 3-1 review.md 記載的掃描基準完全一致）作為實際 diff-base，兩者皆記錄於此供交叉核對。
+
+Checker 命令（實際採用）：`python .claude/skills/spec-driven-flow/scripts/checkers/runner.py --phase 3-3 --project-dir . --diff-base 88afa9e --json --output .ai/changes/house-dashboard/.cache/checker_3_3.json`
+退出碼：0（正常完成）
+總違規：676 條（CRITICAL: 0 / HIGH: 316 / MEDIUM: 35 / LOW: 325）
+Baseline 命中：0 條（尚未對本專案建立 3-3 baseline）
+完整報告：`.ai/changes/house-dashboard/.cache/checker_3_3.json`
+
+**重要提醒**：676 條中經逐類復核，**絕大多數（約 675 條）為 checker 規則模板與本專案既有架構不匹配的偽陽性**，而非本 Change 引入的新違規——詳見下方逐條復核。真正需要修正的僅 1 條（HIGH，見「規則審查發現」）。
+
+### Checker 命中逐類復核
+
+以下依 rule_id 分類復核（非逐條，因同類問題在本 Change 內大量重複、成因相同；已對每類抽樣核對 baseline 既有程式碼佐證判定）：
+
+- **`no_runtime_constants_access`（257）／`service_no_runtime_constants`（30）／`repository_no_runtime_constants`（4）／`no_module_level_constants_alias`（8）—— checker 已標，復核判定：不違規（既有架構慣例，非本 Change 新增偏離）**。
+  抽樣核對：`src/asset_lab/repositories/holding_repository.py:148`、`schema_repository.py:139/141`、`services/data_io_service.py:117/174/175`、`services/house_service.py`（27 條）、`views/house.py:90/92/48`、`views/overview.py:132`、`views/settings.py:407-415`、`house_param_repository.py:19-21`、`subjective_trigger_repository.py:19-21` 等生產碼命中，其餘集中於 tests/（fixture 資料建構直接引用 constants，非 runtime 環境值）。
+  逐一比對 baseline（88afa9e 前）同構寫法：`holding_repository.py` 既有 `_COLUMNS = (HOLDINGS_TABLE.HOLDING_ID, ...)`（模組級常數 tuple）、`protocol_threshold_repository.py` 既有 `_TABLE = PROTOCOL_THRESHOLDS_TABLE.TABLE_NAME` 別名、`views/input.py` 既有 `from constants import TIMEZONE` 並於函式 body 直接用 `today_in_timezone(TIMEZONE)`、`views/settings.py::_render_protocol_thresholds` 既有於函式 body 直接組 `(PROTOCOL_LEVEL_CODE.L1, l1), (...)` tuple 供 upsert——本 Change 的 `house_param_repository.py`/`house_service.py`/`views/house.py`/`views/settings.py::_render_house_params` 等新增程式碼與這些既有寫法逐行同構。
+  本專案首次 3-3 審查（`.ai/archive/initial-build/review.md`）已對此類 pattern 做出明確裁決：「Repository 的 `from constants import *_TABLE` 為模組級 schema 常數定義用於組 SQL 字串、非 runtime 環境差異值……本專案無 `--env` 多環境、表名為全域固定常數，且 SQL 模板須在模組級組裝，判定可接受、非違規」。本 Change 完全沿用同一模式，判定同樣不違規。
+  Checker 對應：checker 已標，復核後不採信（規則模板針對 utils_v2/多環境 RPA 專案設計，與本專案既定架構不符；非新增偏離）。
+
+- **`docstring_required`（108，全數在 tests/）／`ANN201`（99）／`ANN001`（88）／`ANN202`（15）／`ANN204`（8）／`ANN003`（1）—— checker 已標，復核判定：不違規（測試檔既有慣例）**。
+  抽樣：test 方法無 docstring（僅 class docstring + `@pytest.mark.scenario` + inline `#` WHY 註解）、`def test_x(self, service):` fixture 參數無型別、內部 helper class `__init__` 無回傳型別註解。
+  核對 baseline `tests/test_allocation.py`（`class TestCumulativeTwrSeries: """...(SC-028)"""` + 裸 `def test_sc028_...(self):`）、`tests/test_data_io.py`（`def test_sc031_...(self, service):` fixture 參數同樣無型別）——本 Change 新增測試與此 100% 一致，非新增偏離。且本專案 `pyproject.toml` 的 ruff `[tool.ruff.lint] select = ["E","F","I","UP","B"]` 本就不含 `ANN` 系列，checker 是額外用 ruff ANN 規則獨立掃描、與專案自身工具鏈設定脫鉤。
+  Checker 對應：checker 已標，復核後不採信（與全專案 100% 一致的既有測試慣例；不因本 Change 而發生新退步）。
+
+- **`docstring_returns_section`（35，生產碼 14 條 + tests 21 條）—— checker 已標，復核判定：不違規**。
+  生產碼命中皆為單行 prose docstring（如 `_row_to_model`: 「把買房參數 row tuple 組回 HouseParamModel。」、`read_params`: 「讀全部已保存的買房參數，可能不完整（0～9 筆，任意順序）。」），已用一句話帶出回傳語意，未用 `Returns:` 標頭。核對 baseline `protocol_threshold_repository.py`（`house_param_repository.py` 明確依 AD-4「比照 ProtocolThresholdRepository」建構）之 `_row_to_model`/`read_thresholds()` 逐字同構，同樣是單行 prose、無 `Returns:` 標頭——本專案對「簡單函式」的既定慣例即是單行 prose 而非強制 Google-style 區塊，`initial-build` 3-3 審查已認定全專案「docstring 完整」（未要求補 Returns: 標頭）。
+  Checker 對應：checker 已標，復核後不採信（比對同構前例，屬既有 docstring 風格慣例）。
+
+- **`import_block_format`（10）—— checker 已標，復核判定：不違規（checker 規則模板誤判）**。
+  訊息為「缺少 import 區塊註解：`# ==== AsiaYo 專案內部 ====`」。本專案（含全部 baseline 檔案）一律使用 `# ==== 專案內部 ====`（不含 "AsiaYo" 字樣，因本專案為 Winston 個人專案，非 AsiaYo 公司專案）——這是全庫 100% 一致的既有慣例，checker 規則模板誤把 `05-reference.md` 範例中的字面文字 "AsiaYo" 當成強制字串比對，與本專案身分不符。
+  Checker 對應：checker 已標，復核後不採信（checker 規則校準問題，非本 Change 或本專案的程式碼違規；建議另行反映給 checker 維護者調整比對邏輯為結構性而非字面 "AsiaYo" 比對，不需、也不宜逐檔加 noqa——這是全庫皆有的既有格式，噪音成本過高）。
+
+- **`model_naming_convention`（6）：`HouseParams`／`TriggerCondition`／`TriggerChecklist`／`BucketProgress`／`BucketCompositionWarning`／`HouseSummary` —— checker 已標，復核判定：不違規**。
+  核對 baseline `models/results.py` 既有 `CumulativeTwrPoint`／`AllocationSnapshot`／`NetWorthPoint`／`DriftRow`／`ProtocolStatus`（5 個既有結果類別皆無 `Model`/`Result` 後綴）與 `models/protocol.py` 既有 `ProtocolThresholds`（合併後有效值類別，同樣無後綴）——本專案對「計算結果值物件」的實際命名慣例就是領域名詞直呼，不強制 `XxxResult`/`XxxModel` 後綴（僅持久化列模型如 `HouseParamModel`/`SubjectiveTriggerModel` 遵循 `XxxModel`）。本 Change 6 個新類別與此既定慣例完全一致。
+  Checker 對應：checker 已標，復核後不採信（與 5/6 既有結果類別同構的命名慣例）。
+
+- **`no_stdlib_get_logger`（1）／`event_name_format`（1）／`no_logger_exception`（1）／`note_required`（1）：`views/house.py:36,115` —— checker 已標，復核判定：不違規**。
+  `logger = logging.getLogger(__name__)` + `logger.exception("買房頁渲染失敗")`，checker 期待 structlog + kwargs event-name 契約（04-cross-cutting.md）。核對 baseline **全部 7 個既有 View 檔案**（`data_io.py`/`allocation.py`/`input.py`/`returns.py`/`protocol.py`/`overview.py`/`settings.py`）100% 使用同一寫法：`logging.getLogger(__name__)` 模組頂層宣告 + 唯一 catch 點 `logger.exception("XX頁渲染失敗")`。此為本專案首次 3-3 審查已明確記載的既定偏離（`initial-build` design.md AD-8：「不採 structlog event-name/note/log_type 欄位契約……無 utils_v2 pipeline，硬套形同空轉」），非本 Change 新增。
+  Checker 對應：checker 已標，復核後不採信（AD-8 既定且正當的專案級偏離，与既有 7 個 View 檔案逐字同構）。
+
+- **`root_main_exists`（1）／`src_project_layout_missing`（1）—— checker 已標，復核判定：不違規**。
+  與 `initial-build` 3-3 審查完全相同的既定裁決：本專案為 Streamlit 常駐 App（`app.py` 取代 RPA `main.py`；Page 即 View/Controller，無獨立 `controllers/` 目錄），AD-1/AD-2 已論證此偏離為正當設計，非缺漏。
+  Checker 對應：checker 已標，復核後不採信（與 initial-build 3-3 同一組既定 ADR 偏離）。
+
+### 規則審查發現
+
+#### HIGH
+
+- [HIGH] `src/asset_lab/models/holding.py:9` — `HoldingModel` 違規 import constants
+  問題：`from asset_lab.core.constants import HOLDING_PURPOSE`，用於 `purpose: str = HOLDING_PURPOSE.GENERAL` 欄位預設值。明確違反 `03-data-config.md` §3「Model 與 constants Schema 的關係」：「Model 本身不 import constants（避免耦合）」。
+  復核確認**非既有慣例**：檢查全部既有 `models/*.py`（`protocol.py`/`target.py`/`record.py`/`house.py` 等）與 baseline（88afa9e 前）`models/holding.py`，**無任何 Model 曾 import constants**；`kind: str` 等既有欄位皆無預設值、或用純字面量（`net_investment: float = 0.0`）。本 Change 是此模式的第一次出現，非沿用既有偏離。
+  Checker 對應：checker 已標（`model_no_constants_import`），復核後同意需修（真實違規，非既有慣例、非誤判）。
+  建議修法：Model 改用純字面量預設 `purpose: str = "general"`（與 `net_investment: float = 0.0` 同慣例），移除 constants import；`HOLDING_PURPOSE.GENERAL` 的 SSoT 定義保留在 constants.py，供其餘所有非-Model 程式碼（Service/Repository/View）引用即可，Model 層不需要重複引用同一常數來設預設值。
+
+#### MEDIUM
+
+- [MEDIUM] `views/house.py:92` — Controller 層執行資料篩選（`h.purpose == HOLDING_PURPOSE.HOUSE`）
+  問題：`house_holdings = [h for h in holdings if h.purpose == HOLDING_PURPOSE.HOUSE]` 直接在 View/Controller 內對 `holdings` 做屬性篩選，餵給 `house_service.bucket_composition_warning(house_holdings=...)`。違反 `02-architecture.md` §4 Controller 合約「禁止：對資料結構的細部操作（篩選、轉換、欄位存取、資料合併）」。
+  對照：`HouseService.bucket_value()` 對同一種篩選（`purpose == HOUSE`）是**在 Service 內部**做（house_service.py:160），但 `bucket_composition_warning()` 的介面設計成接收「呼叫端已篩選 purpose=house」的 `house_holdings` 參數（design.md 介面契約與 docstring 皆如此記載），導致同一個篩選邏輯被迫在 View 重複一次、且該次落在錯誤的層級。
+  影響範圍：僅 1 處（`views/house.py:92`）；`views/overview.py` 不需要 `bucket_composition_warning`，未重複此問題。
+  Checker 對應：checker 未報出（checker 在此行只標記 `no_runtime_constants_access`——即 constants 存取，而非本項「Controller 做篩選」的架構層級疑慮；此為人工架構審查獨立發現的語意層問題）。
+  建議修法：讓 `bucket_composition_warning()` 改為接收原始 `holdings: list[HoldingModel]`（比照 `bucket_value` 的介面），內部自行篩選 `purpose == HOLDING_PURPOSE.HOUSE`，View 端直接傳整個 `holdings`，移除 `views/house.py:92` 這行篩選。屬於 Service 介面簽名調整，需同步改 `tests/test_house.py` 中 `bucket_composition_warning` 的呼叫端測試（若測試直接建構已篩選的 house_holdings 傳入）。
+
+### 執行結果（第二段，依主 AI 指示：修正 HIGH + MEDIUM 這 2 條）
+
+- **[HIGH 已修]** `src/asset_lab/models/holding.py`：`purpose: str = HOLDING_PURPOSE.GENERAL` 改為字面值 `purpose: str = "general"`；移除 `from asset_lab.core.constants import HOLDING_PURPOSE` import（第三方套件區塊改回 `# 無`）；docstring 補一句說明「Model 不 import constants（見 03-data-config.md），值與 constants.py 手動保持一致」，避免日後兩處值漂移不被察覺。`HOLDING_PURPOSE.GENERAL` 的 SSoT 定義維持在 constants.py 不變，其餘所有 Service/Repository/View 仍照舊引用該常數。
+
+- **[MEDIUM 已修]** `src/asset_lab/services/house_service.py::bucket_composition_warning`：參數由預先篩選過的 `house_holdings: list[HoldingModel]` 改為原始 `holdings: list[HoldingModel]`，方法內部改為自行執行 `house_holdings = [h for h in holdings if h.purpose == HOLDING_PURPOSE.HOUSE]`（與 `bucket_value()` 的既有做法對稱一致）；docstring 同步更新為「本方法內部篩選 purpose=house，呼叫端不需預先篩選」。
+  連動修正：`views/house.py` 移除呼叫端的 `house_holdings = [h for h in holdings if h.purpose == HOLDING_PURPOSE.HOUSE]` 篩選行，改為直接傳 `holdings=holdings`；因該檔案的 `HOLDING_PURPOSE` 常數自此無其他用途，一併移除其 import。`tests/test_house.py` 的 5 處 `bucket_composition_warning(house_holdings=house_holdings, ...)` 呼叫改為 `bucket_composition_warning(holdings=house_holdings, ...)`（測試本地變數名稱不變，僅 kwarg 名稱隨新介面調整；各測試既有的 fixture holdings 本就已標記 `purpose=HOLDING_PURPOSE.HOUSE`，語意不變）。
+
+- **驗證**：
+  - `pytest tests/ -q` → **421 passed**（與修正前一致，無迴歸）
+  - `ruff check .` → **All checks passed**
+  - checker 複跑（`--diff-base 88afa9e`，輸出另存 `.ai/changes/house-dashboard/.cache/checker_3_3_after.json` 供比對）：`model_no_constants_import` 1→0（HIGH 清除）；`service_no_runtime_constants` 30→31（+1，为 `bucket_composition_warning` 內部新增的 `HOLDING_PURPOSE.HOUSE` 篩選行，與 `bucket_value()` 既有同構寫法一樣屬「checker 已標、復核判定不違規」的既定架構慣例，非新增疑慮）；其餘 rule_id 計數不變，總數 676（機械上仍含前述已判定非違規的既有慣例類別，非新增問題）。
+
+### 已知限制交叉引用（非本階段新增，僅存證）
+
+- 3-1 review.md 已列的 SUGGEST 項（`views/house.py::render()` 61 行建議抽 `_load_view_model()`、`_render_house_params` 111 行資料驅動化、`assess_triggers` 87 行）與 `views/house.py` vs `views/overview.py` 編排重疊（design.md §8 已知限制）——皆非 3-3 規則違規範疇（無明確規則被打破），不重複列入本階段發現。
+
 <!-- rules-reviewer subagent 產出（工程準則全面符合度檢查）-->
 
 ## 3-4 行為對映審查
