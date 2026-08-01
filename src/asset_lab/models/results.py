@@ -151,6 +151,20 @@ class BucketCompositionWarning(BaseModel):
     non_cash_value: float
 
 
+class HouseSummary(BaseModel):
+    """總覽頁買房進度摘要（bucket 進度% + 觸發 x/5），與買房獨立頁同口徑（AD-9）。
+
+    bucket_progress_pct 直接取自 BucketProgress.progress_pct（目標總價未設定時為
+    None）；triggers_met_count/triggers_total 取自 TriggerChecklist（分母固定為 5，
+    不因未設定參數而縮減）。本模型不重算，只彙總買房頁已算好的兩項結果，確保總覽頁
+    與買房頁在同一時點顯示相同數字。
+    """
+
+    bucket_progress_pct: float | None = None
+    triggers_met_count: int
+    triggers_total: int
+
+
 class ProtocolStatus(BaseModel):
     """大跌行為協定等級判定結果（回撤 → 等級）。
 

@@ -14,15 +14,34 @@ app.py 原始碼掃描驗證，比照 test_navigation_guard/test_page_config 的
 import re
 from dataclasses import fields
 from pathlib import Path
+from types import SimpleNamespace
 
 # ==== 第三方套件 ====
+import pandas as pd
 import pytest
+from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
 from asset_lab import overview_presentation
-from asset_lab.core.constants import PROTOCOL_LEVEL_CODE, PROTOCOL_LEVELS
-from asset_lab.models.results import ProtocolStatus
+from asset_lab.core.constants import (
+    ASSET_CATEGORIES,
+    HOLDING_PURPOSE,
+    HOUSE_PARAM_KEY,
+    HOUSE_TRIGGER,
+    PROTOCOL_LEVEL_CODE,
+    PROTOCOL_LEVELS,
+)
+from asset_lab.models.holding import HoldingModel
+from asset_lab.models.house import HouseParamModel, SubjectiveTriggerModel
+from asset_lab.models.results import (
+    BucketProgress,
+    ProtocolStatus,
+    TriggerChecklist,
+    TriggerCondition,
+)
 from asset_lab.overview_presentation import OverviewPresentation
+from asset_lab.services.affordability_service import AffordabilityService
+from asset_lab.services.house_service import HouseService
 
 APP_DIR = Path(__file__).resolve().parent.parent
 APP_PY = APP_DIR / "app.py"
@@ -273,3 +292,272 @@ class TestOverviewIsDefaultLandingPage:
             "data_io.py",
         }
         assert expected <= pages
+
+
+# ---------------------------------------------------------------------------
+# 總覽頁買房進度摘要：SC-071
+# ---------------------------------------------------------------------------
+
+
+def _bucket_progress(progress_pct: float | None) -> BucketProgress:
+    """組出測試用 BucketProgress（overview_summary 只關心 progress_pct，其餘填中性值）。"""
+    return BucketProgress(
+        bucket_value=0.0,
+        target_amount=0.0,
+        gap=0.0,
+        progress_pct=progress_pct,
+        years_to_target=None,
+        reached_target_year=False,
+        required_annual_accumulation=None,
+    )
+
+
+def _checklist(met_count: int, total: int = 5) -> TriggerChecklist:
+    """組出測試用 TriggerChecklist（前 met_count 條 met=True，恰 total 條）。"""
+    conditions = [
+        TriggerCondition(key=f"cond_{i}", kind="objective", met=i < met_count)
+        for i in range(total)
+    ]
+    return TriggerChecklist(conditions=conditions, met_count=met_count, all_met=met_count == total)
+
+
+class TestHouseServiceOverviewSummary:
+    """HouseService.overview_summary：彙總 bucket 進度% 與觸發 met_count/total（SC-071）。"""
+
+    @pytest.mark.scenario("SC-071")
+    def test_sc071_combines_bucket_progress_pct_and_trigger_count(self):
+        service = HouseService()
+
+        summary = service.overview_summary(
+            bucket_progress=_bucket_progress(66.7), checklist=_checklist(3)
+        )
+
+        assert summary.bucket_progress_pct == pytest.approx(66.7)
+        assert summary.triggers_met_count == 3
+        assert summary.triggers_total == 5
+
+    @pytest.mark.scenario("SC-071")
+    def test_sc071_target_unset_progress_none_but_trigger_count_still_shown(self):
+        # 目標總價未設定時 progress_pct 為 None，但觸發計數不受影響照常呈現（SC-071 邊界）
+        service = HouseService()
+
+        summary = service.overview_summary(
+            bucket_progress=_bucket_progress(None), checklist=_checklist(2)
+        )
+
+        assert summary.bucket_progress_pct is None
+        assert summary.triggers_met_count == 2
+        assert summary.triggers_total == 5
+
+
+class _StubHouseParamRepo:
+    """買房參數替身：以 dict（key=HOUSE_PARAM_KEY 值域）注入已存參數。"""
+
+    def __init__(self, params: dict[str, float]):
+        self._params = params
+
+    def read_params(self):
+        return [
+            HouseParamModel(param_key=key, param_value=float(value))
+            for key, value in self._params.items()
+        ]
+
+
+class _StubHoldingRepo:
+    """項目主檔替身：固定回傳注入的持有項目清單。"""
+
+    def __init__(self, holdings: list[HoldingModel]):
+        self._holdings = holdings
+
+    def list_holdings(self):
+        return self._holdings
+
+
+class _StubRecordRepo:
+    """月度紀錄替身：同時支援總覽頁用的 latest_year_month() 與買房編排用的 read_all()。"""
+
+    def __init__(self, records_df: pd.DataFrame):
+        self._records_df = records_df
+
+    def read_all(self):
+        return self._records_df
+
+    def latest_year_month(self):
+        if self._records_df.empty:
+            return None
+        return str(self._records_df["year_month"].max())
+
+
+class _StubSubjectiveTriggerRepo:
+    """主觀觸發替身：read_triggers 回傳已存勾選狀態；upsert_trigger 為無操作樁。"""
+
+    def __init__(self, triggers: list[SubjectiveTriggerModel]):
+        self._triggers = list(triggers)
+
+    def read_triggers(self):
+        return self._triggers
+
+    def upsert_trigger(self, *, trigger):
+        pass
+
+
+_EMPTY_RECORDS_COLUMNS = ["holding_id", "year_month", "market_value", "net_investment"]
+
+
+def _empty_records_df() -> pd.DataFrame:
+    """空月度紀錄（尚無任何錄入），供 bucket 以 initial_market_value 起始市值計。"""
+    return pd.DataFrame(columns=_EMPTY_RECORDS_COLUMNS)
+
+
+def _house_holding_bucket_1m() -> HoldingModel:
+    """一筆購屋標記定存，虛構起始市值 100 萬（無月度紀錄，bucket 以此起始值計）。"""
+    return HoldingModel(
+        holding_id=1,
+        name="範例購屋定存",
+        kind="asset",
+        category=ASSET_CATEGORIES.TIME_DEPOSIT,
+        purpose=HOLDING_PURPOSE.HOUSE,
+        initial_market_value=1_000_000.0,
+        initial_cost=1_000_000.0,
+    )
+
+
+def _house_summary_params(**overrides: float) -> dict[str, float]:
+    """虛構買房參數：bucket 目標 150 萬（總價 500 萬 × 自備 30%），月付上限刻意壓低
+    確保月付觸發不成立，供 SC-071 摘要測試組出「3/5」的可預期組合。"""
+    base = {
+        HOUSE_PARAM_KEY.TARGET_TOTAL_PRICE: 5_000_000.0,
+        HOUSE_PARAM_KEY.DOWN_PAYMENT_RATIO: 30.0,
+        HOUSE_PARAM_KEY.INCOME_THRESHOLD: 50_000.0,
+        HOUSE_PARAM_KEY.MONTHLY_AFTER_TAX_INCOME: 60_000.0,
+        HOUSE_PARAM_KEY.PAYMENT_CAP_RATIO: 5.0,
+        HOUSE_PARAM_KEY.TEST_ANNUAL_RATE: 2.5,
+        HOUSE_PARAM_KEY.LOAN_YEARS: 30.0,
+    }
+    base.update(overrides)
+    return base
+
+
+def _house_summary_triggers() -> list[SubjectiveTriggerModel]:
+    """定錨、認知兩條主觀觸發皆已勾選。"""
+    return [
+        SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.ANCHOR, checked=True),
+        SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.COGNITION, checked=True),
+    ]
+
+
+def _house_summary_container(
+    *,
+    params: dict[str, float],
+    holdings: list[HoldingModel],
+    records_df: pd.DataFrame,
+    triggers: list[SubjectiveTriggerModel],
+) -> SimpleNamespace:
+    """組出總覽頁/買房頁共用的替身容器（買房相關欄位一致，其餘依頁面各自需要的欄位為準）。"""
+    return SimpleNamespace(
+        house_param_repo=_StubHouseParamRepo(params),
+        holding_repo=_StubHoldingRepo(holdings),
+        record_repo=_StubRecordRepo(records_df),
+        subjective_trigger_repo=_StubSubjectiveTriggerRepo(triggers),
+        house_service=HouseService(),
+        affordability_service=AffordabilityService(),
+    )
+
+
+def _run_overview_page(
+    *,
+    params: dict[str, float],
+    holdings: list[HoldingModel],
+    records_df: pd.DataFrame,
+    triggers: list[SubjectiveTriggerModel],
+) -> AppTest:
+    """以替身容器跑 views/overview.py，回傳已 run() 完成的 AppTest。
+
+    月度紀錄為空（無任何錄入）使總覽頁走「無資料」姿態分支，只需買房相關欄位即可
+    完整渲染買房摘要列，不必額外替身 return_service/protocol_service 等既有依賴
+    （比照 tests/test_house.py 的 _run_house_page 慣例：僅替身用得到的 Repository 層）。
+    """
+    at = AppTest.from_file("views/overview.py")
+    at.session_state["container"] = _house_summary_container(
+        params=params, holdings=holdings, records_df=records_df, triggers=triggers
+    )
+    at.run()
+    return at
+
+
+class TestOverviewPageHouseSummary:
+    """總覽頁買房摘要列：bucket 進度% + 觸發 x/5，與既有協定等級摘要同層呈現（SC-071 happy）。"""
+
+    @pytest.mark.scenario("SC-071")
+    def test_sc071_shows_bucket_progress_percent_and_trigger_count(self):
+        at = _run_overview_page(
+            params=_house_summary_params(),
+            holdings=[_house_holding_bucket_1m()],
+            records_df=_empty_records_df(),
+            triggers=_house_summary_triggers(),
+        )
+
+        assert not at.exception
+        progress_metric = next(m for m in at.metric if m.label == "買房 bucket 進度")
+        trigger_metric = next(m for m in at.metric if m.label == "買房觸發條件")
+        assert progress_metric.value == "66.7%"
+        assert trigger_metric.value == "3/5"
+
+
+class TestOverviewPageHouseSummaryTargetUnset:
+    """目標總價未設定（0）時：進度呈現未設定語意，觸發計數仍照常顯示（SC-071 邊界）。"""
+
+    @pytest.mark.scenario("SC-071")
+    def test_sc071_target_total_price_unset_progress_dash_trigger_count_still_shown(self):
+        at = _run_overview_page(
+            params=_house_summary_params(
+                **{
+                    HOUSE_PARAM_KEY.TARGET_TOTAL_PRICE: 0.0,
+                    HOUSE_PARAM_KEY.INCOME_THRESHOLD: 0.0,
+                }
+            ),
+            holdings=[_house_holding_bucket_1m()],
+            records_df=_empty_records_df(),
+            triggers=_house_summary_triggers(),
+        )
+
+        assert not at.exception
+        progress_metric = next(m for m in at.metric if m.label == "買房 bucket 進度")
+        trigger_metric = next(m for m in at.metric if m.label == "買房觸發條件")
+        assert progress_metric.value == "—"
+        assert trigger_metric.value == "2/5"
+
+
+class TestOverviewPageHouseSummaryMatchesHousePage:
+    """摘要口徑與買房獨立頁完全一致：同一時點兩頁顯示的進度%與 x/5 數字相同（SC-071 邊界）。"""
+
+    @pytest.mark.scenario("SC-071")
+    def test_sc071_overview_and_house_page_show_identical_progress_and_trigger_count(self):
+        params = _house_summary_params()
+        holdings = [_house_holding_bucket_1m()]
+        records_df = _empty_records_df()
+        triggers = _house_summary_triggers()
+
+        overview_at = _run_overview_page(
+            params=params, holdings=holdings, records_df=records_df, triggers=triggers
+        )
+        house_at = AppTest.from_file("views/house.py")
+        house_at.session_state["container"] = _house_summary_container(
+            params=params, holdings=holdings, records_df=records_df, triggers=triggers
+        )
+        house_at.run()
+
+        assert not overview_at.exception
+        assert not house_at.exception
+
+        overview_progress = next(
+            m for m in overview_at.metric if m.label == "買房 bucket 進度"
+        ).value
+        house_progress = next(m for m in house_at.metric if m.label == "進度").value
+        assert overview_progress == house_progress
+
+        overview_trigger_count = next(
+            m for m in overview_at.metric if m.label == "買房觸發條件"
+        ).value
+        house_trigger_count = next(m for m in house_at.metric if m.label == "達成計數").value
+        assert overview_trigger_count == house_trigger_count

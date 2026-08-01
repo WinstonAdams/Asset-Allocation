@@ -27,6 +27,7 @@ from asset_lab.models.results import (
     AffordabilityResult,
     BucketCompositionWarning,
     BucketProgress,
+    HouseSummary,
     TriggerChecklist,
     TriggerCondition,
 )
@@ -358,6 +359,30 @@ class HouseService:
             conditions=conditions,
             met_count=met_count,
             all_met=met_count == len(conditions),
+        )
+
+    def overview_summary(
+        self,
+        *,
+        bucket_progress: BucketProgress,
+        checklist: TriggerChecklist,
+    ) -> HouseSummary:
+        """總覽頁買房摘要：彙總買房頁已算好的 bucket 進度% 與觸發 met_count/total。
+
+        不重算，只從兩個既有結果模型取值，確保總覽頁與買房頁同一時點顯示相同數字
+        （呼叫端須以與買房頁相同的輸入算出 bucket_progress/checklist，見 AD-9）。
+
+        Args:
+            bucket_progress: bucket_progress() 算得的自備款進度結果。
+            checklist: assess_triggers() 算得的五條觸發條件檢核結果。
+
+        Returns:
+            總覽頁買房摘要結果模型。
+        """
+        return HouseSummary(
+            bucket_progress_pct=bucket_progress.progress_pct,
+            triggers_met_count=checklist.met_count,
+            triggers_total=len(checklist.conditions),
         )
 
     def _current_market_values(
