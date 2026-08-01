@@ -996,12 +996,13 @@ class TestHousePageNotAllTriggersMetShowsGapList:
 
 
 class TestHousePageEmptyStateDoesNotCrash:
-    """買房頁首次使用（全無參數/主檔/紀錄/勾選）時不得崩潰（純呈現健壯性，不掛 SC marker）。
+    """買房頁首次使用（全無參數/主檔/紀錄/勾選）時不得崩潰，且不誤判達標。
 
-    此邊界為既有業務語意（HouseService 對未設定參數 fail-closed，見 SC-056）在頁面層的
-    自然延伸，非新業務決策，故不另建待認可 SC。
+    參數完全未設定時應呈現中性姿態（達成計數 0/5、不顯示可啟動購屋），為既有業務語意
+    （個人化參數未設定時呈現中性姿態，不誤判達標）在頁面層全空狀態下的延伸。
     """
 
+    @pytest.mark.scenario("SC-056")
     def test_completely_empty_state_renders_without_exception(self):
         empty_columns = ["holding_id", "year_month", "market_value", "net_investment"]
         at = _run_house_page(

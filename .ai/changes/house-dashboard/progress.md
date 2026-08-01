@@ -23,7 +23,8 @@
 | 2-6 t06 觸發條件檢核 | 完成 | SC-056, SC-069, SC-070（依賴 t01, t02, t05）|
 | 2-7 t07 買房獨立頁 | 完成 | SC-066, SC-067（依賴 t01, t02, t05, t06）|
 | 2-8 t08 總覽頁買房進度摘要 | 完成 | SC-071 |
-| 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
+| 2-9 修復本 Change 造成的孤兒 test | 完成 | 回繞：2-Z scenario_lint 發現孤兒 test；逐一 git blame 排查後確認僅 tests/test_house.py::test_completely_empty_state_renders_without_exception（t07 新增）屬本 Change，補掛 SC-056；其餘（test_input_view.py、test_settings_view.py、test_bootstrap.py、test_core_utils.py 全部）皆為本 Change 之前既有技術債，未動 |
+| 2-Z 整合驗證 | 進行中 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）；本 Change 範圍孤兒已清除，殘留孤兒確認皆為既有技術債，可續跑 |
 
 ## Phase 3：審查
 
