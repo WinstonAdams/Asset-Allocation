@@ -33,7 +33,7 @@ from asset_lab.core.constants import (
 )
 
 if TYPE_CHECKING:
-    from libsql import Connection
+    from libsql import Connection, Cursor
 
 
 # 建立持有項目主檔。holding_id 自動遞增提供穩定身分；負債的 category/initial_* 留 NULL。
@@ -129,7 +129,7 @@ class SchemaRepository:
         self._conn.commit()
 
     @staticmethod
-    def _ensure_holdings_purpose_column(cursor) -> None:
+    def _ensure_holdings_purpose_column(cursor: "Cursor") -> None:
         """holdings 加欄遷移：PRAGMA 探測 purpose 欄是否已存在，缺才 ALTER 補上。
 
         全新資料庫已由 _CREATE_HOLDINGS 直接建出 purpose 欄，此處探測必為已存在、

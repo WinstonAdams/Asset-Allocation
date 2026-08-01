@@ -1,7 +1,7 @@
 """買房參數的合併驗證、自備款 bucket 口徑、進度評估與觸發條件檢核（純運算）。
 
 本檔涵蓋買房參數持久化（已存值 + 中性預設合併、落庫前驗證）、自備款 bucket
-（購屋標記項目市值合計、目標進度、組成序列風險提示）與觸發條件檢核（BR-5 五條
+（購屋標記項目市值合計、目標進度、組成序列風險提示）與觸發條件檢核（五條
 混合判定）三條垂直切片；總覽摘要等買房評估邏輯由後續擴充補上同一個 HouseService。
 """
 
@@ -146,7 +146,7 @@ class HouseService:
         month_records: list[MonthlyRecordModel],
         holdings: list[HoldingModel],
     ) -> float:
-        """自備款 bucket 值：購屋標記項目的最新月度市值合計（BR-3）。
+        """自備款 bucket 值：購屋標記項目的最新月度市值合計。
 
         僅計 purpose=house 的項目；一般項目一律不計入。無任何購屋標記項目時為 0。
 
@@ -169,7 +169,7 @@ class HouseService:
         month_records: list[MonthlyRecordModel],
         holdings: list[HoldingModel],
     ) -> float:
-        """現金地板比較用的預備金：未標記購屋且分類為活存/定存的最新月市值合計（BR-4）。
+        """現金地板比較用的預備金：未標記購屋且分類為活存/定存的最新月市值合計。
 
         購屋標記項目一律不計入（無論金額多寡）；一般用途但非活存/定存分類（如
         股票）亦不計入。此口徑與 bucket_value 互斥（同一項目不可能同時計入兩者），
@@ -199,7 +199,7 @@ class HouseService:
         params: HouseParams,
         current_year: int,
     ) -> BucketProgress:
-        """自備款 bucket 進度：目標金額、缺口、進度百分比與每年需累積速率（BR-2/BR-6）。
+        """自備款 bucket 進度：目標金額、缺口、進度百分比與每年需累積速率。
 
         進度百分比不封頂（bucket 超標時呈現實際值）；目標購屋年已到或已過時不算
         每年需累積速率（避免除以零），改由 reached_target_year 標示；目標年未設定
@@ -245,7 +245,7 @@ class HouseService:
         month_records: list[MonthlyRecordModel],
         years_to_target: int | None,
     ) -> BucketCompositionWarning:
-        """bucket 組成序列風險提示：含非活存/定存資產時提示，距目標年≤5年強化（BR-8/D15）。
+        """bucket 組成序列風險提示：含非活存/定存資產時提示，距目標年≤5年強化（D15）。
 
         只提示、不強制（不阻擋任何操作、不自動再平衡）。目標年未設定（None）時
         剩餘年數未知，一律不強化；已到/已過目標年（≤0）視為比剩 5 年更緊迫，同樣強化。
@@ -282,7 +282,7 @@ class HouseService:
         forward_result: AffordabilityResult,
         subjective: list[SubjectiveTriggerModel],
     ) -> TriggerChecklist:
-        """五條觸發條件混合檢核：全部成立才可啟動購屋（BR-5）。
+        """五條觸發條件混合檢核：全部成立才可啟動購屋。
 
         定錨／認知取自使用者手動勾選（未曾勾選視為未達成）；收入／自備／月付為
         客觀數值判定，恰等於門檻一律視為成立（≥ 或 ≤ 含等號）。任一對應的個人化
@@ -370,7 +370,7 @@ class HouseService:
         """總覽頁買房摘要：彙總買房頁已算好的 bucket 進度% 與觸發 met_count/total。
 
         不重算，只從兩個既有結果模型取值，確保總覽頁與買房頁同一時點顯示相同數字
-        （呼叫端須以與買房頁相同的輸入算出 bucket_progress/checklist，見 AD-9）。
+        （呼叫端須以與買房頁相同的輸入算出 bucket_progress/checklist）。
 
         Args:
             bucket_progress: bucket_progress() 算得的自備款進度結果。

@@ -162,7 +162,7 @@ def test_build_container_wires_services() -> None:
     assert container.monthly_input_service._holding_repo is container.holding_repo
 
 
-# === holdings 用途欄位加欄遷移：舊庫升級 / 新庫直建 / 重複啟動三路徑（SC-059）===
+# === holdings 用途欄位加欄遷移：舊庫升級 / 新庫直建 / 重複啟動三路徑 ===
 
 # 本 Change 之前（無 purpose 欄）的 holdings 表結構，直接以原始 SQL 建出，模擬既有部署
 # 資料庫；不可呼叫現行 SchemaRepository._CREATE_HOLDINGS（其已含 purpose 欄，無法重現

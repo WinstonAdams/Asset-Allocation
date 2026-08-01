@@ -90,7 +90,7 @@ class AffordabilityResult(BaseModel):
 
 
 class TriggerCondition(BaseModel):
-    """單一觸發條件判定結果（BR-5）。
+    """單一觸發條件判定結果。
 
     kind 為 'subjective'（定錨/認知，取自使用者勾選）或 'objective'（收入/自備/
     月付，由參數與資產現況判定）。actual/required 供客觀條件呈現缺口；required
@@ -106,7 +106,7 @@ class TriggerCondition(BaseModel):
 
 
 class TriggerChecklist(BaseModel):
-    """五條觸發條件彙總（BR-5）。
+    """五條觸發條件彙總。
 
     conditions 恆列五條（分母固定為 5，未設定的條件仍計入清單並列為未達成，
     不縮減分母）。all_met 全數成立才對應「可啟動購屋」，呈現文案由頁面決定。
@@ -118,7 +118,7 @@ class TriggerChecklist(BaseModel):
 
 
 class BucketProgress(BaseModel):
-    """自備款 bucket 進度（BR-3/4/6）。
+    """自備款 bucket 進度。
 
     target_amount＝目標總價×自備比率；gap 不為負值（bucket 超標時為 0）；
     progress_pct 以 target_amount 為分母，target_amount 為 0（目標未設定）時為 None，
@@ -139,7 +139,7 @@ class BucketProgress(BaseModel):
 
 
 class BucketCompositionWarning(BaseModel):
-    """bucket 組成序列風險提示（BR-8/D15）。只提示、不強制，不阻擋任何操作。
+    """bucket 組成序列風險提示（D15）。只提示、不強制，不阻擋任何操作。
 
     has_non_cash 為 bucket 含非活存/定存分類資產（以現值判定，已出清的非現金項目
     不觸發）；intensified 為距目標購屋年 ≤5 年（含已到/已過）時的強化提示，
@@ -152,7 +152,7 @@ class BucketCompositionWarning(BaseModel):
 
 
 class HouseSummary(BaseModel):
-    """總覽頁買房進度摘要（bucket 進度% + 觸發 x/5），與買房獨立頁同口徑（AD-9）。
+    """總覽頁買房進度摘要（bucket 進度% + 觸發 x/5），與買房獨立頁同口徑。
 
     bucket_progress_pct 直接取自 BucketProgress.progress_pct（目標總價未設定時為
     None）；triggers_met_count/triggers_total 取自 TriggerChecklist（分母固定為 5，

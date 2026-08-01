@@ -396,7 +396,7 @@ class TestHoldingsCsvPurposeRoundtrip:
 
     @pytest.mark.scenario("SC-060")
     def test_sc060_roundtrip_preserves_purpose_after_export_then_reimport(self, service):
-        # 匯出→清空→重新匯入，用途不遺失（純附加欄位須於備份鏈路中保存，AD-8）
+        # 匯出→清空→重新匯入，用途不遺失（純附加欄位須於備份鏈路中保存）
         holdings_csv = service.export_holdings_csv(holdings=self._holdings_with_purpose())
 
         holdings, _, _ = service.parse_and_validate(

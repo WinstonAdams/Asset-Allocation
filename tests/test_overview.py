@@ -295,7 +295,7 @@ class TestOverviewIsDefaultLandingPage:
 
 
 # ---------------------------------------------------------------------------
-# 總覽頁買房進度摘要：SC-071
+# 總覽頁買房進度摘要
 # ---------------------------------------------------------------------------
 
 
@@ -338,7 +338,7 @@ class TestHouseServiceOverviewSummary:
 
     @pytest.mark.scenario("SC-071")
     def test_sc071_target_unset_progress_none_but_trigger_count_still_shown(self):
-        # 目標總價未設定時 progress_pct 為 None，但觸發計數不受影響照常呈現（SC-071 邊界）
+        # 目標總價未設定時 progress_pct 為 None，但觸發計數不受影響照常呈現
         service = HouseService()
 
         summary = service.overview_summary(

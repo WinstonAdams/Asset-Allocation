@@ -42,7 +42,7 @@ class HOLDING_KIND:
 
 
 class HOLDING_PURPOSE:
-    """持有項目用途。純附加標記，既有分類/報酬/配置計算完全不讀此欄（BR-9/D14），
+    """持有項目用途。純附加標記，既有分類/報酬/配置計算完全不讀此欄（D14），
     只供買房功能（bucket 推導、現金保留計算）讀取。"""
 
     GENERAL = "general"

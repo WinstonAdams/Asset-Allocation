@@ -6,7 +6,7 @@
 必做/禁止摘要與關鍵指標（累積 TWR、淨值、目前自歷史高點回撤%）。尚無任何月度紀錄
 時直接以「無資料」姿態呈現，不觸發任何區間查詢（避免以 null 訖月查詢）。另編排讀
 買房參數/主觀勾選/主檔/全歷史月度紀錄，委派 `HouseService` 算 bucket 進度與觸發檢核
-後取 `overview_summary`，與協定等級摘要同層渲染買房進度摘要列（AD-9）；此段編排與
+後取 `overview_summary`，與協定等級摘要同層渲染買房進度摘要列；此段編排與
 `views/house.py` 有意重疊（兩頁各自編排讀取，經 `HouseService` 統一口徑，見 design
 已知限制），無月度紀錄時仍照常計算（bucket 可能以 initial_market_value 起始值計）。
 本頁為唯一 catch 點。
@@ -105,7 +105,7 @@ def _compute_house_summary(container: Container) -> HouseSummary:
     """讀買房參數/主觀勾選/主檔/全歷史月度紀錄，編排取得總覽頁買房摘要。
 
     與 `views/house.py` 同一組 HouseService 純方法組出 bucket_progress/checklist 再取
-    `overview_summary`，確保與買房頁同口徑（AD-9）；不依賴協定等級判定是否有資料，
+    `overview_summary`，確保與買房頁同口徑；不依賴協定等級判定是否有資料，
     無月度紀錄時 bucket 仍可能以 initial_market_value 起始值計。
     """
     house_service = container.house_service
@@ -224,8 +224,7 @@ def _format_percent_value(value: float | None) -> str:
 
 def _format_house_progress_percent(value: float | None) -> str:
     """買房 bucket 進度% 格式化；與 `views/house.py` 同精度（1 位小數），確保總覽/買房
-    兩頁在同一時點顯示相同數字（SC-071 邊界：摘要口徑與買房獨立頁完全一致）。None
-    顯示破折號（目標總價未設定）。"""
+    兩頁在同一時點顯示相同數字。None 顯示破折號（目標總價未設定）。"""
     if value is None:
         return "—"
     return f"{value:.1f}%"

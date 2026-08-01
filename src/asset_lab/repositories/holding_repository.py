@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from libsql import Connection
 
 # 主檔欄位讀取順序；row tuple 依此順序對映回 HoldingModel。purpose 為純附加用途標記，
-# 既有分類/報酬/配置計算完全不讀此欄（BR-9/D14），僅供買房功能讀寫。
+# 既有分類/報酬/配置計算完全不讀此欄（D14），僅供買房功能讀寫。
 _COLUMNS = (
     HOLDINGS_TABLE.HOLDING_ID,
     HOLDINGS_TABLE.NAME,
