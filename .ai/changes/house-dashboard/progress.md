@@ -35,7 +35,7 @@
 | 3-2 安全審查 | 跳過 | 本次變更未涉及認證/付款；個人財務數值走既有私人參數出庫機制與 fail-closed 中性預設，比照既有 holdings/protocol_thresholds 慣例不觸發 |
 | 3-3 規則符合度審查 | 完成 | 676 條 checker 原始發現逐條核對 baseline，675 條為既有慣例誤判排除，2 條真違規已修正：HoldingModel 預設值改字面值移除 constants import；bucket_composition_warning 的 purpose 篩選邏輯移入 Service（比照 bucket_value()）。修正後 pytest 421 passed、ruff 全過、checker HIGH 降至 0。核准判定：通過 |
 | 3-4 行為對映審查 | 完成 | 22 張 SC × 105 個 marker 逐項核對，20 張原本對齊；2 項不對齊：SC-072 純補 test（production 已 fail-closed）、SC-056 production 與 SC 看失一致回繞 2-10 修正後複查對齊。修正後 pytest 423 passed、ruff 全過。核准判定：通過 |
-| 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
+| 3-Z 最終驗證 | 完成 | scenario_lint PASS（本 Change 孤兒清除，殘留 41 個既有技術債不計）；pytest PASS（423 tests）；啟動驗證 PASS（Streamlit app 無自動 dev mode，接受現狀） |
 
 ## Phase 4：收尾
 
