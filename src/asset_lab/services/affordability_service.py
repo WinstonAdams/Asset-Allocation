@@ -60,7 +60,9 @@ class AffordabilityService:
 
         月付上限 = 月收 × 月付上限比率；反推貸款上限（本息均攤因子的倒運算）；
         可負擔總價 = 貸款上限 ÷ (1 − 自備比率)，自備比率愈高，同一貸款上限
-        合成的可負擔總價愈高。
+        合成的可負擔總價愈高。月收為 0（尚未設定）時，月付上限/貸款上限/可負擔
+        總價三個反推欄位皆無法定義，回傳 None 而非退化為「可負擔 0 元」的誤導
+        性結論（與 payment_for_price 之 income_share_pct 未設定慣例一致）。
 
         Args:
             monthly_income: 家庭稅後月收（TWD）。
@@ -71,8 +73,11 @@ class AffordabilityService:
 
         Returns:
             AffordabilityResult（direction='reverse'）：含月付上限、貸款上限、
-            可負擔總價；forward 方向專屬欄位為 None。
+            可負擔總價；forward 方向專屬欄位為 None。月收未設定時反推三欄位
+            皆為 None。
         """
+        if not monthly_income:
+            return AffordabilityResult(direction="reverse")
         monthly_payment_cap = monthly_income * payment_cap_ratio_pct / _PERCENT_BASE
         factor = self._amortization_factor(
             annual_rate_pct=test_annual_rate_pct, years=loan_years

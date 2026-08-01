@@ -597,7 +597,7 @@ class TestAffordableTotalPriceUnsetIncome:
     """家庭稅後月收未設定（0）時反推可負擔總價的呈現（SC-056）。"""
 
     @pytest.mark.scenario("SC-056")
-    def test_sc056_reverse_zero_income_returns_zero_not_exception(self):
+    def test_sc056_reverse_zero_income_returns_none_not_misleading_zero(self):
         result = AffordabilityService().affordable_total_price(
             monthly_income=0,
             payment_cap_ratio_pct=40,
@@ -606,9 +606,11 @@ class TestAffordableTotalPriceUnsetIncome:
             down_payment_ratio_pct=20,
         )
 
-        # 月收未設定：反推總價退化為 0（而非拋出例外）；呈現層不得顯示為
-        # 「可負擔 0 元」的誤導性結論（呈現文案由買房頁決定）
-        assert result.affordable_total_price == 0.0
+        # 月收未設定：不得退化為「可負擔 0 元」的誤導性結論，三個反推欄位皆回傳
+        # None（而非拋出例外），呈現層據此顯示中性的未設定姿態
+        assert result.affordable_total_price is None
+        assert result.loan_ceiling is None
+        assert result.monthly_payment_cap is None
 
 
 class TestAssessTriggersDownPaymentDualThreshold:
@@ -1016,3 +1018,25 @@ class TestHousePageEmptyStateDoesNotCrash:
         met_count_metric = next(m for m in at.metric if m.label == "達成計數")
         assert met_count_metric.value == "0/5"
         assert not any(s.value == "可啟動購屋" for s in at.success)
+
+
+class TestHousePageAffordabilityMetricUnsetIncomeDisplay:
+    """家庭稅後月收未設定（0）時，買房頁「可負擔總價（反推）」欄位不得顯示為
+    「可負擔 0 元」的誤導性結論（SC-056）。
+    """
+
+    @pytest.mark.scenario("SC-056")
+    def test_sc056_reverse_metric_shows_dash_not_zero_yuan_when_income_unset(self):
+        at = _run_house_page(
+            params=_house_page_params(monthly_after_tax_income=0.0),
+            holdings=_house_page_holdings(),
+            records_df=_house_page_records(),
+            triggers=[],
+        )
+
+        assert not at.exception
+        affordability_metric = next(
+            m for m in at.metric if m.label == "可負擔總價（反推）"
+        )
+        assert affordability_metric.value == "—"
+        assert affordability_metric.value != "0 元"

@@ -25,6 +25,7 @@
 | 2-8 t08 總覽頁買房進度摘要 | 完成 | SC-071 |
 | 2-9 修復本 Change 造成的孤兒 test | 完成 | 回繞：2-Z scenario_lint 發現孤兒 test；逐一 git blame 排查後確認僅 tests/test_house.py::test_completely_empty_state_renders_without_exception（t07 新增）屬本 Change，補掛 SC-056；其餘（test_input_view.py、test_settings_view.py、test_bootstrap.py、test_core_utils.py 全部）皆為本 Change 之前既有技術債，未動 |
 | 2-Z 整合驗證 | 完成 | scenario_lint PASS（本 Change 範圍孤兒已清除，殘留 41 個既有技術債不計）；pytest PASS（421 tests）；啟動驗證：Streamlit app 無自動 dev mode，需瀏覽器互動不自動執行，使用者確認接受現狀視為通過 |
+| 2-10 t10 修正月收未設定時可負擔總價誤導顯示 | 完成 | 回繞：3-4 發現 production 與 SC-056 看失一致。根因：AffordabilityService.affordable_total_price 於 monthly_income=0 時無防呆、照常算出 0 元。修正為回傳 None（比照 payment_for_price 慣例），views/house.py 既有 _format_amount 自動渲染「—」，無需改 view 層。修正舊 test 誤斷言＋新增 view 層 test。pytest 422 passed、ruff 全過、scenario_lint SC 覆蓋 73/73 |
 
 ## Phase 3：審查
 
@@ -33,7 +34,7 @@
 | 3-1 程式碼清理 | 完成 | Checker 57 條（HIGH 6/MEDIUM 50/LOW 1）+ 人工掃描；SAFE 項全數修正（6 條 `#` Change 級編號註解 + 17 處 docstring BR-N/AD-N/SC-N 引用 + affordability_service.py 過時 SC-PENDING-001→改寫；schema_repository.py 補 cursor 型別提示）；CAREFUL/SUGGEST 依主 AI 決策暫緩不動（測試固定資料重複為慣例、house/overview 編排重疊為 design.md §8 已知限制、3 個 function_too_large + 1 個 file_too_long 留待未來）；修正後 pytest 421 passed、ruff 全過、checker 複跑 HIGH 降至 0 |
 | 3-2 安全審查 | 跳過 | 本次變更未涉及認證/付款；個人財務數值走既有私人參數出庫機制與 fail-closed 中性預設，比照既有 holdings/protocol_thresholds 慣例不觸發 |
 | 3-3 規則符合度審查 | 完成 | 676 條 checker 原始發現逐條核對 baseline，675 條為既有慣例誤判排除，2 條真違規已修正：HoldingModel 預設值改字面值移除 constants import；bucket_composition_warning 的 purpose 篩選邏輯移入 Service（比照 bucket_value()）。修正後 pytest 421 passed、ruff 全過、checker HIGH 降至 0。核准判定：通過 |
-| 3-4 行為對映審查 | 未開始 | AI 比對 SC 描述 vs test 內容 |
+| 3-4 行為對映審查 | 進行中 | AI 比對 SC 描述 vs test 內容 |
 | 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
 
 ## Phase 4：收尾
