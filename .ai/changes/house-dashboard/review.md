@@ -184,4 +184,89 @@ Baseline 命中：0 條（尚未對本專案建立 3-3 baseline）
 
 ## 3-4 行為對映審查
 
+審查範圍：22 張 SC 卡片（SC-052～SC-073）× 105 個 `@pytest.mark.scenario` 標記，橫跨 8 個
+test 檔（test_affordability.py／test_house_params.py／test_data_io.py／
+test_holding_master.py／test_settings_view.py／test_bootstrap.py／test_overview.py／
+test_house.py）。逐一讀取 `scenarios/SC-0{52..73}.md` 的 GIVEN/WHEN/THEN 與對應
+test 函式的 mock 設定、輸入值、assertion 比對；SC-056／SC-072 兩張額外對 production
+code（`views/house.py`、`HouseService.assess_triggers`）做交叉探測驗證呈現層實際行為。
+
+**核准判定：通過**（第一段發現 2 項不對齊；SC-056 已由另一 Task 2-10 修正 production 行為
+並補 view 層 test，SC-072 已於本階段補上顯式 test，複查後皆對齊。修正後 pytest 423 passed、
+ruff all checks passed）。
+
+### 第一段發現、已於第二段解決的項目
+
+**1.（已解決）SC-056 邊界子句「不得呈現為可負擔 0 元的誤導性結論」**
+
+- 第一段發現：`tests/test_house.py::TestAffordableTotalPriceUnsetIncome::test_sc056_reverse_zero_income_returns_zero_not_exception`
+  只斷言 `result.affordable_total_price == 0.0`，且以替身容器實跑 `views/house.py` 探測到
+  「可負擔總價（反推） = 0 元」——與 SC-056 明文禁止的「可負擔 0 元」字面一致，屬 production
+  未完全實現 SC 之缺陷，非 SC 寫錯。
+- 解決方式（Task 2-10，非本 subagent 執行，本輪僅複查）：
+  - `AffordabilityService.affordable_total_price`：`monthly_income` 為假值時提早回傳
+    `AffordabilityResult(direction="reverse")`（三個反推欄位皆為 `None`），不再退化計算出
+    `0.0`（見 `src/asset_lab/services/affordability_service.py` 該方法 docstring 已同步更新）。
+  - 既有 test 更名為 `test_sc056_reverse_zero_income_returns_none_not_misleading_zero`，斷言
+    `affordable_total_price is None`／`loan_ceiling is None`／`monthly_payment_cap is None`。
+  - 新增 `tests/test_house.py::TestHousePageAffordabilityMetricUnsetIncomeDisplay::test_sc056_reverse_metric_shows_dash_not_zero_yuan_when_income_unset`：以替身容器跑
+    `views/house.py`，斷言「可負擔總價（反推）」metric 值為 `"—"`（`_format_amount(None)` 的既有
+    行為，view 本身無需改動）。
+- 複查結論：`AffordabilityResult(None)` → `_format_amount` 走既有 `None → "—"` 分支，語意與
+  SC-056「反推可負擔總價結果為 0 或呈現未設定，不得呈現為可負擔 0 元」完全一致，且今有 view
+  層 test 直接釘住。**現已對齊**。
+
+**2.（已解決）SC-072 邊界子句「月付占比為 None 時，月付觸發條件視為未達成（fail-closed）」**
+
+- 第一段發現：`tests/test_house.py` 內 8 處以 `forward_result=_forward(None)` 呼叫
+  `assess_triggers`，皆未對月付條件的 `met` 值做斷言；production code
+  （`house_service.py::assess_triggers` 的 `payment_met` 判斷式）本身已正確 fail-closed，純屬
+  test 覆蓋缺口。
+- 解決方式（本階段執行）：新增
+  `tests/test_house.py::TestAssessTriggersPaymentConditionFailClosedOnUnsetIncome::test_sc072_payment_condition_not_met_when_income_share_pct_is_none`，標記 `@pytest.mark.scenario("SC-072")`，
+  以 `target_total_price=5_000_000.0`、`payment_cap_ratio=40.0`、`forward_result=_forward(None)`
+  呼叫 `assess_triggers`，斷言月付條件 `met is False`。純補 test，未動 production code。
+- 複查結論：**現已對齊**。
+
+### 對齊
+
+以下依 capability 分組列出審查結果（每組審查了該 SC 對映的全部 test 函式，非抽樣）：
+
+| SC | capability | 對映 test 檔／class | 判斷依據 |
+|----|-----------|---------------------|---------|
+| SC-052 | affordability-engine | test_affordability.py::TestPaymentForPriceForward | 貸款 7,000,000／自備 3,000,000／月付≈38,821.83／占比≈38.82% 與 SC 給值一致；利率 0% 退化本金均分 7,200,000÷360=20,000 一致 |
+| SC-053 | affordability-engine | test_affordability.py::TestAffordableTotalPriceReverse | 月付上限 40,000／貸款上限 9,600,000／可負擔總價 12,000,000 與 SC 一致；往返一致性與自備比率愈高總價愈高兩條邊界皆覆蓋 |
+| SC-054 | house-params | test_house_params.py::TestEffectiveParamsDefaults／TestHouseParamsPersistence | 全未存→`HOUSE_PARAM_DEFAULTS`（個人化 0、政策比率 33/35/2.5/30）逐一比對常數定義一致；單鍵/部分鍵合併、int 還原、DB 落地生效（含容器重建）皆覆蓋 |
+| SC-055 | house-params | test_house_params.py::TestValidateParamsRejectsInvalid／TestInvalidParamsDoNotPersist | 比率類 0/100/-5/120、利率 -0.5、年限 0/-1、金額類 -1、年份 -1 逐項覆蓋 SC「錯誤」清單；驗算利率 0 合法、非法值不落庫（DB 值維持 30）皆驗證 |
+| SC-056 | house-params | test_house.py::TestAssessTriggersUnsetParamsNeutralPosture／TestBucketProgressUnsetTarget／TestAffordableTotalPriceUnsetIncome／TestHousePageAffordabilityMetricUnsetIncomeDisplay | 收入門檻/現金地板/目標總價未設定時不誤判達標、分母固定 5、進度不呈現百分比等邊界皆對齊；「不得呈現可負擔 0 元」半句已由 Task 2-10 修正 production 並補 view 層 test，複查對齊（見上方「已解決」1） |
+| SC-057 | holding-purpose | test_settings_view.py::TestNewHoldingPurposeSelectbox／TestEditExistingHoldingPurposeSelectbox | 值域僅一般/購屋、新增預設一般、購屋↔一般雙向編輯持久化、改其他欄位不動用途、負債項目同樣可標記，皆對齊 |
+| SC-058 | holding-purpose | test_holding_master.py::TestHoldingPurposeIsPurelyAdditive | 分類佔比/報酬率/配置偏離/淨值四項計算前後完全一致；用途正反改動不影響既有欄位，皆對齊（見下方備註：其中 1 個 test 標籤精準度可再議，非行為錯誤） |
+| SC-059 | holding-purpose | test_bootstrap.py::TestHoldingsPurposeMigrationLegacyUpgrade／TestHoldingsPurposeMigrationFreshDb | 舊庫 3 筆自動補一般、既有欄位無遺失、可再編輯為購屋、`ensure_schema` 重跑 2/3 次冪等、新庫直接支援，皆對齊 |
+| SC-060 | holdings-csv | test_data_io.py::TestHoldingsCsvPurposeRoundtrip | 匯出欄序含用途且附加於尾端、匯出入往返後購屋/一般保留，皆對齊 |
+| SC-061 | holdings-csv | test_data_io.py::TestLegacyHoldingsCsvWithoutPurposeColumn | 僅 6 欄舊格式仍匯入成功並補一般、新格式留白同樣補一般，皆對齊 |
+| SC-062 | house-bucket | test_house.py::TestBucketValueSumsHouseHoldings | 600,000+400,000=1,000,000（一般 500,000 不計）；無月度紀錄回退初始市值；無購屋項目為 0；最新月市值 0 不回退初始值；出清後不回退；市值留空不貢獻，皆逐條對齊 SC 行為與邊界 |
+| SC-063 | house-bucket | test_house.py::TestBucketProgress | 目標 1,500,000／缺口 500,000／進度 66.67%／速率 250,000 與 SC 給值一致；超額不封頂 106.67%、剩 1 年速率=缺口全額、恰 100% 三邊界皆覆蓋 |
+| SC-064 | house-bucket | test_house.py::TestBucketProgressTargetYearBoundaries | 目標年=當年/已過/未設定三態皆不呈現速率、不除以零，與 SC 一致 |
+| SC-065 | house-bucket | test_house.py::TestBucketCompositionWarning | 剩 8 年一般強度、剩 5 年強化／6 年一般（邊界值精確覆蓋）、已到/已過強化、全現金不警示、目標年未設定僅一般強度，皆對齊 |
+| SC-066 | house-triggers | test_house.py::TestHousePageAllTriggersMetShowsCanStart | 5/5 全達成、AppTest 渲染「可啟動購屋」與逐條「✅ 達成」，對齊 |
+| SC-067 | house-triggers | test_house.py::TestHousePageNotAllTriggersMetShowsGapList | 3/5、不顯示可啟動、缺口清單含實際值與門檻值（收入）、主觀條件顯示未勾選（認知），對齊 |
+| SC-068 | house-triggers | test_house_params.py::TestSubjectiveTriggerPersistence | 無紀錄回空清單、勾選持久化、定錨與認知互不影響、取消勾選持久化、容器重建後仍保留，皆對齊 |
+| SC-069 | house-triggers | test_house.py::TestCashReserveValue／TestAssessTriggersDownPaymentDualThreshold | 雙門檻缺一不可（bucket 達標但地板不足 / 反之）、購屋標記現金不計入預備金、地板未設定 fail-closed、一般用途非現金分類不計入，皆對齊 |
+| SC-070 | house-triggers | test_house.py::TestAssessTriggersExactBoundaryEquality | 三條件恰等於門檻皆判成立；差一單位（89,999／1,499,999／40.1%）皆判不成立，對齊 |
+| SC-071 | house-summary | test_overview.py::TestHouseServiceOverviewSummary／TestOverviewPageHouseSummary／TestOverviewPageHouseSummaryMatchesHousePage | 66.7%＋3/5 組合、目標未設定時進度「—」但觸發計數照常、總覽頁與買房頁口徑逐一比對相同，皆對齊 |
+| SC-072 | affordability-engine | test_affordability.py::TestForwardZeroIncome／test_house.py::TestAssessTriggersPaymentConditionFailClosedOnUnsetIncome | 月收 0 時 `income_share_pct` 回傳 None（非 0%、非例外），其餘欄位正常計算；「月付觸發條件 fail-closed」半句已於本階段補 test 直接斷言 `payment.met is False`，複查對齊（見上方「已解決」2） |
+| SC-073 | holdings-csv | test_data_io.py::TestHoldingsCsvInvalidPurposeValue | 非法用途值（"vacation"）拒絕整批匯入且錯誤訊息點名該值，對齊 |
+
+### 備註（非阻擋，供第二段參考）
+
+- `tests/test_affordability.py::TestSamePurePureFunctionConsistency::test_sc052_same_input_yields_same_result_across_calls`
+  標記 SC-052，但驗證的是「同輸入兩次呼叫結果相同」（純函式無隱藏狀態），SC-052 本文未描述
+  此性質。不算不對齊（不違反 SC-052 給值），但嚴格說不是在驗證 SC-052 寫的行為，屬額外品質
+  保證測試，掛錯 SC 標籤的可能性較高。建議可保留（低成本），無需列入本階段修正範圍。
+- `tests/test_holding_master.py::TestHoldingPurposeIsPurelyAdditive::test_sc058_new_holding_defaults_to_general_purpose`
+  標記 SC-058，但驗證內容（新增時預設一般）其實是 SC-057「邊界」段落的行為，SC-058 本文講的
+  是「用途標記純附加、不影響既有計算」。`tests/test_settings_view.py` 已有 SC-057 標記的同義
+  test（`test_sc057_new_holding_without_selecting_purpose_defaults_to_general`）於 view 層
+  覆蓋同一行為，此處屬 repository 層重複驗證，非缺漏，只是 SC 標籤可再精準化。不影響核准判定。
+
 <!-- scenario-mapper subagent 產出（AI 比對 SC 描述 vs test 內容，分「不對齊」「對齊」兩類）-->

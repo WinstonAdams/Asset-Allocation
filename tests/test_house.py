@@ -764,6 +764,27 @@ class TestAssessTriggersExactBoundaryEquality:
         assert payment.met is False
 
 
+class TestAssessTriggersPaymentConditionFailClosedOnUnsetIncome:
+    """家庭稅後月收未設定、月付占比為 None 時，月付觸發條件視為未達成，fail-closed（SC-072）。"""
+
+    @pytest.mark.scenario("SC-072")
+    def test_sc072_payment_condition_not_met_when_income_share_pct_is_none(self, service):
+        # 目標總價已設定、月付上限比率正常，但正算月付占比因月收未設定回傳 None：
+        # 月付條件不得因「None 恆不大於上限」之類的誤判而視為達成，須明確判為未達成
+        params = _params(target_total_price=5_000_000.0, payment_cap_ratio=40.0)
+
+        checklist = service.assess_triggers(
+            params=params,
+            bucket_value=0.0,
+            cash_reserve_value=0.0,
+            forward_result=_forward(None),
+            subjective=_subjective(anchor=False, cognition=False),
+        )
+
+        payment = next(c for c in checklist.conditions if c.key == HOUSE_TRIGGER.PAYMENT)
+        assert payment.met is False
+
+
 # ---------------------------------------------------------------------------
 # 買房頁（views/house.py）呈現測試
 # ---------------------------------------------------------------------------
