@@ -18,6 +18,7 @@ import streamlit as st
 from asset_lab.bootstrap import Container
 from asset_lab.core.constants import EARLIEST_YEAR_MONTH_SENTINEL, PERIOD_MODE
 from asset_lab.core.exceptions import AssetLabError
+from asset_lab.models.holding import HoldingModel
 from asset_lab.models.results import ReturnResult
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.services.period_service import PeriodService
@@ -26,6 +27,39 @@ logger = logging.getLogger(__name__)
 
 # MWR 無法收斂時的降級顯示文字（與資料層的 not_converged 狀態對應）。
 _MWR_UNAVAILABLE = "無法計算"
+
+# 報酬維度的中文顯示（內部值需與 ReturnService.compute_returns(dimension=...) 的合約一致）。
+_DIMENSION_LABEL = {"overall": "整體", "category": "分類", "holding": "單一標的"}
+
+# 區間模式的中文顯示（內部值為 PERIOD_MODE 的英文代碼，需與其保持一致）。
+_PERIOD_MODE_LABEL = {
+    PERIOD_MODE.INCEPTION: "自開始記錄以來",
+    PERIOD_MODE.YTD: "今年以來",
+    PERIOD_MODE.LAST_12M: "近一年",
+    PERIOD_MODE.CUSTOM: "自訂",
+}
+
+# 卡片底色：以 MWR 正負判斷（MWR 反映使用者自己這筆錢實際的賺賠，比 TWR 更貼近
+# 「我到底賺還是賠」的直覺），正為淺紅、負為淺綠（台股慣例：紅漲綠跌）；MWR 為 0
+# 或無法判定（資料不足/不收斂）皆視為中性，用淺灰。皆帶透明感＋細邊框。
+_POSITIVE_BACKGROUND = "rgba(220, 38, 38, 0.12)"
+_POSITIVE_BORDER = "rgba(220, 38, 38, 0.35)"
+_NEGATIVE_BACKGROUND = "rgba(22, 163, 74, 0.12)"
+_NEGATIVE_BORDER = "rgba(22, 163, 74, 0.35)"
+_NEUTRAL_BACKGROUND = "rgba(148, 163, 184, 0.12)"
+_NEUTRAL_BORDER = "rgba(148, 163, 184, 0.35)"
+_CARD_TEXT_COLOR = "#1a1a1a"
+
+# TWR/MWR 說明改置頁面底部注解，不逐格掛 tooltip（見 _render_footnote）。
+_TWR_FOOTNOTE = (
+    "**TWR（時間加權報酬率）**：只看市場漲跌本身的表現，不管你自己存錢、領錢的"
+    "時間點，適合拿來跟大盤或其他標的比較績效好壞。"
+)
+_MWR_FOOTNOTE = (
+    "**MWR（金錢加權報酬率）**：算的是「這筆錢在你手上真正賺賠多少」，跟你什麼"
+    "時候存錢、什麼時候領錢有關——同一個標的，你跟別人進出場時間不同，算出來的"
+    "MWR 就會不一樣。"
+)
 
 
 def _container() -> Container:
@@ -49,7 +83,10 @@ def render() -> None:
             return
 
         dimension = st.radio(
-            "維度", options=["overall", "category", "holding"], horizontal=True
+            "維度",
+            options=["overall", "category", "holding"],
+            format_func=lambda option: _DIMENSION_LABEL[option],
+            horizontal=True,
         )
         start_ym, end_ym = _resolve_period(
             period_service=period_service, record_repo=record_repo, latest_ym=latest_ym
@@ -64,7 +101,8 @@ def render() -> None:
             start_ym=start_ym,
             end_ym=end_ym,
         )
-        _render_results(results)
+        _render_results(results, holdings=holdings)
+        _render_footnote()
     except AssetLabError as error:
         logger.exception("報酬率頁渲染失敗")
         st.error(str(error))
@@ -74,7 +112,11 @@ def _resolve_period(
     *, period_service: PeriodService, record_repo: RecordRepository, latest_ym: str
 ) -> tuple[str, str]:
     """讀區間模式與自訂起訖，委派 PeriodService 解析為 (起月, 訖月)。"""
-    mode = st.selectbox("區間", options=list(PERIOD_MODE.ALL))
+    mode = st.selectbox(
+        "區間",
+        options=list(PERIOD_MODE.ALL),
+        format_func=lambda option: _PERIOD_MODE_LABEL[option],
+    )
     custom_start = custom_end = None
     if mode == PERIOD_MODE.CUSTOM:
         custom_start = st.text_input("自訂起月（YYYY-MM）")
@@ -93,15 +135,42 @@ def _resolve_period(
     )
 
 
-def _render_results(results: list[ReturnResult]) -> None:
-    """逐維度呈現報酬率；MWR 不收斂時降級為「無法計算」。"""
+def _render_results(results: list[ReturnResult], *, holdings: list[HoldingModel]) -> None:
+    """逐維度以卡片呈現報酬率；MWR 不收斂時降級為「無法計算」。
+
+    holding 維度的 dimension_key 為穩定的 holding_id 字串（非顯示用），呈現時對照
+    主檔轉換為目前名稱；分類維度的 dimension_key 本身即中文分類名，直接顯示。
+    卡片底色依 MWR 正負決定——MWR 反映使用者自己這筆錢實際的賺賠，比只看市場
+    表現的 TWR 更貼近「我到底賺還是賠」；MWR 為 0 或無法判定（資料不足/不收斂）
+    皆視為中性，維持灰色。
+    """
     if not results:
         st.write("此區間無可計算的資產報酬。")
         return
 
-    for result in results:
-        label = result.dimension_key or "整體"
-        st.markdown(f"### {label}")
+    name_by_id = {str(h.holding_id): h.name for h in holdings}
+    cards = []
+    for index, result in enumerate(results):
+        if result.dimension == "holding":
+            label = name_by_id.get(result.dimension_key, result.dimension_key)
+        else:
+            label = result.dimension_key or "整體"
+        cards.append((f"return_card_{index}", label, result))
+
+    st.markdown(
+        "<style>"
+        + "".join(_card_style(key, *_card_colors(result.mwr)) for key, _, result in cards)
+        + "</style>",
+        unsafe_allow_html=True,
+    )
+    for key, label, result in cards:
+        _render_card(key=key, label=label, result=result)
+
+
+def _render_card(*, key: str, label: str, result: ReturnResult) -> None:
+    """渲染單一維度的卡片：標題 + 四個指標，底色依 MWR 正負決定。"""
+    with st.container(key=key):
+        st.markdown(f"#### {label}")
         twr = _format_percent(result.twr)
         mwr = _MWR_UNAVAILABLE if result.mwr is None else _format_percent(result.mwr)
         simple = _format_percent(result.simple_return)
@@ -114,6 +183,34 @@ def _render_results(results: list[ReturnResult]) -> None:
         columns[3].metric(
             "賺賠金額", "—" if result.pnl_amount is None else f"{result.pnl_amount:,.0f}"
         )
+
+
+def _render_footnote() -> None:
+    """頁面底部注解：說明 TWR/MWR 的意思，取代逐格 tooltip。"""
+    st.divider()
+    st.caption(_TWR_FOOTNOTE)
+    st.caption(_MWR_FOOTNOTE)
+
+
+def _card_colors(mwr: float | None) -> tuple[str, str]:
+    """依 MWR 正負決定卡片背景與邊框色：正為淺紅、負為淺綠（台股慣例：紅漲綠跌）；
+    MWR 為 0 或無法判定（資料不足/不收斂）時為中性灰。
+    """
+    if mwr is None or mwr == 0:
+        return _NEUTRAL_BACKGROUND, _NEUTRAL_BORDER
+    if mwr > 0:
+        return _POSITIVE_BACKGROUND, _POSITIVE_BORDER
+    return _NEGATIVE_BACKGROUND, _NEGATIVE_BORDER
+
+
+def _card_style(key: str, background: str, border: str) -> str:
+    """組出卡片背景/邊框/文字色的 CSS，以 st.container(key=...) 產生的 st-key-{key} class 定位。"""
+    return (
+        f".st-key-{key} {{ background-color: {background}; border: 1px solid {border}; "
+        f"border-radius: 0.5rem; padding: 1rem 1rem 0.25rem 1rem; margin-bottom: 1rem; }}"
+        f".st-key-{key} [data-testid='stMetricValue'], "
+        f".st-key-{key} [data-testid='stMetricLabel'] {{ color: {_CARD_TEXT_COLOR}; }}"
+    )
 
 
 def _format_percent(value: float | None) -> str:
