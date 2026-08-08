@@ -27,6 +27,9 @@ from asset_lab.services.return_service import ReturnService
 
 logger = logging.getLogger(__name__)
 
+# 圓餅圖粒度的中文顯示（內部值需與 AllocationService.snapshot(by=...) 的合約一致）。
+_GRANULARITY_LABEL = {"category": "分類", "holding": "項目"}
+
 
 def _container() -> Container:
     """取放行後存入 session 的依賴容器。"""
@@ -60,14 +63,14 @@ def render() -> None:
             holdings=holdings,
             latest_ym=latest_ym,
         )
-        _render_area(
-            allocation_service=allocation_service, holdings=holdings, range_df=range_df
-        )
         _render_net_worth(
             allocation_service=allocation_service, holdings=holdings, range_df=range_df
         )
         _render_cumulative_twr(
             return_service=return_service, holdings=holdings, range_df=range_df
+        )
+        _render_area(
+            allocation_service=allocation_service, holdings=holdings, range_df=range_df
         )
     except AssetLabError as error:
         logger.exception("資產配置頁渲染失敗")
@@ -83,7 +86,12 @@ def _render_pie(
 ) -> None:
     """選定月份資產配置圓餅（可切項目/分類粒度）。"""
     st.subheader("配置佔比（圓餅）")
-    by = st.radio("粒度", options=["category", "holding"], horizontal=True)
+    by = st.radio(
+        "粒度",
+        options=["category", "holding"],
+        format_func=lambda option: _GRANULARITY_LABEL[option],
+        horizontal=True,
+    )
     month_records = record_repo.read_month(year_month=latest_ym)
     snapshot = allocation_service.snapshot(
         month_records=month_records, holdings=holdings, by=by
@@ -98,7 +106,7 @@ def _render_area(
     range_df: pd.DataFrame,
 ) -> None:
     """各資產分類佔比隨月份變化的堆疊面積圖（區間自開始記錄至最新月）。"""
-    st.subheader("配置漂移（堆疊面積）")
+    st.subheader("配置漂移（堆疊面積，單位：%）")
     drift_df = allocation_service.drift_series(range_df=range_df, holdings=holdings)
     st.plotly_chart(charts.allocation_area(drift_df=drift_df), use_container_width=True)
 
@@ -110,7 +118,7 @@ def _render_net_worth(
     range_df: pd.DataFrame,
 ) -> None:
     """淨值折線，使用者可勾選疊加總資產/總負債線。"""
-    st.subheader("淨值趨勢（折線）")
+    st.subheader("淨值趨勢（折線，單位：萬元）")
     show_assets = st.checkbox("疊加總資產線")
     show_liabilities = st.checkbox("疊加總負債線")
     points = allocation_service.net_worth_series(range_df=range_df, holdings=holdings)
@@ -129,7 +137,7 @@ def _render_cumulative_twr(
     range_df: pd.DataFrame,
 ) -> None:
     """整體累積 TWR 走勢（固定單一折線，不提供指標切換）。"""
-    st.subheader("報酬率走勢（累積 TWR）")
+    st.subheader("報酬率走勢（累積 TWR，單位：%）")
     points = return_service.cumulative_twr_series(range_df=range_df, holdings=holdings)
     st.plotly_chart(charts.cumulative_twr_line(points=points), use_container_width=True)
 

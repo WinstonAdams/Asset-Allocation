@@ -29,10 +29,19 @@ _AREA_YEAR_MONTH = "year_month"
 _AREA_DIMENSION_KEY = "dimension_key"
 _AREA_WEIGHT = "weight"
 
-# 淨值折線三條線的圖例名稱。
+# 淨值折線三條線的圖例名稱。y 軸以萬元為單位呈現（本國慣例），customdata 保留原始
+# 元為單位數值供 hover 顯示精確金額。
 _NET_WORTH_LABEL = "淨值"
 _TOTAL_ASSETS_LABEL = "總資產"
 _TOTAL_LIABILITIES_LABEL = "總負債"
+_NET_WORTH_HOVER_TEMPLATE = (
+    "%{fullData.name}<br>時間：%{x}<br>金額：%{customdata:,.0f} 元<extra></extra>"
+)
+_TWD_PER_WAN = 10_000
+
+# 累積報酬率走勢折線的圖例名稱與 hover 樣板。
+_CUMULATIVE_TWR_LABEL = "累積 TWR"
+_CUMULATIVE_TWR_HOVER_TEMPLATE = "時間：%{x}<br>累積 TWR：%{y:.2%}<extra></extra>"
 
 
 def allocation_pie(*, snapshot: Sequence[AllocationSnapshot]) -> go.Figure:
@@ -49,7 +58,9 @@ def allocation_pie(*, snapshot: Sequence[AllocationSnapshot]) -> go.Figure:
     """
     labels = [item.dimension_key for item in snapshot]
     values = [item.weight for item in snapshot]
-    return px.pie(names=labels, values=values)
+    figure = px.pie(names=labels, values=values)
+    figure.update_traces(hovertemplate="%{label}<br>佔比：%{value:.1f}%<extra></extra>")
+    return figure
 
 
 def allocation_area(*, drift_df: pd.DataFrame) -> go.Figure:
@@ -68,13 +79,18 @@ def allocation_area(*, drift_df: pd.DataFrame) -> go.Figure:
     """
     if drift_df.empty:
         return go.Figure()
-    return px.area(
+    figure = px.area(
         drift_df,
         x=_AREA_YEAR_MONTH,
         y=_AREA_WEIGHT,
         color=_AREA_DIMENSION_KEY,
         groupnorm="percent",
     )
+    figure.update_layout(xaxis_title="時間", xaxis_type="category", legend_title_text="分類")
+    figure.update_traces(
+        hovertemplate="%{fullData.name}<br>時間：%{x}<br>佔比：%{y:.1f}%<extra></extra>"
+    )
+    return figure
 
 
 def net_worth_line(
@@ -101,32 +117,42 @@ def net_worth_line(
         return figure
 
     months = [point.year_month for point in points]
+    net_worths = [point.net_worth for point in points]
     figure.add_trace(
         go.Scatter(
             x=months,
-            y=[point.net_worth for point in points],
+            y=[value / _TWD_PER_WAN for value in net_worths],
+            customdata=net_worths,
             mode="lines+markers",
             name=_NET_WORTH_LABEL,
+            hovertemplate=_NET_WORTH_HOVER_TEMPLATE,
         )
     )
     if show_assets:
+        total_assets = [point.total_assets for point in points]
         figure.add_trace(
             go.Scatter(
                 x=months,
-                y=[point.total_assets for point in points],
+                y=[value / _TWD_PER_WAN for value in total_assets],
+                customdata=total_assets,
                 mode="lines+markers",
                 name=_TOTAL_ASSETS_LABEL,
+                hovertemplate=_NET_WORTH_HOVER_TEMPLATE,
             )
         )
     if show_liabilities:
+        total_liabilities = [point.total_liabilities for point in points]
         figure.add_trace(
             go.Scatter(
                 x=months,
-                y=[point.total_liabilities for point in points],
+                y=[value / _TWD_PER_WAN for value in total_liabilities],
+                customdata=total_liabilities,
                 mode="lines+markers",
                 name=_TOTAL_LIABILITIES_LABEL,
+                hovertemplate=_NET_WORTH_HOVER_TEMPLATE,
             )
         )
+    figure.update_layout(xaxis_title="時間", xaxis_type="category", yaxis_tickformat=",.1f")
     return figure
 
 
@@ -146,5 +172,14 @@ def cumulative_twr_line(*, points: Sequence[CumulativeTwrPoint]) -> go.Figure:
     months = [point.year_month for point in points]
     values = [point.cumulative_twr for point in points]
     figure = go.Figure()
-    figure.add_trace(go.Scatter(x=months, y=values, mode="lines+markers"))
+    figure.add_trace(
+        go.Scatter(
+            x=months,
+            y=values,
+            mode="lines+markers",
+            name=_CUMULATIVE_TWR_LABEL,
+            hovertemplate=_CUMULATIVE_TWR_HOVER_TEMPLATE,
+        )
+    )
+    figure.update_layout(xaxis_title="時間", xaxis_type="category", yaxis_tickformat=".0%")
     return figure

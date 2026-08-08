@@ -103,7 +103,9 @@ def test_sc027_net_worth_line_defaults_to_net_worth_only() -> None:
     assert len(figure.data) == 1
     net = figure.data[0]
     assert list(net.x) == ["2026-04", "2026-05"]
-    assert list(net.y) == [800.0, 1050.0]
+    # y 軸以萬元為單位呈現，customdata 保留原始元為單位的精確金額供 hover 顯示。
+    assert list(net.y) == [0.08, 0.105]
+    assert list(net.customdata) == [800.0, 1050.0]
 
 
 @pytest.mark.scenario("SC-027")
@@ -123,9 +125,14 @@ def test_sc027_net_worth_line_can_overlay_assets_and_liabilities() -> None:
     )
 
     series = {trace.name: list(trace.y) for trace in figure.data}
-    assert series["淨值"] == [800.0, 1050.0]
-    assert series["總資產"] == [1000.0, 1200.0]
-    assert series["總負債"] == [200.0, 150.0]
+    assert series["淨值"] == [0.08, 0.105]
+    assert series["總資產"] == [0.1, 0.12]
+    assert series["總負債"] == [0.02, 0.015]
+
+    original = {trace.name: list(trace.customdata) for trace in figure.data}
+    assert original["淨值"] == [800.0, 1050.0]
+    assert original["總資產"] == [1000.0, 1200.0]
+    assert original["總負債"] == [200.0, 150.0]
 
 
 @pytest.mark.scenario("SC-027")
