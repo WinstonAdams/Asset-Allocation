@@ -57,7 +57,9 @@ def render() -> None:
             prefilled = input_service.prefill_from_previous(target_ym=target_ym)
             st.session_state["prefilled_records"] = [r.model_dump() for r in prefilled]
 
-        _render_record_editor(record_repo=record_repo, holding_repo=holding_repo)
+        _render_record_editor(
+            record_repo=record_repo, holding_repo=holding_repo, target_ym=target_ym
+        )
         _render_transfer(
             input_service=input_service,
             record_repo=record_repo,
@@ -100,9 +102,13 @@ def _select_target_year_month() -> str:
 
 
 def _render_record_editor(
-    *, record_repo: RecordRepository, holding_repo: HoldingRepository
+    *, record_repo: RecordRepository, holding_repo: HoldingRepository, target_ym: str
 ) -> None:
-    """單列新增/編輯/刪除：收集欄位後委派 Repository 寫入。"""
+    """單列新增/編輯/刪除：收集欄位後委派 Repository 寫入。
+
+    年月沿用頁面上方「錄入年份／錄入月份」下拉選定值，與「項目間轉移」共用同一選擇，
+    避免與獨立文字輸入框脫節而永遠空白。
+    """
     st.subheader("單列錄入")
     holdings = holding_repo.list_holdings()
     if not holdings:
@@ -113,22 +119,23 @@ def _render_record_editor(
     holding_id = st.selectbox(
         "項目", options=list(name_by_id), format_func=lambda hid: name_by_id[hid]
     )
-    year_month = st.text_input("年月（YYYY-MM）", key="row_ym")
-    market_value = st.number_input("市值 / 餘額", value=0.0, step=1000.0)
-    net_investment = st.number_input("當月淨投入（正投入 / 負提領）", value=0.0, step=1000.0)
+    market_value = st.number_input("市值 / 餘額", value=0.0, step=1000.0, format="%.0f")
+    net_investment = st.number_input(
+        "當月淨投入（正投入 / 負提領）", value=0.0, step=1000.0, format="%.0f"
+    )
 
     col_save, col_delete = st.columns(2)
-    if col_save.button("儲存此列") and year_month:
+    if col_save.button("儲存此列"):
         record = MonthlyRecordModel(
             holding_id=holding_id,
-            year_month=year_month,
+            year_month=target_ym,
             market_value=market_value,
             net_investment=net_investment,
         )
         record_repo.upsert_record(record=record)
         st.success("已儲存")
-    if col_delete.button("刪除此列") and year_month:
-        record_repo.delete_record(holding_id=holding_id, year_month=year_month)
+    if col_delete.button("刪除此列"):
+        record_repo.delete_record(holding_id=holding_id, year_month=target_ym)
         st.success("已刪除")
 
 
@@ -152,7 +159,9 @@ def _render_transfer(
     dest_id = st.selectbox(
         "轉入目標", options=list(options), format_func=lambda hid: options[hid], key="dst"
     )
-    amount = st.number_input("轉移金額（正數）", value=0.0, step=1000.0, key="amt")
+    amount = st.number_input(
+        "轉移金額（正數）", value=0.0, step=1000.0, format="%.0f", key="amt"
+    )
 
     if st.button("建立轉移"):
         source, dest = input_service.build_transfer_pair(
