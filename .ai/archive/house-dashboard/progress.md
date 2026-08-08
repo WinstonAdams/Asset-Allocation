@@ -43,6 +43,6 @@
 |------|------|------|
 | 4-1 README 同步 | 完成 | 增量更新：新增買房功能（SIPOC、功能列表、系統架構 services/repositories 摘要、「關鍵邏輯：買房可負擔性與觸發條件」子段落、專案結構加 house.py）＋本機 watchdog 踩坑註記 |
 | 4-2 Windows 啟動器 | 跳過 | 非新專案，使用者一直手動以 uv run streamlit run app.py 啟動，無啟動器需求 |
-| 4-3 歸檔 | 未開始 | — |
+| 4-3 歸檔 | 完成 | 22 張 SC-052~073 已合併入 .ai/scenarios/ 並逐張 diff 驗證一致（全數新建，專案層先前無對應），Change 目錄即將搬移至 archive/ |
 
 **狀態值**：未開始 / 進行中 / 完成 / 跳過
