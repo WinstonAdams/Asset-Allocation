@@ -160,12 +160,14 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
             "初始成本", value=0.0, step=1000.0, format="%.0f", key="new_cost"
         )
 
-    purpose = st.selectbox(
-        "用途",
-        options=list(HOLDING_PURPOSE.ALL),
-        format_func=lambda p: _HOLDING_PURPOSE_LABEL[p],
-        key="new_purpose",
-    )
+    purpose = HOLDING_PURPOSE.GENERAL
+    if kind == HOLDING_KIND.ASSET:
+        purpose = st.selectbox(
+            "用途",
+            options=list(HOLDING_PURPOSE.ALL),
+            format_func=lambda p: _HOLDING_PURPOSE_LABEL[p],
+            key="new_purpose",
+        )
 
     if st.button("新增") and name:
         holding_repo.add_holding(
@@ -224,18 +226,20 @@ def _render_edit_holding(*, holding: HoldingModel, holding_repo: HoldingReposito
             key=sync_keys["cost_key"],
         )
 
-    purpose_options = list(HOLDING_PURPOSE.ALL)
-    # 既有用途理應皆落在受控清單內；不在清單內時退回第一項（一般），不崩畫面。
-    purpose_index = (
-        purpose_options.index(holding.purpose) if holding.purpose in purpose_options else 0
-    )
-    purpose = st.selectbox(
-        "用途",
-        options=purpose_options,
-        index=purpose_index,
-        format_func=lambda p: _HOLDING_PURPOSE_LABEL[p],
-        key=f"{prefix}purpose",
-    )
+    purpose = holding.purpose
+    if holding.kind == HOLDING_KIND.ASSET:
+        purpose_options = list(HOLDING_PURPOSE.ALL)
+        # 既有用途理應皆落在受控清單內；不在清單內時退回第一項（一般），不崩畫面。
+        purpose_index = (
+            purpose_options.index(holding.purpose) if holding.purpose in purpose_options else 0
+        )
+        purpose = st.selectbox(
+            "用途",
+            options=purpose_options,
+            index=purpose_index,
+            format_func=lambda p: _HOLDING_PURPOSE_LABEL[p],
+            key=f"{prefix}purpose",
+        )
 
     if st.button("儲存變更", key=f"{prefix}save"):
         holding_repo.update_holding(

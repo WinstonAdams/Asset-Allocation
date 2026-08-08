@@ -444,6 +444,22 @@ class TestNewHoldingPurposeSelectbox:
 
         assert repo.added[0].purpose == HOLDING_PURPOSE.GENERAL
 
+    @pytest.mark.scenario("SC-057")
+    def test_sc057_new_liability_does_not_show_purpose_selectbox_and_defaults_general(self):
+        # 用途僅供買房 bucket 判斷資產是否計入購屋準備金，負債永不計入，故不顯示此欄位
+        repo = _StubHoldingRepo()
+        at = _run_app(holding_repo=repo)
+        at.text_input(key="new_name").set_value("房貸")
+        at.selectbox(key="new_kind").select(HOLDING_KIND.LIABILITY).run()
+
+        with pytest.raises(KeyError):
+            at.selectbox(key="new_purpose")
+
+        add_button = next(b for b in at.button if b.label == "新增")
+        add_button.click().run()
+
+        assert repo.added[0].purpose == HOLDING_PURPOSE.GENERAL
+
 
 class TestEditExistingHoldingPurposeSelectbox:
     """SC-057（編輯流程）：編輯既有項目可將用途從一般改為購屋、或反向改回。"""
@@ -523,8 +539,8 @@ class TestEditExistingHoldingPurposeSelectbox:
         assert repo.updated[0].purpose == HOLDING_PURPOSE.HOUSE
 
     @pytest.mark.scenario("SC-057")
-    def test_sc057_liability_edit_also_shows_purpose_selectbox(self):
-        # 用途為純附加標記，負債項目同樣可標記用途（不受性質分支限制）
+    def test_sc057_liability_edit_does_not_show_purpose_selectbox(self):
+        # 用途僅供買房 bucket 判斷資產是否計入購屋準備金，負債永不計入，故不顯示此欄位
         holding = HoldingModel(
             holding_id=13,
             name="房貸",
@@ -535,5 +551,5 @@ class TestEditExistingHoldingPurposeSelectbox:
             purpose=HOLDING_PURPOSE.GENERAL,
         )
         at = _run_app(holding_repo=_StubHoldingRepo(holdings=[holding]))
-        purpose_select = at.selectbox(key="edit_13_purpose")
-        assert purpose_select.value == HOLDING_PURPOSE.GENERAL
+        with pytest.raises(KeyError):
+            at.selectbox(key="edit_13_purpose")
