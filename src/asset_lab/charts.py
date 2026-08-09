@@ -59,7 +59,12 @@ def allocation_pie(*, snapshot: Sequence[AllocationSnapshot]) -> go.Figure:
     labels = [item.dimension_key for item in snapshot]
     values = [item.weight for item in snapshot]
     figure = px.pie(names=labels, values=values)
-    figure.update_traces(hovertemplate="%{label}<br>佔比：%{value:.1f}%<extra></extra>")
+    figure.update_traces(
+        textinfo="label+percent",
+        textposition="auto",
+        hovertemplate="%{label}<br>佔比：%{value:.1f}%<extra></extra>",
+    )
+    figure.update_layout(height=600)
     return figure
 
 
