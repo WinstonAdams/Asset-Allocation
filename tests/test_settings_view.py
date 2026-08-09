@@ -54,20 +54,13 @@ class _StubHoldingRepo:
 
 
 class _StubTargetRepo:
-    """目標比重替身：無既有設定，供 _render_targets 與 _render_drift 讀取。"""
+    """目標比重替身：無既有設定，供 _render_targets 讀取。"""
 
     def read_targets(self):
         return []
 
     def upsert_target(self, *, target):
         pass
-
-
-class _StubRecordRepo:
-    """記錄層替身：回報「尚無月度紀錄」，讓 _render_drift 提早結束，不需模擬 AllocationService。"""
-
-    def latest_year_month(self):
-        return None
 
 
 class _StubProtocolThresholdRepo:
@@ -89,8 +82,6 @@ def _run_app(*, holding_repo: _StubHoldingRepo | None = None) -> AppTest:
     container = SimpleNamespace(
         holding_repo=holding_repo or _StubHoldingRepo(),
         target_repo=_StubTargetRepo(),
-        record_repo=_StubRecordRepo(),
-        allocation_service=None,
         protocol_threshold_repo=_StubProtocolThresholdRepo(),
         protocol_service=ProtocolService(),
         house_param_repo=_StubHouseParamRepo(),

@@ -2,10 +2,12 @@
 
 職責：渲染四張配置/趨勢圖——圓餅（選定月資產佔比）、堆疊面積（各分類佔比隨月變化）、
 淨值折線（可疊加總資產/總負債）、累積報酬走勢——委派 AllocationService 與 ReturnService
-算資料、交 charts 元件畫 Plotly Figure 後以 st.plotly_chart 呈現。本頁為唯一 catch 點。
+算資料、交 charts 元件畫 Plotly Figure 後以 st.plotly_chart 呈現；另以表格呈現當月各分類
+相對目標比重的偏離與是否需再平衡（目標比重本身的設定仍在「設定」頁）。本頁為唯一
+catch 點。
 
-圖表的業務正確性（僅資產、缺月不補、百分比口徑等）由下層服務的 SC 測試保證；本頁只做
-委派與呈現，不算任何業務值。
+圖表與偏離計算的業務正確性（僅資產、缺月不補、百分比口徑、偏離門檻等）由下層服務的 SC
+測試保證；本頁只做委派與呈現，不算任何業務值。
 """
 
 # ==== 原生（標準庫） ====
@@ -18,10 +20,11 @@ import streamlit as st
 # ==== 專案內部 ====
 from asset_lab import charts
 from asset_lab.bootstrap import Container
-from asset_lab.core.constants import EARLIEST_YEAR_MONTH_SENTINEL
+from asset_lab.core.constants import DEFAULT_REBALANCE_THRESHOLD, EARLIEST_YEAR_MONTH_SENTINEL
 from asset_lab.core.exceptions import AssetLabError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.repositories.record_repository import RecordRepository
+from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.return_service import ReturnService
 
@@ -42,6 +45,7 @@ def render() -> None:
     container = _container()
     holding_repo = container.holding_repo
     record_repo = container.record_repo
+    target_repo = container.target_repo
     allocation_service = container.allocation_service
     return_service = container.return_service
 
@@ -61,6 +65,13 @@ def render() -> None:
             record_repo=record_repo,
             allocation_service=allocation_service,
             holdings=holdings,
+            latest_ym=latest_ym,
+        )
+        _render_drift(
+            holdings=holdings,
+            target_repo=target_repo,
+            record_repo=record_repo,
+            allocation_service=allocation_service,
             latest_ym=latest_ym,
         )
         _render_net_worth(
@@ -97,6 +108,43 @@ def _render_pie(
         month_records=month_records, holdings=holdings, by=by
     )
     st.plotly_chart(charts.allocation_pie(snapshot=snapshot), use_container_width=True)
+
+
+def _render_drift(
+    *,
+    holdings: list[HoldingModel],
+    target_repo: TargetRepository,
+    record_repo: RecordRepository,
+    allocation_service: AllocationService,
+    latest_ym: str,
+) -> None:
+    """當月各分類相對目標的偏離與是否需再平衡（目標比重本身的設定在「設定」頁）。"""
+    st.subheader("目標偏離")
+    month_records = record_repo.read_month(year_month=latest_ym)
+    snapshot = allocation_service.snapshot(
+        month_records=month_records, holdings=holdings, by="category"
+    )
+    drift_rows = allocation_service.compute_drift(
+        snapshot=snapshot,
+        targets=target_repo.read_targets(),
+        threshold=DEFAULT_REBALANCE_THRESHOLD,
+    )
+    if not drift_rows:
+        st.write("尚未設定任何分類目標比重。")
+        return
+
+    st.dataframe(
+        [
+            {
+                "分類": row.category,
+                "現況%": round(row.current_weight, 2),
+                "目標%": round(row.target_weight, 2),
+                "偏離（百分點）": round(row.drift, 2),
+                "需再平衡": "是" if row.needs_rebalance else "否",
+            }
+            for row in drift_rows
+        ]
+    )
 
 
 def _render_area(

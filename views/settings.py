@@ -2,14 +2,15 @@
 
 職責：持有項目主檔的新增/編輯（含改名、改分類、改用途，holding_id 穩定不斷裂歷史）、各分類目標
 比重設定（百分比 0–100）、大跌行為協定回撤門檻設定（正幅度%，存前驗證）、買房參數設定
-（金額/比率/年份，存前驗證），並以 AllocationService.compute_drift 呈現當月各分類相對
-目標的偏離與是否需再平衡。委派 HoldingRepository、TargetRepository、
-ProtocolThresholdRepository/ProtocolService、HouseParamRepository/HouseService 與
-AllocationService。本頁為唯一 catch 點。
+（金額/比率/年份，存前驗證）。委派 HoldingRepository、TargetRepository、
+ProtocolThresholdRepository/ProtocolService 與 HouseParamRepository/HouseService。
+本頁為唯一 catch 點。
 
-主檔身分穩定性、偏離口徑（百分點、嚴格大於門檻）、門檻合法性（0 < L1 < L2 < L3）、買房
-參數合法域（比率開區間、金額/年份非負）等業務正確性由下層的 SC 測試保證；本頁只做委派
-與呈現。
+目標偏離的呈現（現況對目標比重的偏離與是否需再平衡）改置於「資產配置」頁，與其他配置
+相關圖表並列；本頁僅負責目標比重本身的設定。
+
+主檔身分穩定性、門檻合法性（0 < L1 < L2 < L3）、買房參數合法域（比率開區間、金額/年份
+非負）等業務正確性由下層的 SC 測試保證；本頁只做委派與呈現。
 """
 
 # ==== 原生（標準庫） ====
@@ -22,7 +23,6 @@ import streamlit as st
 from asset_lab.bootstrap import Container
 from asset_lab.core.constants import (
     ASSET_CATEGORIES,
-    DEFAULT_REBALANCE_THRESHOLD,
     HOLDING_KIND,
     HOLDING_PURPOSE,
     HOUSE_PARAM_KEY,
@@ -36,9 +36,7 @@ from asset_lab.models.target import TargetAllocationModel
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.house_param_repository import HouseParamRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
-from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.target_repository import TargetRepository
-from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.house_service import HouseService
 from asset_lab.services.protocol_service import ProtocolService
 
@@ -91,8 +89,6 @@ def render() -> None:
     container = _container()
     holding_repo = container.holding_repo
     target_repo = container.target_repo
-    record_repo = container.record_repo
-    allocation_service = container.allocation_service
     protocol_threshold_repo = container.protocol_threshold_repo
     protocol_service = container.protocol_service
     house_param_repo = container.house_param_repo
@@ -108,12 +104,6 @@ def render() -> None:
         _render_house_params(
             house_param_repo=house_param_repo,
             house_service=house_service,
-        )
-        _render_drift(
-            holding_repo=holding_repo,
-            target_repo=target_repo,
-            record_repo=record_repo,
-            allocation_service=allocation_service,
         )
     except AssetLabError as error:
         logger.exception("設定頁操作失敗")
@@ -422,48 +412,6 @@ def _render_house_params(
                 param=HouseParamModel(param_key=key, param_value=value)
             )
         st.success("已儲存買房參數")
-
-
-def _render_drift(
-    *,
-    holding_repo: HoldingRepository,
-    target_repo: TargetRepository,
-    record_repo: RecordRepository,
-    allocation_service: AllocationService,
-) -> None:
-    """當月各分類相對目標的偏離與是否需再平衡。"""
-    st.subheader("目標偏離")
-    latest_ym = record_repo.latest_year_month()
-    if latest_ym is None:
-        st.write("尚無月度紀錄，無法計算偏離。")
-        return
-
-    holdings = holding_repo.list_holdings()
-    month_records = record_repo.read_month(year_month=latest_ym)
-    snapshot = allocation_service.snapshot(
-        month_records=month_records, holdings=holdings, by="category"
-    )
-    drift_rows = allocation_service.compute_drift(
-        snapshot=snapshot,
-        targets=target_repo.read_targets(),
-        threshold=DEFAULT_REBALANCE_THRESHOLD,
-    )
-    if not drift_rows:
-        st.write("尚未設定任何分類目標比重。")
-        return
-
-    st.dataframe(
-        [
-            {
-                "分類": row.category,
-                "現況%": round(row.current_weight, 2),
-                "目標%": round(row.target_weight, 2),
-                "偏離（百分點）": round(row.drift, 2),
-                "需再平衡": "是" if row.needs_rebalance else "否",
-            }
-            for row in drift_rows
-        ]
-    )
 
 
 render()
