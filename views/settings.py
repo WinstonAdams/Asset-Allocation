@@ -20,6 +20,7 @@ import logging
 import streamlit as st
 
 # ==== 專案內部 ====
+from asset_lab.amount_widget import amount_input
 from asset_lab.bootstrap import Container
 from asset_lab.core.constants import (
     ASSET_CATEGORIES,
@@ -29,6 +30,7 @@ from asset_lab.core.constants import (
     PROTOCOL_LEVEL_CODE,
 )
 from asset_lab.core.exceptions import AssetLabError
+from asset_lab.core.utils import parse_amount
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.house import HouseParamModel, HouseParams
 from asset_lab.models.protocol import ProtocolThresholdModel
@@ -72,7 +74,7 @@ def _sync_cost_to_market_value(*, cat_key: str, market_value_key: str, cost_key:
 
     新增與編輯既有項目共用此同步邏輯：只要當下選定分類為活存/定存，改市值或改分類
     皆會觸發（呼叫方以 on_change + kwargs 掛在對應的分類 selectbox 與市值
-    number_input 上，key 依表單而異——新增用固定 key，編輯用各項目的 holding_id 前綴 key）。
+    amount_input 上，key 依表單而異——新增用固定 key，編輯用各項目的 holding_id 前綴 key）。
     """
     if st.session_state.get(cat_key) in _CASH_LIKE_CATEGORIES:
         st.session_state[cost_key] = st.session_state[market_value_key]
@@ -127,8 +129,8 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
         key="new_kind",
     )
     category = None
-    initial_market_value = None
-    initial_cost = None
+    initial_market_value_text = None
+    initial_cost_text = None
     if kind == HOLDING_KIND.ASSET:
         category = st.selectbox(
             "分類",
@@ -137,18 +139,13 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
             on_change=_sync_cost_to_market_value,
             kwargs=_NEW_HOLDING_SYNC_KEYS,
         )
-        initial_market_value = st.number_input(
+        initial_market_value_text = amount_input(
             "初始市值",
-            value=0.0,
-            step=1000.0,
-            format="%.0f",
             key="new_market_value",
             on_change=_sync_cost_to_market_value,
             kwargs=_NEW_HOLDING_SYNC_KEYS,
         )
-        initial_cost = st.number_input(
-            "初始成本", value=0.0, step=1000.0, format="%.0f", key="new_cost"
-        )
+        initial_cost_text = amount_input("初始成本", key="new_cost")
 
     purpose = HOLDING_PURPOSE.GENERAL
     if kind == HOLDING_KIND.ASSET:
@@ -160,6 +157,11 @@ def _render_holdings(*, holding_repo: HoldingRepository) -> None:
         )
 
     if st.button("新增") and name:
+        initial_market_value = None
+        initial_cost = None
+        if kind == HOLDING_KIND.ASSET:
+            initial_market_value = parse_amount(initial_market_value_text, field_label="初始市值")
+            initial_cost = parse_amount(initial_cost_text, field_label="初始成本")
         holding_repo.add_holding(
             holding=HoldingModel(
                 name=name,
@@ -185,8 +187,8 @@ def _render_edit_holding(*, holding: HoldingModel, holding_repo: HoldingReposito
     name = st.text_input("名稱", value=holding.name, key=f"{prefix}name")
 
     category = holding.category
-    initial_market_value = holding.initial_market_value
-    initial_cost = holding.initial_cost
+    initial_market_value_text = None
+    initial_cost_text = None
     if holding.kind == HOLDING_KIND.ASSET:
         options = list(ASSET_CATEGORIES.ALL)
         # 既有分類理應皆落在受控清單內；不在清單內時（如未來清單變動）退回第一項，不崩畫面。
@@ -199,20 +201,16 @@ def _render_edit_holding(*, holding: HoldingModel, holding_repo: HoldingReposito
             on_change=_sync_cost_to_market_value,
             kwargs=sync_keys,
         )
-        initial_market_value = st.number_input(
+        initial_market_value_text = amount_input(
             "初始市值",
-            value=float(holding.initial_market_value or 0.0),
-            step=1000.0,
-            format="%.0f",
+            value=holding.initial_market_value or 0.0,
             key=sync_keys["market_value_key"],
             on_change=_sync_cost_to_market_value,
             kwargs=sync_keys,
         )
-        initial_cost = st.number_input(
+        initial_cost_text = amount_input(
             "初始成本",
-            value=float(holding.initial_cost or 0.0),
-            step=1000.0,
-            format="%.0f",
+            value=holding.initial_cost or 0.0,
             key=sync_keys["cost_key"],
         )
 
@@ -232,6 +230,11 @@ def _render_edit_holding(*, holding: HoldingModel, holding_repo: HoldingReposito
         )
 
     if st.button("儲存變更", key=f"{prefix}save"):
+        initial_market_value = holding.initial_market_value
+        initial_cost = holding.initial_cost
+        if holding.kind == HOLDING_KIND.ASSET:
+            initial_market_value = parse_amount(initial_market_value_text, field_label="初始市值")
+            initial_cost = parse_amount(initial_cost_text, field_label="初始成本")
         holding_repo.update_holding(
             holding=HoldingModel(
                 holding_id=holding.holding_id,
@@ -314,12 +317,9 @@ def _render_house_params(
     st.subheader("買房參數")
     current = house_service.effective_params(stored=house_param_repo.read_params())
 
-    target_total_price = st.number_input(
+    target_total_price_text = amount_input(
         "目標總價（TWD）",
-        value=float(current.target_total_price),
-        min_value=0.0,
-        step=10000.0,
-        format="%.0f",
+        value=current.target_total_price,
         key="house_target_total_price",
     )
     target_year = st.number_input(
@@ -329,28 +329,19 @@ def _render_house_params(
         step=1,
         key="house_target_year",
     )
-    monthly_after_tax_income = st.number_input(
+    monthly_after_tax_income_text = amount_input(
         "家庭稅後月收（TWD）",
-        value=float(current.monthly_after_tax_income),
-        min_value=0.0,
-        step=1000.0,
-        format="%.0f",
+        value=current.monthly_after_tax_income,
         key="house_monthly_after_tax_income",
     )
-    income_threshold = st.number_input(
+    income_threshold_text = amount_input(
         "收入門檻（TWD/月）",
-        value=float(current.income_threshold),
-        min_value=0.0,
-        step=1000.0,
-        format="%.0f",
+        value=current.income_threshold,
         key="house_income_threshold",
     )
-    cash_floor = st.number_input(
+    cash_floor_text = amount_input(
         "現金地板（TWD）",
-        value=float(current.cash_floor),
-        min_value=0.0,
-        step=10000.0,
-        format="%.0f",
+        value=current.cash_floor,
         key="house_cash_floor",
     )
     down_payment_ratio = st.number_input(
@@ -386,11 +377,13 @@ def _render_house_params(
 
     if st.button("儲存買房參數"):
         candidate = HouseParams(
-            target_total_price=target_total_price,
+            target_total_price=parse_amount(target_total_price_text, field_label="目標總價"),
             target_year=int(target_year),
-            monthly_after_tax_income=monthly_after_tax_income,
-            income_threshold=income_threshold,
-            cash_floor=cash_floor,
+            monthly_after_tax_income=parse_amount(
+                monthly_after_tax_income_text, field_label="家庭稅後月收"
+            ),
+            income_threshold=parse_amount(income_threshold_text, field_label="收入門檻"),
+            cash_floor=parse_amount(cash_floor_text, field_label="現金地板"),
             down_payment_ratio=down_payment_ratio,
             payment_cap_ratio=payment_cap_ratio,
             test_annual_rate=test_annual_rate,

@@ -23,7 +23,7 @@
 | t06 amount-widget-css | 完成 | amount_widget.amount_input（text_input＋千分位初值＋on_change 正規化）＋inject_amount_input_style（st-key 前綴 CSS 只放大金額欄），app.py 登入後注入；SC-083（視覺效果待 2-Z 啟動驗證）；+14 tests，累計 504 綠 |
 | t07 csv-records-contract | 完成 | RECORDS_COLUMNS 尾端附加 total_cost/realized_income，新增 RECORDS_REQUIRED_COLUMNS（舊 4 欄 CSV 可匯入）；SC-031/084；+3 tests，累計 507 綠 |
 | t08 input-view-integration | 完成 | Container 組裝 cost_basis_service；views/input.py 股票/ETF 走總成本編輯器（推算預覽、plan_save/plan_delete）、轉移走 transfer_records_to_write、金額欄改 amount_input；+8 UI 機制 tests，累計 515 綠 |
-| t09 settings-view-amount-inputs | 未開始 | views/settings.py 金額欄改用 amount_input |
+| t09 settings-view-amount-inputs | 完成 | 設定頁初始市值/初始成本、買房四個金額參數改 amount_input，存檔時 parse_amount；非負檢核移交既有 HouseService.validate_params；SC-051 機械更新；累計 515 綠 |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
 
 ## Phase 3：審查
