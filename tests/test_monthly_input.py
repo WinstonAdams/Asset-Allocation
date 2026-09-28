@@ -719,10 +719,10 @@ class _FailAfterNCallsConnection:
 
 
 class TestBatchWriteRollbackOnFailure:
-    """批次寫入中途失敗時，已執行的部分不留存（見 SC-PENDING-001，待主 AI/使用者確認）。"""
+    """批次寫入中途失敗時，已執行的部分不留存（SC-085）。"""
 
-    @pytest.mark.scenario("SC-PENDING-001")
-    def test_scpending001_upsert_records_failure_rolls_back_all_writes(
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_upsert_records_failure_rolls_back_all_writes(
         self, record_repo, conn, seeded_holding_id
     ):
         # 兩筆待寫入，第二筆 execute 時失敗：第一筆也不應該被留存
@@ -739,8 +739,8 @@ class TestBatchWriteRollbackOnFailure:
         assert record_repo.read_month(year_month="2026-05") == []
         assert record_repo.read_month(year_month="2026-06") == []
 
-    @pytest.mark.scenario("SC-PENDING-001")
-    def test_scpending001_upsert_records_failure_reraises_original_error(
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_upsert_records_failure_reraises_original_error(
         self, record_repo, conn, seeded_holding_id
     ):
         # 錯誤原樣往上拋，不被吞掉也不被轉譯成其他例外類型
@@ -751,8 +751,8 @@ class TestBatchWriteRollbackOnFailure:
                 records=[_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)]
             )
 
-    @pytest.mark.scenario("SC-PENDING-001")
-    def test_scpending001_delete_record_and_upsert_failure_restores_deleted_record(
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_delete_record_and_upsert_failure_restores_deleted_record(
         self, record_repo, conn, seeded_holding_id
     ):
         # 既有 2026-05 紀錄；刪除＋批次 upsert 中途失敗，原本的 2026-05 紀錄應維持存在
