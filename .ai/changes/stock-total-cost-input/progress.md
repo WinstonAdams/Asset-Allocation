@@ -7,7 +7,7 @@
 | 1-1 提案 | 完成 | 股票/ETF 改填總成本＋已實現收益推算淨投入；全站金額欄放大＋整數千分位；BR-1~10 |
 | 1-2a 技術選型 | 跳過 | 無新外部依賴；千分位輸入的做法由 designer 於 design.md 決定 |
 | 1-2b 架構分析 | 跳過 | 既有架構（View/Service/Repository）已有前兩個 Change 的 design.md 可參照 |
-| 1-2 設計 | 未開始 | — |
+| 1-2 設計 | 完成 | AD-1~10；推算值寫回 net_investment、新增 total_cost/realized_income 欄、CostBasisService、text_input 千分位；待確認 Q1~Q5 依推薦值（auto-gate，Phase 2 後統一回報） |
 | 1-3 行為規格化 | 未開始 | scenario-author 產 scenarios/ 卡片 |
 | 1-4 任務拆解 | 未開始 | — |
 
