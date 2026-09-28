@@ -8,7 +8,7 @@
 | 1-2a 技術選型 | 跳過 | 無新外部依賴；千分位輸入的做法由 designer 於 design.md 決定 |
 | 1-2b 架構分析 | 跳過 | 既有架構（View/Service/Repository）已有前兩個 Change 的 design.md 可參照 |
 | 1-2 設計 | 完成 | AD-1~10；推算值寫回 net_investment、新增 total_cost/realized_income 欄、CostBasisService、text_input 千分位；待確認 Q1~Q5 依推薦值（auto-gate，Phase 2 後統一回報） |
-| 1-3 行為規格化 | 未開始 | scenario-author 產 scenarios/ 卡片 |
+| 1-3 行為規格化 | 完成 | 新增 SC-074~084（11 張）、更新 SC-008/009/031；SC-075/078 open_questions（分類切換後舊列）主 AI 裁定：視同過渡列套用同一估算規則 |
 | 1-4 任務拆解 | 未開始 | — |
 
 ## Phase 2：實作
