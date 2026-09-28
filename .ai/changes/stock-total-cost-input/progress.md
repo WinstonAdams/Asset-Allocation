@@ -18,7 +18,7 @@
 | t01 schema-model-repository | 完成 | monthly_records 加 total_cost/realized_income（可為 NULL）；`_add_column_if_missing` 通用加欄 helper（holdings.purpose 與新兩欄共用）；RecordRepository 擴充至 6 欄＋新增 read_holding_records/upsert_records/delete_record_and_upsert（AD-2/AD-5）；SC-006（機械擴充）；新增 SC-PENDING-001（批次寫入中途失敗的 rollback 保證，待主 AI/使用者裁決）；pytest 442 綠、ruff 綠 |
 | t02 cost-basis-derive | 完成 | CostBasisService.uses_cost_basis/derive（建構子注入分類、過渡估算標記 is_transition_estimate）；SC-074/075/076；14 tests，累計 456 綠 |
 | t03 cost-basis-recalc | 完成 | CostBasisService.plan_save/plan_delete（AD-4 往後掃描新制列、只回傳有變的列）；SC-077/078；+8 tests，累計 464 綠 |
-| t04 cost-basis-transfer-filter | 未開始 | CostBasisService.transfer_records_to_write（AD-6）；SC-079/080 |
+| t04 cost-basis-transfer-filter | 完成 | CostBasisService.transfer_records_to_write（AD-6，濾掉股票/ETF 端，兩端皆股票回空清單）；SC-079/080；+4 tests，累計 468 綠 |
 | t05 amount-format-parse | 未開始 | core/utils.format_amount/parse_amount；SC-081/082 |
 | t06 amount-widget-css | 未開始 | amount_widget.py + 全站放大樣式；SC-083 |
 | t07 csv-records-contract | 未開始 | CSV records 契約擴充（AD-9）；SC-031/084 |

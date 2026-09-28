@@ -184,6 +184,32 @@ class CostBasisService:
             holding=holding, working_records=working_records, cutoff_year_month=year_month
         )
 
+    def transfer_records_to_write(
+        self,
+        *,
+        pair: tuple[MonthlyRecordModel, MonthlyRecordModel],
+        holdings: list[HoldingModel],
+    ) -> list[MonthlyRecordModel]:
+        """從轉移的成對紀錄中濾掉走總成本推算的股票/ETF 端。
+
+        股票/ETF 項目的當月淨投入改由總成本輸入方式推算（見 `derive`），轉移
+        產生的淨投入不寫入，避免和推算值衝突；另一端照常寫入。兩端皆為股票/
+        ETF 時回傳空清單，這是合法情況（畫面提示由呼叫端負責，非錯誤）。
+
+        Args:
+            pair: `build_transfer_pair` 產生的成對紀錄 (來源, 目標)。
+            holdings: 涵蓋成對紀錄雙方項目的主檔清單（呼叫端保證雙方皆在清單內）。
+
+        Returns:
+            濾掉股票/ETF 端後的紀錄清單，依原順序排列，0～2 筆。
+        """
+        holdings_by_id = {holding.holding_id: holding for holding in holdings}
+        return [
+            record
+            for record in pair
+            if not self.uses_cost_basis(holding=holdings_by_id[record.holding_id])
+        ]
+
     def _ensure_uses_cost_basis(self, *, holding: HoldingModel) -> None:
         """確保項目分類適用總成本推算，否則拋出例外，供各 public 方法共用守門。
 
