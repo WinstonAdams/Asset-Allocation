@@ -19,7 +19,7 @@
 | t02 cost-basis-derive | 完成 | CostBasisService.uses_cost_basis/derive（建構子注入分類、過渡估算標記 is_transition_estimate）；SC-074/075/076；14 tests，累計 456 綠 |
 | t03 cost-basis-recalc | 完成 | CostBasisService.plan_save/plan_delete（AD-4 往後掃描新制列、只回傳有變的列）；SC-077/078；+8 tests，累計 464 綠 |
 | t04 cost-basis-transfer-filter | 完成 | CostBasisService.transfer_records_to_write（AD-6，濾掉股票/ETF 端，兩端皆股票回空清單）；SC-079/080；+4 tests，累計 468 綠 |
-| t05 amount-format-parse | 未開始 | core/utils.format_amount/parse_amount；SC-081/082 |
+| t05 amount-format-parse | 完成 | core/utils.format_amount/parse_amount（NFKC、嚴格三位分組、四捨五入遠離零取整）；SC-081/082；+22 tests，累計 490 綠 |
 | t06 amount-widget-css | 未開始 | amount_widget.py + 全站放大樣式；SC-083 |
 | t07 csv-records-contract | 未開始 | CSV records 契約擴充（AD-9）；SC-031/084 |
 | t08 input-view-integration | 未開始 | views/input.py 整合 + bootstrap 組裝（AD-10） |
