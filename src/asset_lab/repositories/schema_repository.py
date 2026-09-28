@@ -10,10 +10,11 @@
 
 本層只負責 DDL 執行（純 I/O），不含任何業務判斷。
 
-holdings 的 purpose 欄為既有已部署資料庫的加欄演進：CREATE TABLE IF NOT EXISTS 對已
-存在的表是 no-op，無法讓已建表的舊庫拿到新欄位，故另以 PRAGMA table_info 探測欄位是否
-已存在、缺才 ALTER TABLE 補上（idempotent，重複呼叫安全）；全新資料庫則由 _CREATE_HOLDINGS
-直接建出含 purpose 的完整表，兩路徑最終結構一致。
+holdings 的 purpose 欄、monthly_records 的 total_cost/realized_income 欄皆為既有已部署
+資料庫的加欄演進：CREATE TABLE IF NOT EXISTS 對已存在的表是 no-op，無法讓已建表的舊庫
+拿到新欄位，故另以 PRAGMA table_info 探測欄位是否已存在、缺才 ALTER TABLE 補上
+（idempotent，重複呼叫安全，三欄共用同一 _add_column_if_missing helper）；全新資料庫則由
+_CREATE_HOLDINGS / _CREATE_MONTHLY_RECORDS 直接建出含新欄的完整表，兩路徑最終結構一致。
 """
 
 # ==== 原生（標準庫） ====
@@ -57,13 +58,29 @@ _ALTER_HOLDINGS_ADD_PURPOSE = (
     f"{HOLDINGS_TABLE.PURPOSE} TEXT NOT NULL DEFAULT '{HOLDING_PURPOSE.GENERAL}'"
 )
 
+# 既有（本功能上線前建立）的 monthly_records 表加欄遷移：不設 DEFAULT，既有列補 NULL
+# （＝舊制列），與新庫直建的 NULL 語意一致。
+_ALTER_MONTHLY_RECORDS_ADD_TOTAL_COST = (
+    f"ALTER TABLE {MONTHLY_RECORDS_TABLE.TABLE_NAME} ADD COLUMN "
+    f"{MONTHLY_RECORDS_TABLE.TOTAL_COST} REAL"
+)
+_ALTER_MONTHLY_RECORDS_ADD_REALIZED_INCOME = (
+    f"ALTER TABLE {MONTHLY_RECORDS_TABLE.TABLE_NAME} ADD COLUMN "
+    f"{MONTHLY_RECORDS_TABLE.REALIZED_INCOME} REAL"
+)
+
 # 月度時間序列。複合主鍵 (holding_id, year_month) 由 DB 保證同月同項目不得有兩列。
+# total_cost/realized_income 為股票/ETF 總成本推算功能附加欄位，皆可為 NULL、不設 DEFAULT：
+# NULL 本身就代表「非股票/ETF 或本功能上線前的舊制列」，新庫直建即含此二欄（既有資料庫由
+# 下方加欄遷移補上）。
 _CREATE_MONTHLY_RECORDS = f"""
 CREATE TABLE IF NOT EXISTS {MONTHLY_RECORDS_TABLE.TABLE_NAME} (
     {MONTHLY_RECORDS_TABLE.HOLDING_ID} INTEGER NOT NULL,
     {MONTHLY_RECORDS_TABLE.YEAR_MONTH} TEXT NOT NULL,
     {MONTHLY_RECORDS_TABLE.MARKET_VALUE} REAL,
     {MONTHLY_RECORDS_TABLE.NET_INVESTMENT} REAL NOT NULL DEFAULT 0,
+    {MONTHLY_RECORDS_TABLE.TOTAL_COST} REAL,
+    {MONTHLY_RECORDS_TABLE.REALIZED_INCOME} REAL,
     PRIMARY KEY ({MONTHLY_RECORDS_TABLE.HOLDING_ID}, {MONTHLY_RECORDS_TABLE.YEAR_MONTH})
 )
 """
@@ -113,7 +130,7 @@ class SchemaRepository:
         self._conn = conn
 
     def ensure_schema(self) -> None:
-        """建立六張表（if not exists）並補齊 holdings 加欄遷移。
+        """建立六張表（if not exists）並補齊 holdings / monthly_records 加欄遷移。
 
         重複呼叫安全（idempotent），不影響既有資料：建表為 CREATE IF NOT EXISTS，
         加欄遷移先探測欄位是否已存在，缺才 ALTER，避免對已升級過的庫重複 ALTER 出錯。
@@ -125,18 +142,37 @@ class SchemaRepository:
         cursor.execute(_CREATE_PROTOCOL_THRESHOLDS)
         cursor.execute(_CREATE_HOUSE_PARAMS)
         cursor.execute(_CREATE_SUBJECTIVE_TRIGGERS)
-        self._ensure_holdings_purpose_column(cursor)
+        self._add_column_if_missing(
+            cursor,
+            table=HOLDINGS_TABLE.TABLE_NAME,
+            column=HOLDINGS_TABLE.PURPOSE,
+            alter_sql=_ALTER_HOLDINGS_ADD_PURPOSE,
+        )
+        self._add_column_if_missing(
+            cursor,
+            table=MONTHLY_RECORDS_TABLE.TABLE_NAME,
+            column=MONTHLY_RECORDS_TABLE.TOTAL_COST,
+            alter_sql=_ALTER_MONTHLY_RECORDS_ADD_TOTAL_COST,
+        )
+        self._add_column_if_missing(
+            cursor,
+            table=MONTHLY_RECORDS_TABLE.TABLE_NAME,
+            column=MONTHLY_RECORDS_TABLE.REALIZED_INCOME,
+            alter_sql=_ALTER_MONTHLY_RECORDS_ADD_REALIZED_INCOME,
+        )
         self._conn.commit()
 
     @staticmethod
-    def _ensure_holdings_purpose_column(cursor: "Cursor") -> None:
-        """holdings 加欄遷移：PRAGMA 探測 purpose 欄是否已存在，缺才 ALTER 補上。
+    def _add_column_if_missing(
+        cursor: "Cursor", *, table: str, column: str, alter_sql: str
+    ) -> None:
+        """加欄遷移通用 helper：PRAGMA 探測欄位是否已存在，缺才執行 alter_sql 補上。
 
-        全新資料庫已由 _CREATE_HOLDINGS 直接建出 purpose 欄，此處探測必為已存在、
-        略過 ALTER；本 Change 之前建立的既有資料庫探測不到該欄，才執行 ALTER 加欄，
-        既有列由 DEFAULT 回填為一般用途，資料不遺失也不變動。
+        全新資料庫已由對應的 CREATE TABLE 直接建出該欄，此處探測必為已存在、略過
+        ALTER；本 Change（或更早）之前建立的既有資料庫探測不到該欄，才執行 ALTER 加欄，
+        既有列不遺失也不變動（idempotent，重複呼叫安全）。
         """
-        cursor.execute(f"PRAGMA table_info({HOLDINGS_TABLE.TABLE_NAME})")
+        cursor.execute(f"PRAGMA table_info({table})")
         existing_columns = {row[1] for row in cursor.fetchall()}
-        if HOLDINGS_TABLE.PURPOSE not in existing_columns:
-            cursor.execute(_ALTER_HOLDINGS_ADD_PURPOSE)
+        if column not in existing_columns:
+            cursor.execute(alter_sql)

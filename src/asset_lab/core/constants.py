@@ -104,13 +104,20 @@ class HOLDINGS_TABLE:
 
 
 class MONTHLY_RECORDS_TABLE:
-    """項目 × 月份時間序列資料表結構。(holding_id, year_month) 為唯一鍵。"""
+    """項目 × 月份時間序列資料表結構。(holding_id, year_month) 為唯一鍵。
+
+    total_cost/realized_income 為股票/ETF 總成本推算功能附加欄位，可為 NULL：
+    total_cost 不為 NULL 即為新制股票/ETF 列，其 net_investment 為推算值；
+    NULL 代表非股票/ETF 分類，或本功能上線前建立的舊制列。
+    """
 
     TABLE_NAME = "monthly_records"
     HOLDING_ID = "holding_id"
     YEAR_MONTH = "year_month"
     MARKET_VALUE = "market_value"
     NET_INVESTMENT = "net_investment"
+    TOTAL_COST = "total_cost"
+    REALIZED_INCOME = "realized_income"
 
 
 class TARGET_ALLOCATIONS_TABLE:

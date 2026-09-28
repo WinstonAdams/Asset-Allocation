@@ -15,7 +15,7 @@
 
 | Task | 狀態 | 備註 |
 |------|------|------|
-| t01 schema-model-repository | 未開始 | monthly_records 加欄 + Repository 擴充（AD-2/AD-5）；SC-006 |
+| t01 schema-model-repository | 完成 | monthly_records 加 total_cost/realized_income（可為 NULL）；`_add_column_if_missing` 通用加欄 helper（holdings.purpose 與新兩欄共用）；RecordRepository 擴充至 6 欄＋新增 read_holding_records/upsert_records/delete_record_and_upsert（AD-2/AD-5）；SC-006（機械擴充）；新增 SC-PENDING-001（批次寫入中途失敗的 rollback 保證，待主 AI/使用者裁決）；pytest 442 綠、ruff 綠 |
 | t02 cost-basis-derive | 未開始 | CostBasisService.uses_cost_basis/derive；SC-074/075/076 |
 | t03 cost-basis-recalc | 未開始 | CostBasisService.plan_save/plan_delete（AD-4）；SC-077/078 |
 | t04 cost-basis-transfer-filter | 未開始 | CostBasisService.transfer_records_to_write（AD-6）；SC-079/080 |

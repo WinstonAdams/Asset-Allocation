@@ -1,6 +1,6 @@
 """月度紀錄 I/O。(holding_id, year_month) 為複合主鍵（唯一鍵）。
 
-兩條寫入路徑語意不同：
+兩條單列寫入路徑語意不同：
 - insert_record：嚴格新增，同月同項目已存在時拒絕（不覆蓋既有列）；對應「新增一列」操作。
 - upsert_record：存在則更新、不存在則新增；對應「編輯既有列」操作（不產生重複列）。
 
@@ -8,6 +8,11 @@
 "UNIQUE constraint failed"），且錯誤發生在 execute 當下、既有列不被更動；本層只把這個
 特定的唯一鍵衝突轉譯為領域例外 DataValidationError，讓上層能與其他 I/O 錯誤區分，其餘
 錯誤原樣往上拋。
+
+兩個 compound method（upsert_records / delete_record_and_upsert）用於一次寫入多列：股票/
+ETF 存檔或刪除時，可能同時牽動存檔列本身與其後受影響的多筆重算列，寫了一半會讓推算鏈不
+一致，故收斂在單一交易內完成——多個 statement 執行完才 commit 一次；任一步失敗就先
+rollback 再原樣往上拋，不在此層記錄錯誤（錯誤處理仍由上層負責）。
 
 報酬率/趨勢/匯出用的區間與全量讀取以 DataFrame 回傳，方便 Service 端做連乘與彙總。
 """
@@ -34,6 +39,8 @@ _COLUMNS = (
     MONTHLY_RECORDS_TABLE.YEAR_MONTH,
     MONTHLY_RECORDS_TABLE.MARKET_VALUE,
     MONTHLY_RECORDS_TABLE.NET_INVESTMENT,
+    MONTHLY_RECORDS_TABLE.TOTAL_COST,
+    MONTHLY_RECORDS_TABLE.REALIZED_INCOME,
 )
 _SELECT_COLUMNS = ", ".join(_COLUMNS)
 _TABLE = MONTHLY_RECORDS_TABLE.TABLE_NAME
@@ -41,6 +48,8 @@ _HOLDING_ID = MONTHLY_RECORDS_TABLE.HOLDING_ID
 _YEAR_MONTH = MONTHLY_RECORDS_TABLE.YEAR_MONTH
 _MARKET_VALUE = MONTHLY_RECORDS_TABLE.MARKET_VALUE
 _NET_INVESTMENT = MONTHLY_RECORDS_TABLE.NET_INVESTMENT
+_TOTAL_COST = MONTHLY_RECORDS_TABLE.TOTAL_COST
+_REALIZED_INCOME = MONTHLY_RECORDS_TABLE.REALIZED_INCOME
 
 _SELECT_MONTH = (
     f"SELECT {_SELECT_COLUMNS} FROM {_TABLE} WHERE {_YEAR_MONTH} = ? ORDER BY {_HOLDING_ID}"
@@ -50,17 +59,26 @@ _SELECT_RANGE = (
     f"ORDER BY {_YEAR_MONTH}, {_HOLDING_ID}"
 )
 _SELECT_ALL = f"SELECT {_SELECT_COLUMNS} FROM {_TABLE} ORDER BY {_YEAR_MONTH}, {_HOLDING_ID}"
+_SELECT_HOLDING = (
+    f"SELECT {_SELECT_COLUMNS} FROM {_TABLE} WHERE {_HOLDING_ID} = ? ORDER BY {_YEAR_MONTH}"
+)
 _SELECT_LATEST = f"SELECT MAX({_YEAR_MONTH}) FROM {_TABLE}"
 _INSERT = (
-    f"INSERT INTO {_TABLE} ({_HOLDING_ID}, {_YEAR_MONTH}, {_MARKET_VALUE}, {_NET_INVESTMENT}) "
-    f"VALUES (?, ?, ?, ?)"
+    f"INSERT INTO {_TABLE} "
+    f"({_HOLDING_ID}, {_YEAR_MONTH}, {_MARKET_VALUE}, {_NET_INVESTMENT}, "
+    f"{_TOTAL_COST}, {_REALIZED_INCOME}) "
+    f"VALUES (?, ?, ?, ?, ?, ?)"
 )
 _UPSERT = (
-    f"INSERT INTO {_TABLE} ({_HOLDING_ID}, {_YEAR_MONTH}, {_MARKET_VALUE}, {_NET_INVESTMENT}) "
-    f"VALUES (?, ?, ?, ?) "
+    f"INSERT INTO {_TABLE} "
+    f"({_HOLDING_ID}, {_YEAR_MONTH}, {_MARKET_VALUE}, {_NET_INVESTMENT}, "
+    f"{_TOTAL_COST}, {_REALIZED_INCOME}) "
+    f"VALUES (?, ?, ?, ?, ?, ?) "
     f"ON CONFLICT({_HOLDING_ID}, {_YEAR_MONTH}) DO UPDATE SET "
     f"{_MARKET_VALUE} = excluded.{_MARKET_VALUE}, "
-    f"{_NET_INVESTMENT} = excluded.{_NET_INVESTMENT}"
+    f"{_NET_INVESTMENT} = excluded.{_NET_INVESTMENT}, "
+    f"{_TOTAL_COST} = excluded.{_TOTAL_COST}, "
+    f"{_REALIZED_INCOME} = excluded.{_REALIZED_INCOME}"
 )
 _DELETE_ONE = f"DELETE FROM {_TABLE} WHERE {_HOLDING_ID} = ? AND {_YEAR_MONTH} = ?"
 _DELETE_ALL = f"DELETE FROM {_TABLE}"
@@ -68,18 +86,27 @@ _DELETE_ALL = f"DELETE FROM {_TABLE}"
 
 def _row_to_model(row: tuple) -> MonthlyRecordModel:
     """把月度 row tuple 依固定欄序組回 MonthlyRecordModel。"""
-    holding_id, year_month, market_value, net_investment = row
+    holding_id, year_month, market_value, net_investment, total_cost, realized_income = row
     return MonthlyRecordModel(
         holding_id=holding_id,
         year_month=year_month,
         market_value=market_value,
         net_investment=net_investment,
+        total_cost=total_cost,
+        realized_income=realized_income,
     )
 
 
 def _values(record: MonthlyRecordModel) -> tuple:
     """把 MonthlyRecordModel 攤平成寫入參數（依插入欄序）。"""
-    return (record.holding_id, record.year_month, record.market_value, record.net_investment)
+    return (
+        record.holding_id,
+        record.year_month,
+        record.market_value,
+        record.net_investment,
+        record.total_cost,
+        record.realized_income,
+    )
 
 
 class RecordRepository:
@@ -110,6 +137,12 @@ class RecordRepository:
         cursor = self._conn.cursor()
         cursor.execute(_SELECT_ALL)
         return self._to_dataframe(cursor.fetchall())
+
+    def read_holding_records(self, *, holding_id: int) -> list[MonthlyRecordModel]:
+        """讀該項目的全部月度紀錄，依 year_month 由舊到新排序（供股票/ETF 總成本推算使用）。"""
+        cursor = self._conn.cursor()
+        cursor.execute(_SELECT_HOLDING, (holding_id,))
+        return [_row_to_model(row) for row in cursor.fetchall()]
 
     def latest_year_month(self) -> str | None:
         """回傳最新有資料的月份；無任何紀錄時回 None（供帶入上月判斷）。"""
@@ -147,6 +180,36 @@ class RecordRepository:
         """刪除某 (holding_id, year_month) 單列；不存在時為無操作。"""
         cursor = self._conn.cursor()
         cursor.execute(_DELETE_ONE, (holding_id, year_month))
+        self._conn.commit()
+
+    def upsert_records(self, *, records: list[MonthlyRecordModel]) -> None:
+        """批次 upsert 多列，單一交易；任一步失敗則 rollback 後原樣往上拋。
+
+        空清單為無操作（不開交易、不 commit）。
+        """
+        if not records:
+            return
+        cursor = self._conn.cursor()
+        try:
+            for record in records:
+                cursor.execute(_UPSERT, _values(record))
+        except Exception:
+            self._conn.rollback()
+            raise
+        self._conn.commit()
+
+    def delete_record_and_upsert(
+        self, *, holding_id: int, year_month: str, records: list[MonthlyRecordModel]
+    ) -> None:
+        """刪除單列後批次 upsert 受影響列，單一交易；任一步失敗則 rollback 後原樣往上拋。"""
+        cursor = self._conn.cursor()
+        try:
+            cursor.execute(_DELETE_ONE, (holding_id, year_month))
+            for record in records:
+                cursor.execute(_UPSERT, _values(record))
+        except Exception:
+            self._conn.rollback()
+            raise
         self._conn.commit()
 
     def replace_all(self, *, records: list[MonthlyRecordModel]) -> None:
