@@ -273,7 +273,9 @@ class CSV_EXPORT:
     欄位即各 model 的欄位、欄序固定；此為對外契約，發布後改欄位須維持相容。
     HOLDINGS_COLUMNS 末端附加 purpose（純附加，既有欄序不變）；HOLDINGS_REQUIRED_COLUMNS
     為匯入表頭驗證的強制欄位集，不含 purpose——舊版 CSV 缺此欄仍能通過表頭驗證並匯入，
-    缺欄視為未填、補一般（向後相容）。
+    缺欄視為未填、補一般（向後相容）。RECORDS_COLUMNS 同理末端附加 total_cost、
+    realized_income；RECORDS_REQUIRED_COLUMNS 不含這兩欄，舊版 CSV 缺欄仍可匯入，
+    缺欄視為未填（還原為 None）。
     """
 
     HOLDINGS_COLUMNS = (
@@ -291,7 +293,10 @@ class CSV_EXPORT:
         "year_month",
         "market_value",
         "net_investment",
+        "total_cost",
+        "realized_income",
     )
+    RECORDS_REQUIRED_COLUMNS = RECORDS_COLUMNS[:-2]
     TARGETS_COLUMNS = (
         "category",
         "target_weight",

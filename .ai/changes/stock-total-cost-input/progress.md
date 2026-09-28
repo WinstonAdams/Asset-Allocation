@@ -21,7 +21,7 @@
 | t04 cost-basis-transfer-filter | 完成 | CostBasisService.transfer_records_to_write（AD-6，濾掉股票/ETF 端，兩端皆股票回空清單）；SC-079/080；+4 tests，累計 468 綠 |
 | t05 amount-format-parse | 完成 | core/utils.format_amount/parse_amount（NFKC、嚴格三位分組、四捨五入遠離零取整）；SC-081/082；+22 tests，累計 490 綠 |
 | t06 amount-widget-css | 完成 | amount_widget.amount_input（text_input＋千分位初值＋on_change 正規化）＋inject_amount_input_style（st-key 前綴 CSS 只放大金額欄），app.py 登入後注入；SC-083（視覺效果待 2-Z 啟動驗證）；+14 tests，累計 504 綠 |
-| t07 csv-records-contract | 未開始 | CSV records 契約擴充（AD-9）；SC-031/084 |
+| t07 csv-records-contract | 完成 | RECORDS_COLUMNS 尾端附加 total_cost/realized_income，新增 RECORDS_REQUIRED_COLUMNS（舊 4 欄 CSV 可匯入）；SC-031/084；+3 tests，累計 507 綠 |
 | t08 input-view-integration | 未開始 | views/input.py 整合 + bootstrap 組裝（AD-10） |
 | t09 settings-view-amount-inputs | 未開始 | views/settings.py 金額欄改用 amount_input |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
