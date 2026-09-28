@@ -25,7 +25,7 @@
 | t08 input-view-integration | 完成 | Container 組裝 cost_basis_service；views/input.py 股票/ETF 走總成本編輯器（推算預覽、plan_save/plan_delete）、轉移走 transfer_records_to_write、金額欄改 amount_input；+8 UI 機制 tests，累計 515 綠 |
 | t09 settings-view-amount-inputs | 完成 | 設定頁初始市值/初始成本、買房四個金額參數改 amount_input，存檔時 parse_amount；非負檢核移交既有 HouseService.validate_params；SC-051 機械更新；累計 515 綠 |
 | t10 回繞：新增/改名 test 補 SC marker | 完成 | 2-Z scenario_lint 發現本分支新增 8 個（test_input_view.py）＋改名 2 個（test_settings_view.py）孤兒 test；已補掛 SC-074/077/079/080/081，本分支孤兒歸零，515 綠 |
-| 2-Z 整合驗證 | 進行中 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
+| 2-Z 整合驗證 | 完成 | 首輪 scenario_lint 失敗（本分支 10 個孤兒 test）→ 回繞 t10；重跑三件事全過：lint 85/85 SC 覆蓋（剩 37 個既有技術債孤兒）、pytest 515 綠、啟動 health ok 無異常 log；金額框視覺效果待使用者目視；SC-PENDING-001 待使用者裁決；移除 .auto-gate，Phase 3 恢復逐步確認 |
 
 ## Phase 3：審查
 
