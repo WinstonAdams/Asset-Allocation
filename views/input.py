@@ -1,11 +1,14 @@
 """月度錄入頁（View / Controller）。
 
-職責：渲染月度錄入 UI、收集輸入、委派 MonthlyInputService 與 RecordRepository，並作為
-唯一 catch 點把下層例外轉成 st.error 友善訊息（同時記 log）。不直接寫 SQL、不算任何業務值。
+職責：渲染月度錄入 UI、收集輸入、委派 MonthlyInputService／CostBasisService 與
+RecordRepository，並作為唯一 catch 點把下層例外轉成 st.error 友善訊息（同時記 log）。
+不直接寫 SQL、不算任何業務值。
 
-提供：年+月下拉選擇錄入月份（依 Asia/Taipei 時區預設帶入當月）、帶入上月仍持有清單、單列
-新增/編輯/刪除、項目間成對轉移、賣出語意提示（賣出當月記市值 0、淨投入記負提領金額，之後
-月份不再記列）。業務正確性由下層 Service/Repository 的 SC 測試保證；本頁只做委派與呈現。
+提供：年+月下拉選擇錄入月份（依 Asia/Taipei 時區預設帶入當月）、帶入上月仍持有清單、
+單列新增/編輯/刪除（依項目分類切換欄位：股票/ETF 改以總成本＋現值＋已實現收益輸入，
+存檔前顯示推算淨投入預覽；其餘分類維持市值/餘額＋淨投入直接輸入）、項目間成對轉移
+（涉及股票/ETF 端的淨投入交由推算負責，不重複寫入）、賣出語意提示。業務正確性由下層
+Service/Repository 的 SC 測試保證；本頁只做委派與呈現。
 """
 
 # ==== 原生（標準庫） ====
@@ -15,13 +18,21 @@ import logging
 import streamlit as st
 
 # ==== 專案內部 ====
+from asset_lab.amount_widget import amount_input
 from asset_lab.bootstrap import Container
 from asset_lab.core.constants import TIMEZONE
-from asset_lab.core.exceptions import AssetLabError
-from asset_lab.core.utils import current_year_month, parse_year_month
+from asset_lab.core.exceptions import AssetLabError, DataValidationError
+from asset_lab.core.utils import (
+    current_year_month,
+    format_amount,
+    parse_amount,
+    parse_year_month,
+)
+from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.record_repository import RecordRepository
+from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 from asset_lab.services.period_service import today_in_timezone
 
@@ -42,13 +53,15 @@ def render() -> None:
     st.title("月度錄入")
     st.info(
         "賣出/不再持有：賣出當月請記市值 0、淨投入記為負的提領金額，之後月份不再為該項目記列"
-        "（缺列＝已不持有）。"
+        "（缺列＝已不持有）。股票/ETF 項目賣出時，請把目前總成本與現值填 0、已實現收益填實際"
+        "獲利金額，淨投入將自動推算。"
     )
 
     container = _container()
     record_repo = container.record_repo
     holding_repo = container.holding_repo
     input_service = container.monthly_input_service
+    cost_basis_service = container.cost_basis_service
 
     target_ym = _select_target_year_month()
 
@@ -58,12 +71,16 @@ def render() -> None:
             st.session_state["prefilled_records"] = [r.model_dump() for r in prefilled]
 
         _render_record_editor(
-            record_repo=record_repo, holding_repo=holding_repo, target_ym=target_ym
+            record_repo=record_repo,
+            holding_repo=holding_repo,
+            cost_basis_service=cost_basis_service,
+            target_ym=target_ym,
         )
         _render_transfer(
             input_service=input_service,
             record_repo=record_repo,
             holding_repo=holding_repo,
+            cost_basis_service=cost_basis_service,
             target_ym=target_ym,
         )
     except AssetLabError as error:
@@ -102,12 +119,17 @@ def _select_target_year_month() -> str:
 
 
 def _render_record_editor(
-    *, record_repo: RecordRepository, holding_repo: HoldingRepository, target_ym: str
+    *,
+    record_repo: RecordRepository,
+    holding_repo: HoldingRepository,
+    cost_basis_service: CostBasisService,
+    target_ym: str,
 ) -> None:
-    """單列新增/編輯/刪除：收集欄位後委派 Repository 寫入。
+    """單列新增/編輯/刪除：依項目分類切換輸入欄位後委派 Repository 寫入。
 
     年月沿用頁面上方「錄入年份／錄入月份」下拉選定值，與「項目間轉移」共用同一選擇，
-    避免與獨立文字輸入框脫節而永遠空白。
+    避免與獨立文字輸入框脫節而永遠空白。股票/ETF 分類的項目改走總成本輸入方式，交由
+    `_render_cost_basis_editor` 處理；其餘分類維持市值/餘額與淨投入直接輸入。
     """
     st.subheader("單列錄入")
     holdings = holding_repo.list_holdings()
@@ -116,12 +138,24 @@ def _render_record_editor(
         return
 
     name_by_id = {h.holding_id: h.name for h in holdings}
+    holding_by_id = {h.holding_id: h for h in holdings}
     holding_id = st.selectbox(
         "項目", options=list(name_by_id), format_func=lambda hid: name_by_id[hid]
     )
-    market_value = st.number_input("市值 / 餘額", value=0.0, step=1000.0, format="%.0f")
-    net_investment = st.number_input(
-        "當月淨投入（正投入 / 負提領）", value=0.0, step=1000.0, format="%.0f"
+    holding = holding_by_id[holding_id]
+
+    if cost_basis_service.uses_cost_basis(holding=holding):
+        _render_cost_basis_editor(
+            record_repo=record_repo,
+            cost_basis_service=cost_basis_service,
+            holding=holding,
+            target_ym=target_ym,
+        )
+        return
+
+    market_value_text = amount_input("市值 / 餘額", key="record_market_value")
+    net_investment_text = amount_input(
+        "當月淨投入（正投入 / 負提領）", key="record_net_investment"
     )
 
     col_save, col_delete = st.columns(2)
@@ -129,8 +163,8 @@ def _render_record_editor(
         record = MonthlyRecordModel(
             holding_id=holding_id,
             year_month=target_ym,
-            market_value=market_value,
-            net_investment=net_investment,
+            market_value=parse_amount(market_value_text, field_label="市值/餘額"),
+            net_investment=parse_amount(net_investment_text, field_label="當月淨投入"),
         )
         record_repo.upsert_record(record=record)
         st.success("已儲存")
@@ -139,16 +173,85 @@ def _render_record_editor(
         st.success("已刪除")
 
 
+def _render_cost_basis_editor(
+    *,
+    record_repo: RecordRepository,
+    cost_basis_service: CostBasisService,
+    holding: HoldingModel,
+    target_ym: str,
+) -> None:
+    """股票/ETF 項目：以總成本＋現值＋已實現收益輸入，存檔前顯示推算淨投入預覽。
+
+    每次 rerun 都重新讀取該項目全部紀錄並呼叫 derive 更新預覽，讓使用者輸入到一半也
+    能即時核對；解析失敗（欄位尚未輸入完成）只顯示佔位提示，不當成錯誤攔下整頁。儲存
+    與刪除則需要完整規劃（含連動重算受影響的後續列），交由 CostBasisService 的
+    plan_save／plan_delete 產生完整寫入清單，再一次性交給 Repository 的 compound
+    寫入方法，確保推算鏈要嘛全部落地、要嘛全部不變。
+    """
+    records = record_repo.read_holding_records(holding_id=holding.holding_id)
+
+    total_cost_text = amount_input("目前總成本", key="cost_basis_total_cost")
+    market_value_text = amount_input("現值", key="cost_basis_market_value")
+    realized_income_text = amount_input(
+        "本月已實現收益（已實現損益＋現金股利）", key="cost_basis_realized_income"
+    )
+
+    try:
+        preview = cost_basis_service.derive(
+            holding=holding,
+            records=records,
+            year_month=target_ym,
+            total_cost=parse_amount(total_cost_text, field_label="目前總成本"),
+            realized_income=parse_amount(realized_income_text, field_label="本月已實現收益"),
+        )
+    except DataValidationError:
+        st.caption("輸入完成後顯示推算值")
+    else:
+        st.write(f"前期總成本：{format_amount(preview.previous_total_cost)}")
+        st.write(f"推算本月淨投入：{format_amount(preview.net_investment)}")
+        if preview.is_transition_estimate:
+            st.warning(
+                "前期總成本為過渡期估算值，可能與券商實際總成本有落差，請留意核對。"
+            )
+
+    col_save, col_delete = st.columns(2)
+    if col_save.button("儲存此列"):
+        plan = cost_basis_service.plan_save(
+            holding=holding,
+            records=records,
+            year_month=target_ym,
+            market_value=parse_amount(market_value_text, field_label="現值"),
+            total_cost=parse_amount(total_cost_text, field_label="目前總成本"),
+            realized_income=parse_amount(realized_income_text, field_label="本月已實現收益"),
+        )
+        record_repo.upsert_records(records=plan)
+        st.success("已儲存")
+    if col_delete.button("刪除此列"):
+        plan = cost_basis_service.plan_delete(
+            holding=holding, records=records, year_month=target_ym
+        )
+        record_repo.delete_record_and_upsert(
+            holding_id=holding.holding_id, year_month=target_ym, records=plan
+        )
+        st.success("已刪除")
+
+
 def _render_transfer(
     *,
     input_service: MonthlyInputService,
     record_repo: RecordRepository,
     holding_repo: HoldingRepository,
+    cost_basis_service: CostBasisService,
     target_ym: str,
 ) -> None:
-    """項目間成對轉移：委派 Service 產生成對紀錄後由 Repository 寫入。"""
+    """項目間成對轉移：委派 Service 產生成對紀錄，濾掉股票/ETF 端後才寫入。
+
+    兩端皆為股票/ETF 時濾完為空清單，屬合法情況（雙方淨投入都改由總成本推算），以
+    提示訊息告知使用者，不當成輸入錯誤處理。
+    """
     st.subheader("項目間轉移")
-    options = {h.holding_id: h.name for h in holding_repo.list_holdings()}
+    holdings = holding_repo.list_holdings()
+    options = {h.holding_id: h.name for h in holdings}
     if len(options) < 2:
         st.write("至少需兩個項目才能轉移。")
         return
@@ -159,17 +262,25 @@ def _render_transfer(
     dest_id = st.selectbox(
         "轉入目標", options=list(options), format_func=lambda hid: options[hid], key="dst"
     )
-    amount = st.number_input(
-        "轉移金額（正數）", value=0.0, step=1000.0, format="%.0f", key="amt"
-    )
+    amount_text = amount_input("轉移金額（正數）", key="amt")
 
     if st.button("建立轉移"):
-        source, dest = input_service.build_transfer_pair(
-            source_id=source_id, dest_id=dest_id, amount=amount, year_month=target_ym
+        pair = input_service.build_transfer_pair(
+            source_id=source_id,
+            dest_id=dest_id,
+            amount=parse_amount(amount_text, field_label="轉移金額"),
+            year_month=target_ym,
         )
-        record_repo.upsert_record(record=source)
-        record_repo.upsert_record(record=dest)
-        st.success("已建立成對轉移紀錄")
+        records_to_write = cost_basis_service.transfer_records_to_write(
+            pair=pair, holdings=holdings
+        )
+        if records_to_write:
+            record_repo.upsert_records(records=records_to_write)
+            st.success("已建立成對轉移紀錄")
+        else:
+            st.info(
+                "來源與目標皆為股票/ETF 項目，淨投入改由總成本推算，未寫入任何紀錄。"
+            )
 
 
 render()

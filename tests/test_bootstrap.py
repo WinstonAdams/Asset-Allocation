@@ -34,6 +34,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 from asset_lab import bootstrap
 from asset_lab.core.constants import (
     ASSET_CATEGORIES,
+    COST_BASIS_INPUT,
     HOLDING_KIND,
     HOLDING_PURPOSE,
     HOLDINGS_TABLE,
@@ -48,6 +49,7 @@ from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
+from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 from asset_lab.services.period_service import PeriodService
@@ -162,11 +164,14 @@ def test_build_container_wires_services() -> None:
     assert isinstance(container.period_service, PeriodService)
     assert isinstance(container.data_io_service, DataIoService)
     assert isinstance(container.monthly_input_service, MonthlyInputService)
+    assert isinstance(container.cost_basis_service, CostBasisService)
     assert isinstance(container.protocol_service, ProtocolService)
     assert isinstance(container.affordability_service, AffordabilityService)
     # 月度錄入服務的 I/O 委派接上容器內的 Repository 實例
     assert container.monthly_input_service._record_repo is container.record_repo
     assert container.monthly_input_service._holding_repo is container.holding_repo
+    # 總成本推算服務的分類集合注入自常數，不寫死在組裝邏輯裡
+    assert container.cost_basis_service.cost_basis_categories == COST_BASIS_INPUT.CATEGORIES
 
 
 # === holdings 用途欄位加欄遷移：舊庫升級 / 新庫直建 / 重複啟動三路徑 ===
