@@ -120,6 +120,12 @@ class MONTHLY_RECORDS_TABLE:
     REALIZED_INCOME = "realized_income"
 
 
+class COST_BASIS_INPUT:
+    """依總成本＋已實現收益推算月淨投入的資產分類；其餘分類仍手填市值/餘額與淨投入。"""
+
+    CATEGORIES = frozenset({ASSET_CATEGORIES.TW_STOCK, ASSET_CATEGORIES.US_STOCK})
+
+
 class TARGET_ALLOCATIONS_TABLE:
     """分類目標配置資料表結構。target_weight 以百分比（0–100）儲存。"""
 

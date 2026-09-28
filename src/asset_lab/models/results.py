@@ -9,6 +9,19 @@ from pydantic import BaseModel
 # 無
 
 
+class NetInvestmentDerivation(BaseModel):
+    """股票/ETF 依總成本與已實現收益推算的當月淨投入（存檔前預覽用）。
+
+    is_transition_estimate 為 True 表示前期總成本查無新制上一筆（上一筆是本功能
+    上線前建立的舊制列），改以「初始成本＋該月以前所有淨投入」估算，可能與券商
+    實際總成本有落差，呈現時應提醒使用者留意。
+    """
+
+    previous_total_cost: float
+    is_transition_estimate: bool
+    net_investment: float
+
+
 class ReturnResult(BaseModel):
     """單一維度的報酬率結果。
 
