@@ -8,9 +8,9 @@ test_monthly_input.py 的 SC-005/008/009/037 測試覆蓋）。前半段（年�
 
 後半段新增股票/ETF 總成本輸入的整合測試：分類判斷、推算預覽、存檔/刪除委派、轉移端
 過濾，這些業務規則本身已由 Service 層測試覆蓋（SC-074~080，見 test_cost_basis.py／
-test_monthly_input.py），本檔只驗證 View 層的委派線路本身沒有接錯——用真正的
-CostBasisService（純運算、無 I/O）搭配 Repository 替身，而非重新驗證業務規則，故同樣
-不掛 SC marker。
+test_monthly_input.py），本檔用真正的 CostBasisService（純運算、無 I/O）搭配 Repository
+替身，驗證 View 層的委派線路本身沒有接錯，而非重新驗證業務規則——但仍掛回對應業務規則的
+SC marker（同一規則允許多個 test 從不同層次覆蓋）。
 
 比照 test_page_config.py／test_navigation_guard.py 的做法：以 AppTest 直接載入
 views/input.py（非透過 app.py 的守門與真實 Turso 容器），改以替身容器注入
@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 # ==== 第三方套件 ====
+import pytest
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
@@ -214,6 +215,7 @@ class _StubCostBasisHoldingRepo:
 class TestRecordEditorSwitchesFieldsByCategory:
     """單列錄入依項目分類切換欄位：股票/ETF 走總成本輸入，其餘分類走市值/淨投入。"""
 
+    @pytest.mark.scenario("SC-074")
     def test_stock_holding_shows_cost_basis_fields(self):
         at = _run_app(
             today=date(2026, 5, 15),
@@ -230,6 +232,7 @@ class TestRecordEditorSwitchesFieldsByCategory:
         assert "record_market_value" not in keys
         assert "record_net_investment" not in keys
 
+    @pytest.mark.scenario("SC-074")
     def test_non_stock_holding_shows_market_value_fields(self):
         at = _run_app(
             today=date(2026, 5, 15),
@@ -252,6 +255,7 @@ class TestCostBasisPreviewAndDelegation:
     寫入串起來的線路沒有接錯。
     """
 
+    @pytest.mark.scenario("SC-074")
     def test_preview_shows_previous_total_cost_and_derived_investment(self):
         # 預設欄位皆為 0：無任何前期紀錄，前期總成本＝初始成本 300000；
         # 推算淨投入＝(0−300000)−0＝−300000
@@ -264,6 +268,7 @@ class TestCostBasisPreviewAndDelegation:
         assert "前期總成本：300,000" in written
         assert "推算本月淨投入：-300,000" in written
 
+    @pytest.mark.scenario("SC-074")
     def test_incomplete_input_shows_placeholder_instead_of_crashing(self):
         at = _run_app(
             today=date(2026, 5, 15),
@@ -275,6 +280,7 @@ class TestCostBasisPreviewAndDelegation:
         assert not at.exception
         assert any("輸入完成後顯示推算值" in c.value for c in at.caption)
 
+    @pytest.mark.scenario("SC-074")
     def test_save_button_delegates_to_plan_save_then_batch_upsert(self):
         record_repo = _StubRecordRepo()
         at = _run_app(
@@ -296,6 +302,7 @@ class TestCostBasisPreviewAndDelegation:
         assert saved.market_value == 400000.0
         assert saved.net_investment == 50000.0
 
+    @pytest.mark.scenario("SC-077")
     def test_delete_button_delegates_to_plan_delete_then_delete_record_and_upsert(self):
         record_repo = _StubRecordRepo()
         at = _run_app(
@@ -321,6 +328,7 @@ class TestTransferFiltersCostBasisEnd:
     SC-079/SC-080 覆蓋；這裡驗證 View 有把過濾結果接上 Repository 寫入與畫面提示。
     """
 
+    @pytest.mark.scenario("SC-079")
     def test_transfer_involving_stock_end_writes_only_non_stock_leg(self):
         service = _SpyMonthlyInputService()
         record_repo = _StubRecordRepo()
@@ -342,6 +350,7 @@ class TestTransferFiltersCostBasisEnd:
         assert written.net_investment == -80000.0
         assert any("已建立成對轉移紀錄" in s.value for s in at.success)
 
+    @pytest.mark.scenario("SC-080")
     def test_transfer_both_ends_stock_writes_nothing_and_shows_info(self):
         service = _SpyMonthlyInputService()
         record_repo = _StubRecordRepo()

@@ -24,7 +24,8 @@
 | t07 csv-records-contract | 完成 | RECORDS_COLUMNS 尾端附加 total_cost/realized_income，新增 RECORDS_REQUIRED_COLUMNS（舊 4 欄 CSV 可匯入）；SC-031/084；+3 tests，累計 507 綠 |
 | t08 input-view-integration | 完成 | Container 組裝 cost_basis_service；views/input.py 股票/ETF 走總成本編輯器（推算預覽、plan_save/plan_delete）、轉移走 transfer_records_to_write、金額欄改 amount_input；+8 UI 機制 tests，累計 515 綠 |
 | t09 settings-view-amount-inputs | 完成 | 設定頁初始市值/初始成本、買房四個金額參數改 amount_input，存檔時 parse_amount；非負檢核移交既有 HouseService.validate_params；SC-051 機械更新；累計 515 綠 |
-| 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
+| t10 回繞：新增/改名 test 補 SC marker | 完成 | 2-Z scenario_lint 發現本分支新增 8 個（test_input_view.py）＋改名 2 個（test_settings_view.py）孤兒 test；已補掛 SC-074/077/079/080/081，本分支孤兒歸零，515 綠 |
+| 2-Z 整合驗證 | 進行中 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
 
 ## Phase 3：審查
 

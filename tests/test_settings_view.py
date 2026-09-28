@@ -1,14 +1,17 @@
 """設定頁呈現層與持有項目主檔編輯行為的測試。
 
-本檔含兩類測試：
+本檔含三類測試：
 ①純呈現層調整（無新業務語義，不掛 SC marker）——「性質」selectbox 改用 format_func
 顯示中文「資產/負債」，內部值仍為 HOLDING_KIND.ASSET="asset"/LIABILITY="liability"；
-初始市值/初始成本改用 amount_input（text_input＋整數千分位顯示），存檔時以
-parse_amount 解析回 float，內部值語意不變；目標比重 number_input 的 label 加註
-「（%）」。這些皆不改變下層 Model/Service/Repository的介面或值。既有項目的編輯入口
-（改名/改分類/改初始值後委派 HoldingRepository.update_holding）亦屬此類——
-holding_id 穩定與改分類非時間版本化的業務正確性已由 test_holding_master.py 的
+目標比重 number_input 的 label 加註「（%）」。這些皆不改變下層 Model/Service/Repository
+的介面或值。既有項目的編輯入口（改名/改分類/改初始值後委派 HoldingRepository.update_holding）
+亦屬此類——holding_id 穩定與改分類非時間版本化的業務正確性已由 test_holding_master.py 的
 SC-003/SC-004 覆蓋，本檔只驗證 UI 到 Repository 呼叫邊界的資料傳遞，不重掛 marker。
+
+初始市值/初始成本改用 amount_input（text_input＋整數千分位顯示），存檔時以 parse_amount
+解析回 float，內部值語意不變。千分位顯示與逗號解析的業務規則本身已由 test_core_utils.py／
+test_amount_widget.py 的 SC-081 覆蓋，本檔驗證的是設定頁把這兩個欄位接上 amount_input／
+parse_amount 沒有接錯，故掛回 SC-081。
 
 ②SC-051（活存/定存分類初始成本預設帶入初始市值）——新增或編輯資產項目時，只要當下
 分類為活存/定存，初始成本欄位即自動帶入與初始市值相同的數字，使用者仍可手動覆蓋。
@@ -124,6 +127,7 @@ class TestHoldingKindChineseLabel:
 class TestInitialValueCostNoDecimal:
     """初始市值/初始成本輸入框以整數千分位顯示，不顯示小數；存檔後內部值仍為 float。"""
 
+    @pytest.mark.scenario("SC-081")
     def test_market_value_and_cost_show_thousand_separator_display(self):
         at = _run_app()
         market_value = at.text_input(key="new_market_value")
@@ -131,6 +135,7 @@ class TestInitialValueCostNoDecimal:
         assert market_value.value == "0"
         assert cost.value == "0"
 
+    @pytest.mark.scenario("SC-081")
     def test_market_value_and_cost_parse_to_float_on_save(self):
         repo = _StubHoldingRepo()
         at = _run_app(holding_repo=repo)
