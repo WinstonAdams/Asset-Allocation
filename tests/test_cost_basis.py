@@ -1,4 +1,4 @@
-"""CostBasisService：股票/ETF 依總成本與已實現收益推算當月淨投入（SC-074/075/076）。
+"""CostBasisService：股票/ETF 依總成本與已實現收益推算當月淨投入（SC-074~078）。
 
 CostBasisService 為純運算 Service（無 I/O、無 Streamlit），直接餵虛構的
 HoldingModel/MonthlyRecordModel 驗證，不連任何 DB。所有金額皆為虛構值。
@@ -289,3 +289,187 @@ class TestDeriveLiquidation:
 
         assert _approx(result.previous_total_cost, 350_000)
         assert _approx(result.net_investment, -400_000)
+
+
+def _net_investment_by_year_month(plan: list[MonthlyRecordModel]) -> dict[str, float]:
+    """把 plan_save/plan_delete 回傳的列攤成 {year_month: net_investment}，方便斷言。"""
+    return {record.year_month: record.net_investment for record in plan}
+
+
+class TestPlanSaveRecalculatesImmediateFollowingRecord:
+    """plan_save：修改某月總成本後，只有緊接的下一筆新制列淨投入跟著重算（SC-077）。"""
+
+    @pytest.mark.scenario("SC-077")
+    def test_sc077_edit_earlier_record_recalculates_only_immediate_following_record(
+        self, service: CostBasisService
+    ):
+        holding = _holding(name="中華電", initial_cost=300_000)
+        records = [
+            _record(
+                year_month="2026-05", net_investment=50_000, total_cost=350_000, realized_income=0
+            ),
+            _record(
+                year_month="2026-06", net_investment=50_000, total_cost=400_000, realized_income=0
+            ),
+            _record(
+                year_month="2026-07", net_investment=20_000, total_cost=420_000, realized_income=0
+            ),
+        ]
+
+        plan = service.plan_save(
+            holding=holding,
+            records=records,
+            year_month="2026-05",
+            market_value=420_000,
+            total_cost=360_000,
+            realized_income=0,
+        )
+
+        by_ym = _net_investment_by_year_month(plan)
+        assert set(by_ym) == {"2026-05", "2026-06"}
+        assert _approx(by_ym["2026-05"], 60_000)
+        assert _approx(by_ym["2026-06"], 40_000)
+
+    @pytest.mark.scenario("SC-077")
+    def test_sc077_save_most_recent_record_returns_only_saved_row_when_nothing_follows(
+        self, service: CostBasisService
+    ):
+        """邊界自審：異動月份之後沒有任何列時，往後掃描不應該產生任何額外列。"""
+        holding = _holding(name="中華電", initial_cost=300_000)
+        records = [
+            _record(
+                year_month="2026-05", net_investment=50_000, total_cost=350_000, realized_income=0
+            ),
+        ]
+
+        plan = service.plan_save(
+            holding=holding,
+            records=records,
+            year_month="2026-06",
+            market_value=430_000,
+            total_cost=400_000,
+            realized_income=0,
+        )
+
+        by_ym = _net_investment_by_year_month(plan)
+        assert set(by_ym) == {"2026-06"}
+        assert _approx(by_ym["2026-06"], 50_000)
+
+
+class TestPlanDeleteRecalculatesImmediateFollowingRecord:
+    """plan_delete：刪除某月紀錄後，只有緊接的下一筆新制列淨投入跟著重算（SC-077）。"""
+
+    @pytest.mark.scenario("SC-077")
+    def test_sc077_delete_record_recalculates_only_the_record_after_it(
+        self, service: CostBasisService
+    ):
+        holding = _holding(name="中華電", initial_cost=300_000)
+        records = [
+            _record(
+                year_month="2026-05", net_investment=50_000, total_cost=350_000, realized_income=0
+            ),
+            _record(
+                year_month="2026-06", net_investment=50_000, total_cost=400_000, realized_income=0
+            ),
+            _record(
+                year_month="2026-07", net_investment=20_000, total_cost=420_000, realized_income=0
+            ),
+        ]
+
+        plan = service.plan_delete(holding=holding, records=records, year_month="2026-06")
+
+        by_ym = _net_investment_by_year_month(plan)
+        assert set(by_ym) == {"2026-07"}
+        assert _approx(by_ym["2026-07"], 70_000)
+
+    @pytest.mark.scenario("SC-077")
+    def test_sc077_delete_first_record_causes_following_record_to_fall_back_to_initial_cost(
+        self, service: CostBasisService
+    ):
+        """邊界自審：刪掉最早一筆後，下一筆的前期總成本改回退到項目初始成本。"""
+        holding = _holding(name="中華電", initial_cost=300_000)
+        records = [
+            _record(
+                year_month="2026-05", net_investment=50_000, total_cost=350_000, realized_income=0
+            ),
+            _record(
+                year_month="2026-06", net_investment=50_000, total_cost=400_000, realized_income=0
+            ),
+        ]
+
+        plan = service.plan_delete(holding=holding, records=records, year_month="2026-05")
+
+        by_ym = _net_investment_by_year_month(plan)
+        assert set(by_ym) == {"2026-06"}
+        assert _approx(by_ym["2026-06"], 100_000)
+
+    @pytest.mark.scenario("SC-077")
+    def test_sc077_delete_last_record_returns_empty_plan_when_nothing_follows(
+        self, service: CostBasisService
+    ):
+        """邊界自審：刪掉的是最後一筆時，往後掃描沒有任何候選列，回傳空清單。"""
+        holding = _holding(name="中華電", initial_cost=300_000)
+        records = [
+            _record(
+                year_month="2026-05", net_investment=50_000, total_cost=350_000, realized_income=0
+            ),
+            _record(
+                year_month="2026-06", net_investment=50_000, total_cost=400_000, realized_income=0
+            ),
+        ]
+
+        plan = service.plan_delete(holding=holding, records=records, year_month="2026-06")
+
+        assert plan == []
+
+
+class TestPlanDeleteAcrossTransitionRecords:
+    """plan_delete：連動重算跨越舊制列時，往後找到第一筆新制列才是真正受影響的（SC-078）。"""
+
+    @pytest.mark.scenario("SC-078")
+    def test_sc078_delete_earlier_legacy_record_skips_legacy_and_recalculates_next_new_style_record(
+        self, service: CostBasisService
+    ):
+        holding = _holding(name="台達電", initial_cost=300_000)
+        records = [
+            _record(year_month="2026-01", net_investment=10_000),
+            _record(year_month="2026-02", net_investment=15_000),
+            _record(
+                year_month="2026-03", net_investment=15_000, total_cost=340_000, realized_income=0
+            ),
+        ]
+
+        plan = service.plan_delete(holding=holding, records=records, year_month="2026-01")
+
+        by_ym = _net_investment_by_year_month(plan)
+        assert set(by_ym) == {"2026-03"}
+        assert _approx(by_ym["2026-03"], 25_000)
+
+
+class TestPlanSaveDeletePlanValidation:
+    """plan_save／plan_delete：限用於走總成本推算的分類，違反時拋出例外（同 SC-074 分類守門）。"""
+
+    @pytest.mark.scenario("SC-074")
+    def test_sc074_plan_save_rejects_holding_not_using_cost_basis(
+        self, service: CostBasisService
+    ):
+        holding = _holding(category=ASSET_CATEGORIES.DEMAND_DEPOSIT)
+
+        with pytest.raises(DataValidationError):
+            service.plan_save(
+                holding=holding,
+                records=[],
+                year_month="2026-05",
+                market_value=10_000,
+                total_cost=10_000,
+                realized_income=0,
+            )
+
+    @pytest.mark.scenario("SC-074")
+    def test_sc074_plan_delete_rejects_holding_not_using_cost_basis(
+        self, service: CostBasisService
+    ):
+        holding = _holding(category=ASSET_CATEGORIES.DEMAND_DEPOSIT)
+
+        with pytest.raises(DataValidationError):
+            service.plan_delete(holding=holding, records=[], year_month="2026-05")
