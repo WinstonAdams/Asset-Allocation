@@ -9,12 +9,21 @@
 | 1-2b 架構分析 | 跳過 | 既有架構（View/Service/Repository）已有前兩個 Change 的 design.md 可參照 |
 | 1-2 設計 | 完成 | AD-1~10；推算值寫回 net_investment、新增 total_cost/realized_income 欄、CostBasisService、text_input 千分位；待確認 Q1~Q5 依推薦值（auto-gate，Phase 2 後統一回報） |
 | 1-3 行為規格化 | 完成 | 新增 SC-074~084（11 張）、更新 SC-008/009/031；SC-075/078 open_questions（分類切換後舊列）主 AI 裁定：視同過渡列套用同一估算規則 |
-| 1-4 任務拆解 | 未開始 | — |
+| 1-4 任務拆解 | 完成 | t01~t09（9 個 Task），依賴鏈：t01→(t02→t03/t04)、t01→t07、t05→t06→(t08/t09) |
 
 ## Phase 2：實作
 
 | Task | 狀態 | 備註 |
 |------|------|------|
+| t01 schema-model-repository | 未開始 | monthly_records 加欄 + Repository 擴充（AD-2/AD-5）；SC-006 |
+| t02 cost-basis-derive | 未開始 | CostBasisService.uses_cost_basis/derive；SC-074/075/076 |
+| t03 cost-basis-recalc | 未開始 | CostBasisService.plan_save/plan_delete（AD-4）；SC-077/078 |
+| t04 cost-basis-transfer-filter | 未開始 | CostBasisService.transfer_records_to_write（AD-6）；SC-079/080 |
+| t05 amount-format-parse | 未開始 | core/utils.format_amount/parse_amount；SC-081/082 |
+| t06 amount-widget-css | 未開始 | amount_widget.py + 全站放大樣式；SC-083 |
+| t07 csv-records-contract | 未開始 | CSV records 契約擴充（AD-9）；SC-031/084 |
+| t08 input-view-integration | 未開始 | views/input.py 整合 + bootstrap 組裝（AD-10） |
+| t09 settings-view-amount-inputs | 未開始 | views/settings.py 金額欄改用 amount_input |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
 
 ## Phase 3：審查
