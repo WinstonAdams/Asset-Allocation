@@ -513,7 +513,7 @@ class TestRecordRepositoryEmptyAndIdempotency:
 
 
 # === Repository 層新增能力：讀單一項目全部紀錄、批次寫入（compound method）===
-# 這些方法是後續股票/ETF 總成本推算（CostBasisService）共用的資料底座（design.md AD-3/AD-5），
+# 這些方法是後續股票/ETF 總成本推算（CostBasisService）共用的資料底座，
 # 本身不含業務判斷，屬既有月度紀錄 CRUD 能力（SC-006）的機械擴充。
 
 
@@ -572,7 +572,7 @@ class TestReadHoldingRecords:
 
 
 class TestUpsertRecordsBatch:
-    """upsert_records：批次 upsert 多列，單一交易（AD-5）。"""
+    """upsert_records：批次 upsert 多列，單一交易。"""
 
     @pytest.mark.scenario("SC-006")
     def test_sc006_writes_multiple_new_rows_in_one_call(self, record_repo, seeded_holding_id):
@@ -628,7 +628,7 @@ class TestUpsertRecordsBatch:
 
 
 class TestDeleteRecordAndUpsertBatch:
-    """delete_record_and_upsert：刪除單列後批次 upsert 受影響列，單一交易（AD-5）。"""
+    """delete_record_and_upsert：刪除單列後批次 upsert 受影響列，單一交易。"""
 
     @pytest.mark.scenario("SC-006")
     def test_sc006_removes_target_month_and_writes_affected_months(

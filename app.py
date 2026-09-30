@@ -83,7 +83,7 @@ def main() -> None:
     """守門通過後組裝依賴並路由到當前頁面。"""
     _require_access()
 
-    # 全站金額輸入框放大（BR-10）：守門通過後、路由前呼叫一次即對所有頁面生效。
+    # 守門通過後、路由前呼叫一次，全站金額輸入框放大樣式即對所有頁面生效。
     inject_amount_input_style()
 
     st.session_state[CONTAINER_SESSION_KEY] = bootstrap.get_resilient_container()

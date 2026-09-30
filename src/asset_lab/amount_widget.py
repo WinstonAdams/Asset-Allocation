@@ -1,4 +1,4 @@
-"""金額輸入元件與全站放大樣式（BR-9/BR-10）。
+"""金額輸入元件與全站放大樣式。
 
 金額欄改用 `st.text_input` 顯示整數千分位（`core/utils.format_amount`／`parse_amount`
 負責純格式化與解析），本模組把「初值格式化＋on_change 正規化」包成一個可重用元件，
@@ -24,7 +24,7 @@ from asset_lab.core.utils import format_amount, parse_amount
 # 每個金額欄各自的 key。
 _CONTAINER_KEY_PREFIX = "amount-input-"
 
-# 放大後的字級與高度：明顯大於 Streamlit 預設輸入框，讓金額欄清楚可辨（BR-10）。
+# 放大後的字級與高度：明顯大於 Streamlit 預設輸入框，讓金額欄清楚可辨。
 _FONT_SIZE = "1.25rem"
 _HEIGHT = "3rem"
 
@@ -86,7 +86,7 @@ def _normalize_session_value(key: str) -> None:
 
 
 def inject_amount_input_style() -> None:
-    """注入全站樣式，放大金額輸入框的字級與高度，且只套用於金額欄（BR-10）。
+    """注入全站樣式，放大金額輸入框的字級與高度，且只套用於金額欄。
 
     以 `[class*="st-key-<前綴>"] input` 選中 `amount_input` 外層 container 底下的
     `<input>`；只有帶這個前綴的 container 會命中，同頁其他沒有此前綴的 `text_input`

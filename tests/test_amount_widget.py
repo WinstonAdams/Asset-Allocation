@@ -1,8 +1,7 @@
 """amount_widget 模組：金額輸入元件與全站放大樣式的測試（SC-083）。
 
 以 `AppTest.from_string` 直接驅動 `amount_widget` 的兩個 public 函式，不需要真正的
-頁面整合（元件是後續 views/input.py、views/settings.py 共同依賴的基礎設施，見
-task t06 切片理由）。
+頁面整合（元件是後續 views/input.py、views/settings.py 共同依賴的基礎設施）。
 
 分成三類：
 ① SC-083（本檔正式對映的 Scenario）——`inject_amount_input_style()` 注入的 CSS
@@ -10,16 +9,16 @@ task t06 切片理由）。
    高度；同頁沒有套用 `amount_input` 的一般 `text_input`（如項目名稱）不會被包進
    帶該前綴的 container，因此不會被選中。實際放大後的視覺效果需經 app.py 注入才會
    套用（AppTest 單獨驅動本模組不經過 app.py），留待 2-Z 啟動驗證階段人工確認。
-② 千分位顯示與正規化的業務行為（BR-9，已由 SC-081 描述「輸入後欄位離開焦點即正規化
+② 千分位顯示與正規化的業務行為（已由 SC-081 描述「輸入後欄位離開焦點即正規化
    顯示千分位」）——這裡驗證的是同一條業務規則在 widget 層（實際 Streamlit 欄位
    的初值與 on_change）的落實，掛回 SC-081，不是新的業務邊界；其中一個案例額外用
    呼叫端 on_change 回呼當觀察窗口，確認正規化後的值有正確傳遞出去（仍在驗證
-   SC-081 的正規化結果，串接呼叫端回呼本身是 AD-7 的技術契約，非另立業務邊界）。
+   SC-081 的正規化結果，串接呼叫端回呼本身是既有技術契約，非另立業務邊界）。
 ③ 解析失敗時原樣保留文字、不崩潰（掛回 SC-082）——SC-082 要求「無法解析或留空的
    輸入必須在存檔時被擋下、不落庫」；這個保證成立的前提是 widget 的 on_change 不能
    在存檔前就把使用者還沒改完（或無效）的文字悄悄改掉或讓程式崩潰，否則存檔時就
    看不到原始的無效輸入可供 `parse_amount` 拒絕。本檔驗證的正是這個前提，不是重複
-   t05（tests/test_core_utils.py）已覆蓋的「存檔時拒絕並提示」本身。
+   tests/test_core_utils.py 已覆蓋的「存檔時拒絕並提示」本身。
 """
 
 # ==== 原生（標準庫） ====
@@ -104,8 +103,8 @@ class TestAmountInputOnChangeNormalizesOnBlur:
     @pytest.mark.scenario("SC-081")
     def test_sc081_normalized_value_is_delivered_to_caller_on_change(self):
         # 以呼叫端 on_change 當觀察窗口：正規化後的字串（而非原始輸入）才是往下傳遞
-        # 的值，驗證的仍是 SC-081 的正規化結果；呼叫順序／參數傳遞本身是 AD-7 的
-        # 技術契約，供 t09 串接既有同步回呼（如 SC-051）使用。
+        # 的值，驗證的仍是 SC-081 的正規化結果；呼叫順序／參數傳遞是既有技術契約，
+        # 供呼叫端串接既有同步回呼使用。
         script = textwrap.dedent(
             """
             import streamlit as st
@@ -133,7 +132,7 @@ class TestAmountInputUnparsableInputStaysAvailableForSaveTimeRejection:
     SC-082 的保證是「無法解析或留空的輸入在存檔時被擋下、不落庫」；這裡驗證的是
     這個保證在 widget 層成立的必要前提——on_change 不會把使用者還沒改完（或無效）
     的文字悄悄改掉或讓程式崩潰，讓存檔時 `parse_amount` 仍能看到原始文字並正確拒絕
-    （存檔時的拒絕判定與錯誤提示本身已在 t05 的 tests/test_core_utils.py 覆蓋，
+    （存檔時的拒絕判定與錯誤提示本身已在 tests/test_core_utils.py 覆蓋，
     不在本檔重複）。
     """
 
