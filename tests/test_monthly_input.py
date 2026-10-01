@@ -684,7 +684,7 @@ class _FailingCursor:
         self._fail_at = fail_at
         self._call_count = 0
 
-    def execute(self, *args, **kwargs):
+    def execute(self, *args: object, **kwargs: object):
         self._call_count += 1
         if self._call_count == self._fail_at:
             raise RuntimeError("模擬批次寫入中途失敗")
