@@ -108,4 +108,31 @@ Baseline 命中：0 條
 
 ## 3-4 行為對映審查
 
-<!-- scenario-mapper subagent 產出（AI 比對 SC 描述 vs test 內容，分「不對齊」「對齊」兩類）-->
+審查範圍：本 Change 新增／更新的 15 張 SC 卡片（SC-008、SC-009、SC-031、SC-074~085）× 87 個掛 `@pytest.mark.scenario` marker 的 test 函式，分布於 `tests/test_cost_basis.py`、`tests/test_monthly_input.py`、`tests/test_input_view.py`、`tests/test_amount_widget.py`、`tests/test_core_utils.py`、`tests/test_data_io.py`、`tests/test_settings_view.py` 共 7 個 test 檔案
+核准判定：**通過**
+
+逐一讀取 15 張 SC 卡片的 `## 行為`／`## 邊界`／`## 錯誤` 區段，並讀取全部 87 個對映 test 函式的 mock 設定、輸入值與 assertion 內容逐條比對，數值、分類、方向（正負號）、呼叫序列與訊息語意皆與 SC 描述一致，未發現不對齊項目。另確認 15 張 SC 卡片本身的 `## 行為`／`## 邊界` 區段皆為業務語言（無 class 名／函式名／SQL／exception 類型等實作細節洩漏），符合格式規範；`SC-083` 卡片的實作細節字眼（CSS class 選擇器、AppTest）僅出現在允許技術語言的 `## 測試對映` 區段，不違規。
+
+### 不對齊
+
+（無）
+
+### 對齊
+
+| SC | test 函式（所在檔案） | 判斷依據 |
+|----|----------------------|---------|
+| SC-008 | `tests/test_monthly_input.py::TestBuildTransferPair` 4 個 test（`test_sc008_pair_records_opposite_net_investments` 等） | 2026-05、來源 id=2／目標 id=1、金額 50000 → 來源 −50000／目標 +50000，同月份、金額相等方向相反、市值留空，逐條對映 SC-008 的 GIVEN/WHEN/THEN 與邊界 |
+| SC-009 | `tests/test_monthly_input.py` 的 `test_sc005_sold_item_not_carried`（雙掛 SC-005/SC-009）、`TestPrefillSoldExclusion::test_sc009_no_carry_after_sale_month`、`TestSaleMonthClearoutPersisted` 2 個 test | 賣出當月市值 0／淨投入 −530000 落地持久化為一筆有效紀錄、自下月起缺列不再帶入，對映 SC-009「賣出當月記市值0...後續月份缺列」 |
+| SC-031 | `tests/test_data_io.py::TestExportImportRoundTrip` 6 個 test | 匯出 holdings/records/targets 三份 CSV 皆含表頭與完整列（records 含 total_cost/realized_income 兩新欄）、匯入空庫後還原一致（含負債 None 值不失真、全空資料集還原為空），對映 SC-031 全部 GIVEN/WHEN/THEN |
+| SC-074 | `tests/test_cost_basis.py` 9 個 test（`TestUsesCostBasis`＋`TestDeriveHappyPath`＋`TestPlanSaveDeletePlanValidation`）、`tests/test_input_view.py` 5 個 test | 初始成本 300000 當首筆前期總成本、推算淨投入 50000；前一筆 350000 作新前期總成本；已實現收益 15000/−5000 分別從差額中扣除/加回（−35000/−15000）；非股票/ETF 分類呼叫 `derive`/`plan_save`/`plan_delete` 拋 `DataValidationError`；View 層預覽文字「前期總成本：300,000」「推算本月淨投入：-300,000」與存檔委派落地值，數值與公式皆逐條對應 SC-074 行為與邊界 |
+| SC-075 | `tests/test_cost_basis.py::TestDeriveTransitionEstimate::test_sc075_*` | 鴻海、初始成本 200000，前兩筆舊制列淨投入 30000+20000，前期總成本估算 250000、`is_transition_estimate=True`、推算淨投入 30000，與 SC-075 數值完全一致 |
+| SC-076 | `tests/test_cost_basis.py::TestDeriveLiquidation::test_sc076_*` | 聯發科，前期總成本 350000、本月總成本 0／已實現收益 50000 → 推算淨投入 −400000（恰為負的賣出實收），對映 SC-076 |
+| SC-077 | `tests/test_cost_basis.py` 5 個 test（`TestPlanSaveRecalculatesImmediateFollowingRecord`＋`TestPlanDeleteRecalculatesImmediateFollowingRecord`）、`tests/test_input_view.py::test_delete_button_delegates_to_plan_delete_then_delete_record_and_upsert` | 修改 2026-05 總成本後只有 2026-06 跟著重算（60000/40000，2026-07 不在回傳列中即未變動）；刪除 2026-06 後僅 2026-07 重算為 70000、2026-05 不受影響，與 SC-077 兩段 WHEN/THEN 逐一對應 |
+| SC-078 | `tests/test_cost_basis.py::TestPlanDeleteAcrossTransitionRecords::test_sc078_*` | 刪除 2026-01（舊制列）後，2026-02（舊制列）維持不變、真正重算的是 2026-03（新制列，前期總成本 315000、淨投入 25000），對映 SC-078「往後掃描到第一筆新制列」的核心斷言 |
+| SC-079 | `tests/test_cost_basis.py::TestTransferRecordsToWrite` 3 個 test、`tests/test_input_view.py::test_transfer_involving_stock_end_writes_only_non_stock_leg` | 來源非股票/目標股票 → 只寫來源；來源股票/目標非股票 → 只寫目標；兩端皆非股票 → 兩端皆寫（SC-008 邊界的自審補充），皆對映 SC-079 |
+| SC-080 | `tests/test_cost_basis.py::test_sc080_both_ends_stock_neither_written`、`tests/test_input_view.py::test_transfer_both_ends_stock_writes_nothing_and_shows_info` | 兩端皆股票 → `transfer_records_to_write` 回傳空清單、View 層不寫入且顯示「未寫入任何紀錄」info 提示（非錯誤提示），對映 SC-080「兩端皆不寫入且提示為合法情況」 |
+| SC-081 | `tests/test_core_utils.py` 15 個 test（`TestFormatAmount`＋`TestParseAmount` 千分位部分）、`tests/test_amount_widget.py` 9 個 test、`tests/test_settings_view.py` 2 個 test | "1234567"→"1,234,567"、已有千分位逗號保留不變、負數加負號、小數四捨五入遠離零（1234567.6→1,234,568）、全形數字/逗號正規化，widget 層初值與 on_change 行為、settings 頁初始市值/成本欄同樣適用，逐條對映 SC-081 行為與邊界 |
+| SC-082 | `tests/test_core_utils.py` 7 個 test（`TestParseAmount` 拒絕部分）、`tests/test_amount_widget.py` 2 個 test | 非標準分組 "1,00,000"、純文字 "abc"、空字串、純空白、None 皆拒絕並拋 `DataValidationError`（訊息含欄位名稱）；已實現收益欄顯式輸入 "0" 視為合法；widget 層 on_change 不崩潰、原樣保留文字供存檔時判定，對映 SC-082 全部行為與邊界 |
+| SC-083 | `tests/test_amount_widget.py::TestInjectAmountInputStyleTargetsAmountFieldsOnly` 3 個 test | CSS 選擇器前綴與 `amount_input` container key 前綴一致、font-size/height 皆明顯大於 Streamlit 預設 1rem、非金額欄位（項目名稱）不在帶前綴 container 內因而不命中，對映 SC-083「放大且僅套用於金額欄」；卡片本身已註記視覺效果留待 2-Z 人工確認，與 2-Z 記錄一致 |
+| SC-084 | `tests/test_data_io.py::TestLegacyRecordsCsvWithoutCostBasisColumns` 3 個 test | 僅 4 欄舊格式 CSV 匯入成功、市值/淨投入依原值還原、total_cost/realized_income 皆為 None；新格式欄位存在但留白同樣視為 None，對映 SC-084 全部行為 |
+| SC-085 | `tests/test_monthly_input.py::TestBatchWriteRollbackOnFailure` 3 個 test | 批次 upsert 中途失敗（第 2 筆）→ 第 1 筆也不留存；delete_record_and_upsert 中途失敗 → 原本已存在的列維持存在、新批次列皆未落地；錯誤以 `pytest.raises(RuntimeError, match=...)` 確認原樣往上拋、未被轉譯或吞掉，對映 SC-085「批次寫入中途失敗不留下部分寫入結果」「錯誤原樣往上拋」 |
