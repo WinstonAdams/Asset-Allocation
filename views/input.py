@@ -202,7 +202,8 @@ def _render_cost_basis_editor(
             records=records,
             year_month=target_ym,
             total_cost=parse_amount(total_cost_text, field_label="目前總成本"),
-            realized_income=parse_amount(realized_income_text, field_label="本月已實現收益"),
+            realized_pnl=parse_amount(realized_income_text, field_label="本月已實現收益"),
+            cash_dividend=0.0,
         )
     except DataValidationError:
         st.caption("輸入完成後顯示推算值")
@@ -222,7 +223,8 @@ def _render_cost_basis_editor(
             year_month=target_ym,
             market_value=parse_amount(market_value_text, field_label="現值"),
             total_cost=parse_amount(total_cost_text, field_label="目前總成本"),
-            realized_income=parse_amount(realized_income_text, field_label="本月已實現收益"),
+            realized_pnl=parse_amount(realized_income_text, field_label="本月已實現收益"),
+            cash_dividend=0.0,
         )
         record_repo.upsert_records(records=plan)
         st.success("已儲存")

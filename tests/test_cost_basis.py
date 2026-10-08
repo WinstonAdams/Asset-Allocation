@@ -44,6 +44,7 @@ def _record(
     net_investment: float = 0.0,
     total_cost: float | None = None,
     realized_income: float | None = None,
+    cash_dividend: float | None = None,
 ) -> MonthlyRecordModel:
     """建立一筆月度紀錄（供 derive 系列測試組出前期紀錄序列）。"""
     return MonthlyRecordModel(
@@ -53,6 +54,7 @@ def _record(
         net_investment=net_investment,
         total_cost=total_cost,
         realized_income=realized_income,
+        cash_dividend=cash_dividend,
     )
 
 
@@ -102,7 +104,8 @@ class TestDeriveHappyPath:
             records=[],
             year_month="2026-05",
             total_cost=350_000,
-            realized_income=0,
+            realized_pnl=0,
+            cash_dividend=0.0,
         )
 
         assert _approx(result.previous_total_cost, 300_000)
@@ -129,7 +132,8 @@ class TestDeriveHappyPath:
             records=records,
             year_month="2026-06",
             total_cost=400_000,
-            realized_income=0,
+            realized_pnl=0,
+            cash_dividend=0.0,
         )
 
         assert _approx(result.previous_total_cost, 350_000)
@@ -163,7 +167,8 @@ class TestDeriveHappyPath:
             records=records,
             year_month="2026-07",
             total_cost=380_000,
-            realized_income=15_000,
+            realized_pnl=15_000,
+            cash_dividend=0.0,
         )
 
         assert _approx(result.previous_total_cost, 400_000)
@@ -196,7 +201,8 @@ class TestDeriveHappyPath:
             records=records,
             year_month="2026-07",
             total_cost=380_000,
-            realized_income=-5_000,
+            realized_pnl=-5_000,
+            cash_dividend=0.0,
         )
 
         assert _approx(result.previous_total_cost, 400_000)
@@ -213,16 +219,15 @@ class TestDeriveHappyPath:
             records=[],
             year_month="2026-05",
             total_cost=10_000,
-            realized_income=0,
+            realized_pnl=0,
+            cash_dividend=0.0,
         )
 
         assert _approx(result.previous_total_cost, 0.0)
         assert _approx(result.net_investment, 10_000)
 
     @pytest.mark.scenario("SC-074")
-    def test_sc074_derive_rejects_holding_not_using_cost_basis(
-        self, service: CostBasisService
-    ):
+    def test_sc074_derive_rejects_holding_not_using_cost_basis(self, service: CostBasisService):
         holding = _holding(category=ASSET_CATEGORIES.DEMAND_DEPOSIT)
 
         with pytest.raises(DataValidationError):
@@ -231,7 +236,8 @@ class TestDeriveHappyPath:
                 records=[],
                 year_month="2026-05",
                 total_cost=10_000,
-                realized_income=0,
+                realized_pnl=0,
+                cash_dividend=0.0,
             )
 
 
@@ -253,7 +259,8 @@ class TestDeriveTransitionEstimate:
             records=records,
             year_month="2026-04",
             total_cost=280_000,
-            realized_income=0,
+            realized_pnl=0,
+            cash_dividend=0.0,
         )
 
         assert _approx(result.previous_total_cost, 250_000)
@@ -284,7 +291,8 @@ class TestDeriveLiquidation:
             records=records,
             year_month="2026-06",
             total_cost=0,
-            realized_income=50_000,
+            realized_pnl=50_000,
+            cash_dividend=0.0,
         )
 
         assert _approx(result.previous_total_cost, 350_000)
@@ -322,7 +330,8 @@ class TestPlanSaveRecalculatesImmediateFollowingRecord:
             year_month="2026-05",
             market_value=420_000,
             total_cost=360_000,
-            realized_income=0,
+            realized_pnl=0,
+            cash_dividend=0.0,
         )
 
         by_ym = _net_investment_by_year_month(plan)
@@ -348,7 +357,8 @@ class TestPlanSaveRecalculatesImmediateFollowingRecord:
             year_month="2026-06",
             market_value=430_000,
             total_cost=400_000,
-            realized_income=0,
+            realized_pnl=0,
+            cash_dividend=0.0,
         )
 
         by_ym = _net_investment_by_year_month(plan)
@@ -450,9 +460,7 @@ class TestPlanSaveDeletePlanValidation:
     """plan_save／plan_delete：限用於走總成本推算的分類，違反時拋出例外（同 SC-074 分類守門）。"""
 
     @pytest.mark.scenario("SC-074")
-    def test_sc074_plan_save_rejects_holding_not_using_cost_basis(
-        self, service: CostBasisService
-    ):
+    def test_sc074_plan_save_rejects_holding_not_using_cost_basis(self, service: CostBasisService):
         holding = _holding(category=ASSET_CATEGORIES.DEMAND_DEPOSIT)
 
         with pytest.raises(DataValidationError):
@@ -462,7 +470,8 @@ class TestPlanSaveDeletePlanValidation:
                 year_month="2026-05",
                 market_value=10_000,
                 total_cost=10_000,
-                realized_income=0,
+                realized_pnl=0,
+                cash_dividend=0.0,
             )
 
     @pytest.mark.scenario("SC-074")
@@ -479,9 +488,7 @@ class TestTransferRecordsToWrite:
     """transfer_records_to_write：轉移成對紀錄中濾掉走總成本推算的股票/ETF 端（SC-079/080）。"""
 
     @pytest.mark.scenario("SC-079")
-    def test_sc079_source_non_stock_dest_stock_only_source_written(
-        self, service: CostBasisService
-    ):
+    def test_sc079_source_non_stock_dest_stock_only_source_written(self, service: CostBasisService):
         demand_deposit = _holding(
             holding_id=1, name="活存", category=ASSET_CATEGORIES.DEMAND_DEPOSIT
         )
@@ -496,9 +503,7 @@ class TestTransferRecordsToWrite:
         assert result == [source]
 
     @pytest.mark.scenario("SC-079")
-    def test_sc079_source_stock_dest_non_stock_only_dest_written(
-        self, service: CostBasisService
-    ):
+    def test_sc079_source_stock_dest_non_stock_only_dest_written(self, service: CostBasisService):
         tsmc = _holding(holding_id=2, name="台積電", category=ASSET_CATEGORIES.TW_STOCK)
         demand_deposit = _holding(
             holding_id=1, name="活存", category=ASSET_CATEGORIES.DEMAND_DEPOSIT
@@ -535,8 +540,212 @@ class TestTransferRecordsToWrite:
         source = _record(holding_id=2, year_month="2026-05", net_investment=-60_000)
         dest = _record(holding_id=3, year_month="2026-05", net_investment=60_000)
 
-        result = service.transfer_records_to_write(
-            pair=(source, dest), holdings=[tsmc, mediatek]
-        )
+        result = service.transfer_records_to_write(pair=(source, dest), holdings=[tsmc, mediatek])
 
         assert result == []
+
+
+class TestRealizedPnlAndCashDividendSplit:
+    """derive／plan_save：已實現損益與現金股利相加計入推算（SC-090）、現金股利非負（SC-091）。"""
+
+    @pytest.mark.scenario("SC-090")
+    def test_sc090_realized_pnl_and_cash_dividend_summed_into_formula(
+        self, service: CostBasisService
+    ):
+        holding = _holding(name="日月光")
+        records = [_record(year_month="2026-05", net_investment=0, total_cost=200_000)]
+
+        result = service.derive(
+            holding=holding,
+            records=records,
+            year_month="2026-06",
+            total_cost=0,
+            realized_pnl=100_000,
+            cash_dividend=2_000,
+        )
+
+        assert _approx(result.net_investment, -302_000)
+
+    @pytest.mark.scenario("SC-090")
+    def test_sc090_plan_save_persists_split_and_sum(self, service: CostBasisService):
+        holding = _holding(name="日月光")
+        records = [_record(year_month="2026-05", net_investment=0, total_cost=200_000)]
+
+        plan = service.plan_save(
+            holding=holding,
+            records=records,
+            year_month="2026-06",
+            market_value=0,
+            total_cost=0,
+            realized_pnl=100_000,
+            cash_dividend=2_000,
+        )
+
+        saved = plan[0]
+        assert _approx(saved.realized_income, 102_000)
+        assert _approx(saved.cash_dividend, 2_000)
+        assert _approx(saved.net_investment, -302_000)
+
+    @pytest.mark.scenario("SC-074")
+    def test_sc074_negative_realized_pnl_with_dividend_offsets_in_sum(
+        self, service: CostBasisService
+    ):
+        holding = _holding(initial_cost=400_000)
+
+        result = service.derive(
+            holding=holding,
+            records=[],
+            year_month="2026-07",
+            total_cost=380_000,
+            realized_pnl=-5_000,
+            cash_dividend=2_000,
+        )
+
+        # (380000 - 400000) - (-5000 + 2000) = -17000
+        assert _approx(result.net_investment, -17_000)
+
+    @pytest.mark.scenario("SC-091")
+    def test_sc091_derive_rejects_negative_cash_dividend(self, service: CostBasisService):
+        holding = _holding(name="日月光")
+
+        with pytest.raises(DataValidationError, match="現金股利"):
+            service.derive(
+                holding=holding,
+                records=[],
+                year_month="2026-06",
+                total_cost=0,
+                realized_pnl=100_000,
+                cash_dividend=-1_000,
+            )
+
+    @pytest.mark.scenario("SC-091")
+    def test_sc091_plan_save_rejects_negative_cash_dividend(self, service: CostBasisService):
+        holding = _holding(name="日月光")
+
+        with pytest.raises(DataValidationError, match="現金股利"):
+            service.plan_save(
+                holding=holding,
+                records=[],
+                year_month="2026-06",
+                market_value=0,
+                total_cost=0,
+                realized_pnl=100_000,
+                cash_dividend=-1_000,
+            )
+
+    @pytest.mark.scenario("SC-091")
+    def test_sc091_zero_cash_dividend_and_negative_realized_pnl_accepted(
+        self, service: CostBasisService
+    ):
+        holding = _holding(initial_cost=100_000)
+
+        result = service.derive(
+            holding=holding,
+            records=[],
+            year_month="2026-06",
+            total_cost=90_000,
+            realized_pnl=-3_000,
+            cash_dividend=0.0,
+        )
+
+        assert _approx(result.net_investment, -7_000)
+
+    @pytest.mark.scenario("SC-078")
+    def test_sc078_recalculation_uses_stored_realized_income_total(self, service: CostBasisService):
+        """已存列的合計（已實現損益＋現金股利）直接用於連動重算，不需拆分。"""
+        holding = _holding(name="台達電", initial_cost=300_000)
+        records = [
+            _record(year_month="2026-01", net_investment=10_000),
+            _record(year_month="2026-02", net_investment=15_000),
+            _record(
+                year_month="2026-03",
+                net_investment=0,
+                total_cost=340_000,
+                realized_income=7_000,
+                cash_dividend=2_000,
+            ),
+        ]
+
+        plan = service.plan_delete(holding=holding, records=records, year_month="2026-01")
+
+        # (340000 - 315000) - 7000 = 18000
+        assert _approx(_net_investment_by_year_month(plan)["2026-03"], 18_000)
+
+
+class TestBuildCostBasisPrefill:
+    """build_cost_basis_prefill：股票/ETF 錄入框帶入值，損益與現金股利分開（SC-088）。"""
+
+    @pytest.mark.scenario("SC-088")
+    def test_sc088_no_record_returns_defaults(self, service: CostBasisService):
+        prefill = service.build_cost_basis_prefill(records=[], year_month="2026-06")
+
+        assert prefill.total_cost == 0
+        assert prefill.market_value == 0
+        assert prefill.realized_pnl == 0
+        assert prefill.cash_dividend == 0
+
+    @pytest.mark.scenario("SC-088")
+    def test_sc088_existing_record_returns_split_values(self, service: CostBasisService):
+        records = [
+            _record(
+                year_month="2026-05",
+                market_value=650_000,
+                total_cost=600_000,
+                realized_income=11_500,
+                cash_dividend=1_500,
+            ),
+        ]
+
+        prefill = service.build_cost_basis_prefill(records=records, year_month="2026-05")
+
+        assert prefill.total_cost == 600_000
+        assert prefill.market_value == 650_000
+        assert prefill.realized_pnl == 10_000
+        assert prefill.cash_dividend == 1_500
+
+    @pytest.mark.scenario("SC-088")
+    def test_sc088_other_month_record_ignored(self, service: CostBasisService):
+        records = [_record(year_month="2026-05", market_value=1, total_cost=1)]
+
+        prefill = service.build_cost_basis_prefill(records=records, year_month="2026-06")
+
+        assert prefill.total_cost == 0
+        assert prefill.market_value == 0
+
+    @pytest.mark.scenario("SC-088")
+    def test_sc088_null_total_cost_and_market_value_prefill_blank(self, service: CostBasisService):
+        records = [_record(year_month="2026-05", realized_income=500, cash_dividend=0)]
+
+        prefill = service.build_cost_basis_prefill(records=records, year_month="2026-05")
+
+        assert prefill.total_cost is None
+        assert prefill.market_value is None
+        assert prefill.realized_pnl == 500
+
+    @pytest.mark.scenario("SC-088")
+    def test_sc088_legacy_null_cash_dividend_all_counts_as_realized_pnl(
+        self, service: CostBasisService
+    ):
+        records = [
+            _record(
+                year_month="2026-05",
+                market_value=10,
+                total_cost=10,
+                realized_income=8_000,
+                cash_dividend=None,
+            ),
+        ]
+
+        prefill = service.build_cost_basis_prefill(records=records, year_month="2026-05")
+
+        assert prefill.realized_pnl == 8_000
+        assert prefill.cash_dividend == 0
+
+    @pytest.mark.scenario("SC-088")
+    def test_sc088_null_realized_income_prefills_zero(self, service: CostBasisService):
+        records = [_record(year_month="2026-05", market_value=10, total_cost=10)]
+
+        prefill = service.build_cost_basis_prefill(records=records, year_month="2026-05")
+
+        assert prefill.realized_pnl == 0
+        assert prefill.cash_dividend == 0

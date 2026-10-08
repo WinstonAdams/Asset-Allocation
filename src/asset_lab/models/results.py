@@ -203,6 +203,15 @@ class RecordEditorPrefill(BaseModel):
     net_investment: float
 
 
+class CostBasisEditorPrefill(BaseModel):
+    """股票/ETF 錄入框的帶入值。沒有紀錄時四欄皆為 0；總成本／市值 None 代表帶入空白。"""
+
+    total_cost: float | None
+    market_value: float | None
+    realized_pnl: float
+    cash_dividend: float
+
+
 class MonthRecordRow(BaseModel):
     """「本月已存紀錄」唯讀表格的單列。
 

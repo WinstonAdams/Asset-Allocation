@@ -9,7 +9,7 @@ import math
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
-from asset_lab.models.results import NetInvestmentDerivation
+from asset_lab.models.results import CostBasisEditorPrefill, NetInvestmentDerivation
 
 
 class CostBasisService:
@@ -44,7 +44,8 @@ class CostBasisService:
         records: list[MonthlyRecordModel],
         year_month: str,
         total_cost: float,
-        realized_income: float,
+        realized_pnl: float,
+        cash_dividend: float,
     ) -> NetInvestmentDerivation:
         """推算股票/ETF 項目當月淨投入。
 
@@ -59,16 +60,47 @@ class CostBasisService:
             records: 該項目的全部月度紀錄（呼叫端保證只含該項目、任意順序）。
             year_month: 本次要推算的年月（'YYYY-MM'）。
             total_cost: 本月使用者輸入的目前總成本。
-            realized_income: 本月已實現收益（已實現損益＋現金股利，可為負）。
+            realized_pnl: 本月已實現損益（可為負，認列虧損）。
+            cash_dividend: 本月現金股利（不可為負）。
 
         Returns:
             前期總成本、是否為過渡期估算、推算出的本月淨投入。
 
         Raises:
-            DataValidationError: 項目分類不適用總成本推算時拋出。
+            DataValidationError: 項目分類不適用總成本推算，或現金股利為負時拋出。
         """
         self._ensure_uses_cost_basis(holding=holding)
+        self._ensure_cash_dividend_non_negative(cash_dividend=cash_dividend)
 
+        return self._derive_from_realized_income(
+            holding=holding,
+            records=records,
+            year_month=year_month,
+            total_cost=total_cost,
+            realized_income=realized_pnl + cash_dividend,
+        )
+
+    def _derive_from_realized_income(
+        self,
+        *,
+        holding: HoldingModel,
+        records: list[MonthlyRecordModel],
+        year_month: str,
+        total_cost: float,
+        realized_income: float,
+    ) -> NetInvestmentDerivation:
+        """以已實現收益合計推算淨投入（derive 與連動重算共用，不做輸入驗證）。
+
+        Args:
+            holding: 項目主檔。
+            records: 該項目的全部月度紀錄。
+            year_month: 推算的年月（'YYYY-MM'）。
+            total_cost: 該月總成本。
+            realized_income: 該月已實現收益合計（已實現損益＋現金股利）。
+
+        Returns:
+            前期總成本、是否為過渡期估算、推算出的淨投入。
+        """
         prior_records = sorted(
             (record for record in records if record.year_month < year_month),
             key=lambda record: record.year_month,
@@ -104,7 +136,8 @@ class CostBasisService:
         year_month: str,
         market_value: float,
         total_cost: float,
-        realized_income: float,
+        realized_pnl: float,
+        cash_dividend: float,
     ) -> list[MonthlyRecordModel]:
         """規劃股票/ETF 存檔需要寫入的所有列，含連動重算受影響的後續新制列。
 
@@ -119,20 +152,22 @@ class CostBasisService:
             year_month: 本次存檔的年月（'YYYY-MM'）。
             market_value: 本月現值。
             total_cost: 本月使用者輸入的目前總成本。
-            realized_income: 本月已實現收益（已實現損益＋現金股利，可為負）。
+            realized_pnl: 本月已實現損益（可為負，認列虧損）。
+            cash_dividend: 本月現金股利（不可為負）。
 
         Returns:
             [存檔列, *異動月份之後推算值有變的新制列]，依年月排序。
 
         Raises:
-            DataValidationError: 項目分類不適用總成本推算時拋出。
+            DataValidationError: 項目分類不適用總成本推算，或現金股利為負時拋出。
         """
         derivation = self.derive(
             holding=holding,
             records=records,
             year_month=year_month,
             total_cost=total_cost,
-            realized_income=realized_income,
+            realized_pnl=realized_pnl,
+            cash_dividend=cash_dividend,
         )
         saved_record = MonthlyRecordModel(
             holding_id=holding.holding_id,
@@ -140,7 +175,8 @@ class CostBasisService:
             market_value=market_value,
             net_investment=derivation.net_investment,
             total_cost=total_cost,
-            realized_income=realized_income,
+            realized_income=realized_pnl + cash_dividend,
+            cash_dividend=cash_dividend,
         )
 
         working_records = [record for record in records if record.year_month != year_month]
@@ -184,6 +220,35 @@ class CostBasisService:
             holding=holding, working_records=working_records, cutoff_year_month=year_month
         )
 
+    def build_cost_basis_prefill(
+        self, *, records: list[MonthlyRecordModel], year_month: str
+    ) -> CostBasisEditorPrefill:
+        """算出股票/ETF 錄入框的帶入值：該月已有紀錄就照存的值，沒有則為現行預設。
+
+        總成本／現值為空白（None）時保持空白，避免把空白存成 0（0 代表清倉）。
+        已實現損益由存下來的合計扣除現金股利還原；現金股利為空白的舊紀錄，
+        合計全數視為已實現損益。
+
+        Args:
+            records: 該項目的月度紀錄（呼叫端保證只含該項目）。
+            year_month: 選取的月份，'YYYY-MM' 格式。
+
+        Returns:
+            帶入值；無相符紀錄時四欄皆為 0。
+        """
+        for record in records:
+            if record.year_month == year_month:
+                cash_dividend = record.cash_dividend or 0.0
+                return CostBasisEditorPrefill(
+                    total_cost=record.total_cost,
+                    market_value=record.market_value,
+                    realized_pnl=(record.realized_income or 0.0) - cash_dividend,
+                    cash_dividend=cash_dividend,
+                )
+        return CostBasisEditorPrefill(
+            total_cost=0.0, market_value=0.0, realized_pnl=0.0, cash_dividend=0.0
+        )
+
     def transfer_records_to_write(
         self,
         *,
@@ -195,6 +260,8 @@ class CostBasisService:
         股票/ETF 項目的當月淨投入改由總成本輸入方式推算（見 `derive`），轉移
         產生的淨投入不寫入，避免和推算值衝突；另一端照常寫入。兩端皆為股票/
         ETF 時回傳空清單，這是合法情況（畫面提示由呼叫端負責，非錯誤）。
+        其餘端的轉移淨投入若需累加到既有月度紀錄，由 Repository 的
+        `accumulate_net_investments` 處理，本方法只負責決定哪些列可寫。
 
         Args:
             pair: `build_transfer_pair` 產生的成對紀錄 (來源, 目標)。
@@ -223,6 +290,18 @@ class CostBasisService:
             raise DataValidationError(
                 f"項目「{holding.name}」分類不適用總成本推算，請改用市值/餘額與淨投入輸入"
             )
+
+    def _ensure_cash_dividend_non_negative(self, *, cash_dividend: float) -> None:
+        """確保現金股利非負（入帳金額不會是負的），否則拋出例外。
+
+        Args:
+            cash_dividend: 本月現金股利。
+
+        Raises:
+            DataValidationError: 現金股利為負時拋出。
+        """
+        if cash_dividend < 0:
+            raise DataValidationError("現金股利不可為負")
 
     def _recalculate_following(
         self,
@@ -256,7 +335,7 @@ class CostBasisService:
 
         changed: list[MonthlyRecordModel] = []
         for record in forward_candidates:
-            derivation = self.derive(
+            derivation = self._derive_from_realized_income(
                 holding=holding,
                 records=working_records,
                 year_month=record.year_month,
