@@ -18,7 +18,9 @@ class MonthlyRecordModel(BaseModel):
 
     total_cost 不為 None 即為新制股票/ETF 列，其 net_investment 為推算值；
     None 代表非股票/ETF 分類，或本功能上線前建立的舊制列。realized_income
-    隨 total_cost 同時填寫，新制列一律有值（預設 0）。
+    隨 total_cost 同時填寫，新制列一律有值（預設 0）。realized_income 為已實現損益＋
+    現金股利的合計；cash_dividend 為其中的現金股利，None 視為 0，已實現損益不另存
+    （＝ realized_income − cash_dividend）。
     """
 
     holding_id: int
@@ -27,3 +29,4 @@ class MonthlyRecordModel(BaseModel):
     net_investment: float = 0.0
     total_cost: float | None = None
     realized_income: float | None = None
+    cash_dividend: float | None = None

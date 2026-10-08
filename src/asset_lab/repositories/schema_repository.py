@@ -68,10 +68,15 @@ _ALTER_MONTHLY_RECORDS_ADD_REALIZED_INCOME = (
     f"ALTER TABLE {MONTHLY_RECORDS_TABLE.TABLE_NAME} ADD COLUMN "
     f"{MONTHLY_RECORDS_TABLE.REALIZED_INCOME} REAL"
 )
+_ALTER_MONTHLY_RECORDS_ADD_CASH_DIVIDEND = (
+    f"ALTER TABLE {MONTHLY_RECORDS_TABLE.TABLE_NAME} ADD COLUMN "
+    f"{MONTHLY_RECORDS_TABLE.CASH_DIVIDEND} REAL"
+)
 
 # 月度時間序列。複合主鍵 (holding_id, year_month) 由 DB 保證同月同項目不得有兩列。
-# total_cost/realized_income 為股票/ETF 總成本推算功能附加欄位，皆可為 NULL、不設 DEFAULT：
-# NULL 本身就代表「非股票/ETF 或本功能上線前的舊制列」，新庫直建即含此二欄（既有資料庫由
+# total_cost/realized_income/cash_dividend 為股票/ETF 總成本推算功能附加欄位，
+# 皆可為 NULL、不設 DEFAULT：
+# NULL 本身就代表「非股票/ETF 或本功能上線前的舊制列」，新庫直建即含此三欄（既有資料庫由
 # 下方加欄遷移補上）。
 _CREATE_MONTHLY_RECORDS = f"""
 CREATE TABLE IF NOT EXISTS {MONTHLY_RECORDS_TABLE.TABLE_NAME} (
@@ -81,6 +86,7 @@ CREATE TABLE IF NOT EXISTS {MONTHLY_RECORDS_TABLE.TABLE_NAME} (
     {MONTHLY_RECORDS_TABLE.NET_INVESTMENT} REAL NOT NULL DEFAULT 0,
     {MONTHLY_RECORDS_TABLE.TOTAL_COST} REAL,
     {MONTHLY_RECORDS_TABLE.REALIZED_INCOME} REAL,
+    {MONTHLY_RECORDS_TABLE.CASH_DIVIDEND} REAL,
     PRIMARY KEY ({MONTHLY_RECORDS_TABLE.HOLDING_ID}, {MONTHLY_RECORDS_TABLE.YEAR_MONTH})
 )
 """
@@ -159,6 +165,12 @@ class SchemaRepository:
             table=MONTHLY_RECORDS_TABLE.TABLE_NAME,
             column=MONTHLY_RECORDS_TABLE.REALIZED_INCOME,
             alter_sql=_ALTER_MONTHLY_RECORDS_ADD_REALIZED_INCOME,
+        )
+        self._add_column_if_missing(
+            cursor,
+            table=MONTHLY_RECORDS_TABLE.TABLE_NAME,
+            column=MONTHLY_RECORDS_TABLE.CASH_DIVIDEND,
+            alter_sql=_ALTER_MONTHLY_RECORDS_ADD_CASH_DIVIDEND,
         )
         self._conn.commit()
 

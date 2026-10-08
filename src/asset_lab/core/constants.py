@@ -109,6 +109,8 @@ class MONTHLY_RECORDS_TABLE:
     total_cost/realized_income 為股票/ETF 總成本推算功能附加欄位，可為 NULL：
     total_cost 不為 NULL 即為新制股票/ETF 列，其 net_investment 為推算值；
     NULL 代表非股票/ETF 分類，或本功能上線前建立的舊制列。
+    realized_income 為「已實現損益＋現金股利」的合計；cash_dividend 為其中的現金股利，
+    NULL（非股票/ETF 列、舊制列、或本功能上線前的新制列）視為 0，其合計全數視為已實現損益。
     """
 
     TABLE_NAME = "monthly_records"
@@ -118,6 +120,7 @@ class MONTHLY_RECORDS_TABLE:
     NET_INVESTMENT = "net_investment"
     TOTAL_COST = "total_cost"
     REALIZED_INCOME = "realized_income"
+    CASH_DIVIDEND = "cash_dividend"
 
 
 class COST_BASIS_INPUT:

@@ -497,6 +497,7 @@ class TestRecordRepositoryEmptyAndIdempotency:
             "net_investment",
             "total_cost",
             "realized_income",
+            "cash_dividend",
         ]
 
     @pytest.mark.scenario("SC-006")
@@ -776,3 +777,142 @@ class TestBatchWriteRollbackOnFailure:
         assert record_repo.read_month(year_month="2026-05")[0].market_value == 400000.0
         assert record_repo.read_month(year_month="2026-06") == []
         assert record_repo.read_month(year_month="2026-07") == []
+
+
+class TestAccumulateNetInvestments:
+    """accumulate_net_investments：只累加 net_investment，其餘欄位不動。"""
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_on_existing_row_keeps_market_value(
+        self, record_repo, seeded_holding_id
+    ):
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 350000.0, 0.0)
+        )
+
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -100000.0)]
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.market_value == 350000.0
+        assert stored.net_investment == -100000.0
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_twice_adds_up(self, record_repo, seeded_holding_id):
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 350000.0, 0.0)
+        )
+
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -100000.0)]
+        )
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -50000.0)]
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.market_value == 350000.0
+        assert stored.net_investment == -150000.0
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_leaves_cost_columns_untouched(
+        self, record_repo, seeded_holding_id
+    ):
+        record_repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=seeded_holding_id,
+                year_month="2026-05",
+                market_value=400000.0,
+                net_investment=10000.0,
+                total_cost=350000.0,
+                realized_income=1200.0,
+                cash_dividend=200.0,
+            )
+        )
+
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 999.0, 5000.0,
+                             total_cost=1.0, realized_income=2.0)]
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.net_investment == 15000.0
+        assert stored.market_value == 400000.0
+        assert stored.total_cost == 350000.0
+        assert stored.realized_income == 1200.0
+        assert stored.cash_dividend == 200.0
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_without_existing_row_creates_net_only_row(
+        self, record_repo, seeded_holding_id
+    ):
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -100000.0)]
+        )
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -50000.0)]
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.market_value is None
+        assert stored.net_investment == -150000.0
+        assert stored.total_cost is None
+        assert stored.realized_income is None
+        assert stored.cash_dividend is None
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_transfer_then_single_row_input_gives_same_result(
+        self, record_repo, seeded_holding_id
+    ):
+        # 先轉移（無既有列）、再單列錄入補市值：錄入帶入的淨投入為累加後的值
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -150000.0)]
+        )
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 350000.0, -150000.0)
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.market_value == 350000.0
+        assert stored.net_investment == -150000.0
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_empty_list_is_noop(self, record_repo, seeded_holding_id):
+        record_repo.accumulate_net_investments(records=[])
+
+        assert record_repo.read_month(year_month="2026-05") == []
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_multiple_holdings_in_one_call(
+        self, record_repo, seeded_holding_id
+    ):
+        record_repo.accumulate_net_investments(
+            records=[
+                _record(seeded_holding_id, "2026-05", 0.0, 30000.0),
+                _record(seeded_holding_id, "2026-06", 0.0, 40000.0),
+            ]
+        )
+
+        assert record_repo.read_month(year_month="2026-05")[0].net_investment == 30000.0
+        assert record_repo.read_month(year_month="2026-06")[0].net_investment == 40000.0
+
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_accumulate_failure_rolls_back_all_writes(
+        self, record_repo, conn, seeded_holding_id
+    ):
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 350000.0, 1000.0)
+        )
+        failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=2))
+
+        with pytest.raises(RuntimeError, match="模擬批次寫入中途失敗"):
+            failing_repo.accumulate_net_investments(
+                records=[
+                    _record(seeded_holding_id, "2026-05", 0.0, -100000.0),
+                    _record(seeded_holding_id, "2026-06", 0.0, -50000.0),
+                ]
+            )
+
+        assert record_repo.read_month(year_month="2026-05")[0].net_investment == 1000.0
+        assert record_repo.read_month(year_month="2026-06") == []

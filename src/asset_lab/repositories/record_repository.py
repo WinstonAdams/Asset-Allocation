@@ -9,7 +9,8 @@
 特定的唯一鍵衝突轉譯為領域例外 DataValidationError，讓上層能與其他 I/O 錯誤區分，其餘
 錯誤原樣往上拋。
 
-兩個 compound method（upsert_records / delete_record_and_upsert）用於一次寫入多列：股票/
+三個 compound method（upsert_records / delete_record_and_upsert /
+accumulate_net_investments）用於一次寫入多列：股票/
 ETF 存檔或刪除時，可能同時牽動存檔列本身與其後受影響的多筆重算列，寫了一半會讓推算鏈不
 一致，故收斂在單一交易內完成——多個 statement 執行完才 commit 一次；任一步失敗就先
 rollback 再原樣往上拋，不在此層記錄錯誤（錯誤處理仍由上層負責）。
@@ -41,6 +42,7 @@ _COLUMNS = (
     MONTHLY_RECORDS_TABLE.NET_INVESTMENT,
     MONTHLY_RECORDS_TABLE.TOTAL_COST,
     MONTHLY_RECORDS_TABLE.REALIZED_INCOME,
+    MONTHLY_RECORDS_TABLE.CASH_DIVIDEND,
 )
 _SELECT_COLUMNS = ", ".join(_COLUMNS)
 _TABLE = MONTHLY_RECORDS_TABLE.TABLE_NAME
@@ -50,6 +52,7 @@ _MARKET_VALUE = MONTHLY_RECORDS_TABLE.MARKET_VALUE
 _NET_INVESTMENT = MONTHLY_RECORDS_TABLE.NET_INVESTMENT
 _TOTAL_COST = MONTHLY_RECORDS_TABLE.TOTAL_COST
 _REALIZED_INCOME = MONTHLY_RECORDS_TABLE.REALIZED_INCOME
+_CASH_DIVIDEND = MONTHLY_RECORDS_TABLE.CASH_DIVIDEND
 
 _SELECT_MONTH = (
     f"SELECT {_SELECT_COLUMNS} FROM {_TABLE} WHERE {_YEAR_MONTH} = ? ORDER BY {_HOLDING_ID}"
@@ -66,19 +69,28 @@ _SELECT_LATEST = f"SELECT MAX({_YEAR_MONTH}) FROM {_TABLE}"
 _INSERT = (
     f"INSERT INTO {_TABLE} "
     f"({_HOLDING_ID}, {_YEAR_MONTH}, {_MARKET_VALUE}, {_NET_INVESTMENT}, "
-    f"{_TOTAL_COST}, {_REALIZED_INCOME}) "
-    f"VALUES (?, ?, ?, ?, ?, ?)"
+    f"{_TOTAL_COST}, {_REALIZED_INCOME}, {_CASH_DIVIDEND}) "
+    f"VALUES (?, ?, ?, ?, ?, ?, ?)"
 )
 _UPSERT = (
     f"INSERT INTO {_TABLE} "
     f"({_HOLDING_ID}, {_YEAR_MONTH}, {_MARKET_VALUE}, {_NET_INVESTMENT}, "
-    f"{_TOTAL_COST}, {_REALIZED_INCOME}) "
-    f"VALUES (?, ?, ?, ?, ?, ?) "
+    f"{_TOTAL_COST}, {_REALIZED_INCOME}, {_CASH_DIVIDEND}) "
+    f"VALUES (?, ?, ?, ?, ?, ?, ?) "
     f"ON CONFLICT({_HOLDING_ID}, {_YEAR_MONTH}) DO UPDATE SET "
     f"{_MARKET_VALUE} = excluded.{_MARKET_VALUE}, "
     f"{_NET_INVESTMENT} = excluded.{_NET_INVESTMENT}, "
     f"{_TOTAL_COST} = excluded.{_TOTAL_COST}, "
-    f"{_REALIZED_INCOME} = excluded.{_REALIZED_INCOME}"
+    f"{_REALIZED_INCOME} = excluded.{_REALIZED_INCOME}, "
+    f"{_CASH_DIVIDEND} = excluded.{_CASH_DIVIDEND}"
+)
+# 只遞增 net_investment：同月多次轉移逐次相加，且保留既有市值等其餘欄位；
+# 沒有既有列時新建只有淨投入的列（其餘欄位 NULL）。
+_ACCUMULATE = (
+    f"INSERT INTO {_TABLE} ({_HOLDING_ID}, {_YEAR_MONTH}, {_NET_INVESTMENT}) "
+    f"VALUES (?, ?, ?) "
+    f"ON CONFLICT({_HOLDING_ID}, {_YEAR_MONTH}) DO UPDATE SET "
+    f"{_NET_INVESTMENT} = {_NET_INVESTMENT} + excluded.{_NET_INVESTMENT}"
 )
 _DELETE_ONE = f"DELETE FROM {_TABLE} WHERE {_HOLDING_ID} = ? AND {_YEAR_MONTH} = ?"
 _DELETE_ALL = f"DELETE FROM {_TABLE}"
@@ -86,7 +98,15 @@ _DELETE_ALL = f"DELETE FROM {_TABLE}"
 
 def _row_to_model(row: tuple) -> MonthlyRecordModel:
     """把月度 row tuple 依固定欄序組回 MonthlyRecordModel。"""
-    holding_id, year_month, market_value, net_investment, total_cost, realized_income = row
+    (
+        holding_id,
+        year_month,
+        market_value,
+        net_investment,
+        total_cost,
+        realized_income,
+        cash_dividend,
+    ) = row
     return MonthlyRecordModel(
         holding_id=holding_id,
         year_month=year_month,
@@ -94,6 +114,7 @@ def _row_to_model(row: tuple) -> MonthlyRecordModel:
         net_investment=net_investment,
         total_cost=total_cost,
         realized_income=realized_income,
+        cash_dividend=cash_dividend,
     )
 
 
@@ -106,6 +127,7 @@ def _values(record: MonthlyRecordModel) -> tuple:
         record.net_investment,
         record.total_cost,
         record.realized_income,
+        record.cash_dividend,
     )
 
 
@@ -193,6 +215,25 @@ class RecordRepository:
         try:
             for record in records:
                 cursor.execute(_UPSERT, _values(record))
+        except Exception:
+            self._conn.rollback()
+            raise
+        self._conn.commit()
+
+    def accumulate_net_investments(self, *, records: list[MonthlyRecordModel]) -> None:
+        """把每筆紀錄的 net_investment 視為增量，累加到同 (holding_id, year_month) 的既有列。
+
+        既有列只動淨投入、其餘欄位（含市值）不變；沒有既有列時新建只有淨投入的列。
+        單一交易，任一步失敗則 rollback 後原樣往上拋；空清單為無操作。
+        """
+        if not records:
+            return
+        cursor = self._conn.cursor()
+        try:
+            for record in records:
+                cursor.execute(
+                    _ACCUMULATE, (record.holding_id, record.year_month, record.net_investment)
+                )
         except Exception:
             self._conn.rollback()
             raise

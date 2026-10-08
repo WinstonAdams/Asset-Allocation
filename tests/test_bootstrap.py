@@ -522,6 +522,84 @@ class TestMonthlyRecordsCostColumnsMigrationFreshDb:
         assert stored.total_cost == 350000.0
 
 
+# === monthly_records 現金股利欄位加欄遷移：6 欄舊庫升級 / 重複啟動 ===
+
+# 前一 Change（已有 total_cost/realized_income，尚無 cash_dividend）的 monthly_records 結構，
+# 直接以原始 SQL 建出，模擬既有部署資料庫。
+_PREV_CREATE_MONTHLY_RECORDS = f"""
+CREATE TABLE {MONTHLY_RECORDS_TABLE.TABLE_NAME} (
+    {MONTHLY_RECORDS_TABLE.HOLDING_ID} INTEGER NOT NULL,
+    {MONTHLY_RECORDS_TABLE.YEAR_MONTH} TEXT NOT NULL,
+    {MONTHLY_RECORDS_TABLE.MARKET_VALUE} REAL,
+    {MONTHLY_RECORDS_TABLE.NET_INVESTMENT} REAL NOT NULL DEFAULT 0,
+    {MONTHLY_RECORDS_TABLE.TOTAL_COST} REAL,
+    {MONTHLY_RECORDS_TABLE.REALIZED_INCOME} REAL,
+    PRIMARY KEY ({MONTHLY_RECORDS_TABLE.HOLDING_ID}, {MONTHLY_RECORDS_TABLE.YEAR_MONTH})
+)
+"""
+
+
+def _seed_prev_monthly_records_db() -> "libsql.Connection":
+    """建一個 6 欄（無 cash_dividend）的既有資料庫，含一筆新制股票列。"""
+    connection = libsql.connect(":memory:")
+    cursor = connection.cursor()
+    cursor.execute(_PREV_CREATE_MONTHLY_RECORDS)
+    cursor.execute(
+        f"INSERT INTO {MONTHLY_RECORDS_TABLE.TABLE_NAME} VALUES (?, ?, ?, ?, ?, ?)",
+        (1, "2026-01", 500000.0, 20000.0, 400000.0, 1500.0),
+    )
+    connection.commit()
+    return connection
+
+
+class TestMonthlyRecordsCashDividendMigration:
+    """前一 Change 的 6 欄庫升級後多出可為 NULL 的 cash_dividend，既有值不變。"""
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_prev_schema_upgrade_adds_nullable_cash_dividend(self) -> None:
+        connection = _seed_prev_monthly_records_db()
+
+        SchemaRepository(conn=connection).ensure_schema()
+
+        record = RecordRepository(conn=connection).read_month(year_month="2026-01")[0]
+        assert record.cash_dividend is None
+        assert record.market_value == 500000.0
+        assert record.net_investment == 20000.0
+        assert record.total_cost == 400000.0
+        assert record.realized_income == 1500.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_prev_schema_repeated_ensure_schema_is_idempotent(self) -> None:
+        connection = _seed_prev_monthly_records_db()
+        schema_repo = SchemaRepository(conn=connection)
+
+        schema_repo.ensure_schema()
+        schema_repo.ensure_schema()
+
+        records = RecordRepository(conn=connection).read_month(year_month="2026-01")
+        assert len(records) == 1
+        assert records[0].realized_income == 1500.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_fresh_db_round_trips_cash_dividend(self) -> None:
+        connection = libsql.connect(":memory:")
+        SchemaRepository(conn=connection).ensure_schema()
+        repo = RecordRepository(conn=connection)
+
+        repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=1,
+                year_month="2026-05",
+                market_value=400000.0,
+                total_cost=350000.0,
+                realized_income=1200.0,
+                cash_dividend=200.0,
+            )
+        )
+
+        assert repo.read_month(year_month="2026-05")[0].cash_dividend == 200.0
+
+
 class _FakeSchemaRepo:
     """假 schema repo：ensure_schema 依建構時指定成功或拋指定例外，模擬連線存活探測。"""
 
