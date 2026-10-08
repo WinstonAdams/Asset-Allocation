@@ -231,3 +231,78 @@ def _keys_wrapped_by_prefixed_container(at: AppTest, prefix: str) -> set[str]:
 
     walk(at.main, False)
     return wrapped
+
+
+_SEED_SCRIPT = textwrap.dedent(
+    """
+    import streamlit as st
+    from asset_lab.amount_widget import amount_input, seed_amount_inputs
+
+    st.session_state.setdefault("src", "A")
+    for _k in st.session_state.pop("drop", []):
+        st.session_state.pop(_k, None)
+    st.session_state.setdefault("vals", {{"f_a": 350000, "f_b": -150000}})
+    seed_amount_inputs(
+        seed_key="seed_marker", source=st.session_state["src"],
+        values=st.session_state["vals"],
+    )
+    {inputs}
+    """
+)
+
+_SEED_BOTH_INPUTS = (
+    'amount_input("市值", key="f_a", value=0)\n'
+    'amount_input("淨投入", key="f_b", value=0)'
+)
+
+
+def _run_seed(inputs: str = _SEED_BOTH_INPUTS) -> AppTest:
+    return AppTest.from_string(_SEED_SCRIPT.format(inputs=inputs)).run()
+
+
+class TestSeedAmountInputs:
+    """seed_amount_inputs：選定後帶入、切換跟著換、不切換不洗掉（SC-087/088 的 widget 層落實）。"""
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_first_render_seeds_values_in_thousands_format(self):
+        at = _run_seed()
+        assert not at.exception
+        assert at.text_input(key="f_a").value == "350,000"
+        assert at.text_input(key="f_b").value == "-150,000"
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_source_change_reseeds_to_new_values(self):
+        at = _run_seed()
+        at.session_state["src"] = "B"
+        at.session_state["vals"] = {"f_a": None, "f_b": 0}
+        at.run()
+        assert at.text_input(key="f_a").value == ""
+        assert at.text_input(key="f_b").value == "0"
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_same_source_keeps_unsaved_user_input(self):
+        at = _run_seed()
+        at.text_input(key="f_a").set_value("999").run()
+        at.run()
+        assert at.text_input(key="f_a").value == "999"
+
+    @pytest.mark.scenario("SC-088")
+    def test_sc088_missing_key_forces_reseed_even_when_source_unchanged(self):
+        at = _run_seed()
+        # 模擬 widget 上一輪未渲染、state 被 Streamlit 清掉
+        at.session_state["drop"] = ["f_a"]
+        at.run()
+        assert at.text_input(key="f_a").value == "350,000"
+
+    @pytest.mark.scenario("SC-088")
+    def test_sc088_seed_before_amount_input_creation_does_not_raise(self):
+        # seed 在 amount_input 建立前呼叫（含 None 值）不拋例外
+        at = _run_seed(
+            'amount_input("市值", key="f_a", value=0)\n'
+            'amount_input("淨投入", key="f_b", value=0)'
+        )
+        at.session_state["src"] = "C"
+        at.session_state["vals"] = {"f_a": None, "f_b": 1500}
+        at.run()
+        assert not at.exception
+        assert at.text_input(key="f_b").value == "1,500"

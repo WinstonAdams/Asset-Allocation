@@ -10,7 +10,7 @@
 """
 
 # ==== 原生（標準庫） ====
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 # ==== 第三方套件 ====
 import streamlit as st
@@ -70,6 +70,39 @@ def amount_input(
         st.text_input(label, key=key, on_change=_handle_change)
 
     return st.session_state[key]
+
+
+def seed_amount_inputs(
+    *,
+    seed_key: str,
+    source: object,
+    values: Mapping[str, float | None],
+) -> None:
+    """依資料來源決定是否把帶入值重新寫進各金額欄的 session_state。
+
+    以下任一成立才重新播種（每個 key 改成 `format_amount(值)`，並把 `source` 記到
+    `session_state[seed_key]`）：
+    - `source` 與上次記下的不同（切換項目/月份，或資料因存檔、轉移而改變）；
+    - `values` 中有任何 key 不在 session_state（widget 上一輪沒渲染，state 已被
+      Streamlit 清掉）。
+    兩者皆不成立就不動，使用者還沒存檔的輸入不會被洗掉。
+
+    必須在對應的 `amount_input` 建立之前呼叫：widget 建立後 Streamlit 不允許再改
+    其 session_state。
+
+    Args:
+        seed_key: 記錄上次播種來源的 session_state key。
+        source: 目前資料來源的識別值（需可比較相等）。
+        values: widget key 對應的帶入值；`None` 顯示空字串。
+    """
+    state = st.session_state
+    source_changed = state.get(seed_key) != source
+    key_missing = any(key not in state for key in values)
+    if not (source_changed or key_missing):
+        return
+    for key, value in values.items():
+        state[key] = format_amount(value)
+    state[seed_key] = source
 
 
 def _normalize_session_value(key: str) -> None:
