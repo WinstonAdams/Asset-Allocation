@@ -28,7 +28,9 @@ from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import ASSET_CATEGORIES, COST_BASIS_INPUT
+from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.services.cost_basis_service import CostBasisService
+from asset_lab.services.monthly_input_service import MonthlyInputService
 
 _STOCK_CATEGORY = ASSET_CATEGORIES.TW_STOCK
 _NON_STOCK_CATEGORY = ASSET_CATEGORIES.DEMAND_DEPOSIT
@@ -54,8 +56,10 @@ class _StubRecordRepo:
     def __init__(self):
         self.upserted: list[object] = []
         self.batch_upserted: list[object] = []
+        self.accumulated: list[object] = []
         self.deleted_and_upserted: list[tuple] = []
         self.holding_records: dict[int, list[object]] = {}
+        self.month_records: dict[str, list[object]] = {}
 
     def upsert_record(self, *, record):
         self.upserted.append(record)
@@ -72,6 +76,26 @@ class _StubRecordRepo:
     def read_holding_records(self, *, holding_id):
         return self.holding_records.get(holding_id, [])
 
+    def read_month(self, *, year_month):
+        return list(self.month_records.get(year_month, []))
+
+    def accumulate_net_investments(self, *, records):
+        """模擬累加語意：既有列只加淨投入，沒有既有列則新增只含淨投入的列。"""
+        self.accumulated.extend(records)
+        for incoming in records:
+            month = self.month_records.setdefault(incoming.year_month, [])
+            existing = next((r for r in month if r.holding_id == incoming.holding_id), None)
+            if existing is None:
+                month.append(
+                    MonthlyRecordModel(
+                        holding_id=incoming.holding_id,
+                        year_month=incoming.year_month,
+                        net_investment=incoming.net_investment,
+                    )
+                )
+            else:
+                existing.net_investment += incoming.net_investment
+
 
 class _SpyMonthlyInputService:
     """服務替身：記錄呼叫時實際收到的 target_ym/year_month，供斷言下拉選擇正確傳遞。"""
@@ -79,6 +103,14 @@ class _SpyMonthlyInputService:
     def __init__(self):
         self.prefill_calls: list[str] = []
         self.transfer_calls: list[tuple[int, int, float, str]] = []
+        # 純運算方法委派真實 Service（不碰 Repo），讓帶入與本月表格走真實邏輯
+        self._real = MonthlyInputService(holding_repo=None, record_repo=None)
+
+    def build_record_prefill(self, **kwargs):
+        return self._real.build_record_prefill(**kwargs)
+
+    def summarize_month(self, **kwargs):
+        return self._real.summarize_month(**kwargs)
 
     def prefill_from_previous(self, *, target_ym: str):
         self.prefill_calls.append(target_ym)
@@ -179,6 +211,7 @@ class TestSelectedMonthPassedDownstream:
         prefill_button.click().run()
         assert service.prefill_calls[-1] == "2024-11"
 
+    @pytest.mark.scenario("SC-086")
     def test_transfer_button_passes_selected_year_month(self):
         service = _SpyMonthlyInputService()
         record_repo = _StubRecordRepo()
@@ -191,7 +224,7 @@ class TestSelectedMonthPassedDownstream:
         assert service.transfer_calls[-1][3] == "2025-07"
         # 成對紀錄確實委派 Repository 寫入（不因下拉改版而漏寫）；兩端皆非股票/ETF，
         # transfer_records_to_write 不濾掉任何一端
-        assert len(record_repo.batch_upserted) == 2
+        assert len(record_repo.accumulated) == 2
 
 
 class _StubCostBasisHoldingRepo:
@@ -216,6 +249,7 @@ class TestRecordEditorSwitchesFieldsByCategory:
     """單列錄入依項目分類切換欄位：股票/ETF 走總成本輸入，其餘分類走市值/淨投入。"""
 
     @pytest.mark.scenario("SC-074")
+    @pytest.mark.scenario("SC-090")
     def test_stock_holding_shows_cost_basis_fields(self):
         at = _run_app(
             today=date(2026, 5, 15),
@@ -226,7 +260,8 @@ class TestRecordEditorSwitchesFieldsByCategory:
         expected_keys = {
             "cost_basis_total_cost",
             "cost_basis_market_value",
-            "cost_basis_realized_income",
+            "cost_basis_realized_pnl",
+            "cost_basis_cash_dividend",
         }
         assert expected_keys <= keys
         assert "record_market_value" not in keys
@@ -344,8 +379,9 @@ class TestTransferFiltersCostBasisEnd:
         transfer_button = next(b for b in at.button if b.label == "建立轉移")
         transfer_button.click().run()
 
-        assert len(record_repo.batch_upserted) == 1
-        written = record_repo.batch_upserted[0]
+        assert len(record_repo.accumulated) == 1
+        assert record_repo.batch_upserted == []
+        written = record_repo.accumulated[0]
         assert written.holding_id == 20
         assert written.net_investment == -80000.0
         assert any("已建立成對轉移紀錄" in s.value for s in at.success)
@@ -378,5 +414,303 @@ class TestTransferFiltersCostBasisEnd:
         transfer_button = next(b for b in at.button if b.label == "建立轉移")
         transfer_button.click().run()
 
+        assert record_repo.accumulated == []
         assert record_repo.batch_upserted == []
         assert any("未寫入任何紀錄" in i.value for i in at.info)
+
+
+def _rec(holding_id, ym, **kw):
+    return MonthlyRecordModel(holding_id=holding_id, year_month=ym, **kw)
+
+
+def _click(at: AppTest, label: str) -> None:
+    next(b for b in at.button if b.label == label).click().run()
+
+
+class TestTransferAccumulates:
+    """轉移改走累加寫入，成功訊息經 rerun 後顯示，錄入框與本月表格重新帶入最新值。"""
+
+    @pytest.mark.scenario("SC-086")
+    def test_transfer_uses_accumulate_not_overwrite_upsert(self):
+        record_repo = _StubRecordRepo()
+        at = _run_app(
+            today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
+        )
+        at.selectbox(key="src").set_value(1)
+        at.selectbox(key="dst").set_value(2)
+        at.text_input(key="amt").set_value("100000")
+        _click(at, "建立轉移")
+
+        assert [r.net_investment for r in record_repo.accumulated] == [-100000.0, 100000.0]
+        assert record_repo.batch_upserted == []
+        assert any("已建立成對轉移紀錄" in s.value for s in at.success)
+
+    @pytest.mark.scenario("SC-086")
+    @pytest.mark.scenario("SC-087")
+    def test_editor_and_table_reflect_latest_values_after_transfer(self):
+        record_repo = _StubRecordRepo()
+        record_repo.month_records["2026-05"] = [
+            _rec(1, "2026-05", market_value=350000.0, net_investment=0.0)
+        ]
+        at = _run_app(
+            today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
+        )
+        assert at.text_input(key="record_net_investment").value == "0"
+
+        at.selectbox(key="src").set_value(1)
+        at.selectbox(key="dst").set_value(2)
+        at.text_input(key="amt").set_value("100000")
+        _click(at, "建立轉移")
+
+        assert at.text_input(key="record_net_investment").value == "-100,000"
+        assert at.text_input(key="record_market_value").value == "350,000"
+
+
+class TestRecordEditorPrefill:
+    """一般分類錄入框帶入當月既有值，切換後跟著換，使用者輸入在未切換時不被洗掉。"""
+
+    @pytest.mark.scenario("SC-087")
+    def test_existing_record_prefills_fields(self):
+        record_repo = _StubRecordRepo()
+        record_repo.month_records["2026-05"] = [
+            _rec(1, "2026-05", market_value=350000.0, net_investment=-150000.0)
+        ]
+        at = _run_app(
+            today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
+        )
+        assert at.text_input(key="record_market_value").value == "350,000"
+        assert at.text_input(key="record_net_investment").value == "-150,000"
+
+    @pytest.mark.scenario("SC-087")
+    def test_save_without_edit_keeps_existing_values(self):
+        record_repo = _StubRecordRepo()
+        record_repo.month_records["2026-05"] = [
+            _rec(1, "2026-05", market_value=350000.0, net_investment=-150000.0)
+        ]
+        at = _run_app(
+            today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
+        )
+        _click(at, "儲存此列")
+
+        saved = record_repo.upserted[-1]
+        assert saved.market_value == 350000.0
+        assert saved.net_investment == -150000.0
+
+    @pytest.mark.scenario("SC-087")
+    def test_switching_holding_resets_to_defaults_when_no_record(self):
+        record_repo = _StubRecordRepo()
+        record_repo.month_records["2026-05"] = [
+            _rec(1, "2026-05", market_value=350000.0, net_investment=-150000.0)
+        ]
+        at = _run_app(
+            today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
+        )
+        next(sb for sb in at.selectbox if sb.label == "項目").set_value(2).run()
+
+        assert at.text_input(key="record_market_value").value == "0"
+        assert at.text_input(key="record_net_investment").value == "0"
+
+    @pytest.mark.scenario("SC-087")
+    def test_blank_market_value_prefills_blank_not_zero(self):
+        record_repo = _StubRecordRepo()
+        record_repo.month_records["2026-05"] = [
+            _rec(1, "2026-05", market_value=None, net_investment=-100000.0)
+        ]
+        at = _run_app(
+            today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
+        )
+        assert at.text_input(key="record_market_value").value == ""
+
+    @pytest.mark.scenario("SC-087")
+    def test_switching_month_reprefills(self):
+        record_repo = _StubRecordRepo()
+        record_repo.month_records["2026-04"] = [
+            _rec(1, "2026-04", market_value=500000.0, net_investment=0.0)
+        ]
+        at = _run_app(
+            today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
+        )
+        assert at.text_input(key="record_market_value").value == "0"
+        at.selectbox(key="input_target_month").set_value(4).run()
+        assert at.text_input(key="record_market_value").value == "500,000"
+
+    @pytest.mark.scenario("SC-087")
+    def test_unsaved_input_survives_rerun_without_switching(self):
+        record_repo = _StubRecordRepo()
+        record_repo.month_records["2026-05"] = [
+            _rec(1, "2026-05", market_value=350000.0, net_investment=0.0)
+        ]
+        at = _run_app(
+            today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
+        )
+        at.text_input(key="record_net_investment").set_value("999").run()
+        at.run()
+        assert at.text_input(key="record_net_investment").value == "999"
+
+
+class TestCostBasisPrefillAndDividendFields:
+    """股票/ETF 錄入框帶入既有值（兩格分開）、兩欄輸入、BR-7 提示、股利負值拒絕。"""
+
+    @staticmethod
+    def _stock_repo_with_record() -> _StubRecordRepo:
+        record_repo = _StubRecordRepo()
+        record_repo.holding_records[10] = [
+            _rec(
+                10,
+                "2026-05",
+                market_value=650000.0,
+                net_investment=0.0,
+                total_cost=600000.0,
+                realized_income=11500.0,
+                cash_dividend=1500.0,
+            )
+        ]
+        return record_repo
+
+    @pytest.mark.scenario("SC-088")
+    def test_existing_record_prefills_four_fields_separately(self):
+        at = _run_app(
+            today=date(2026, 5, 15),
+            service=_SpyMonthlyInputService(),
+            holding_repo=_StubCostBasisHoldingRepo(),
+            record_repo=self._stock_repo_with_record(),
+        )
+        assert at.text_input(key="cost_basis_total_cost").value == "600,000"
+        assert at.text_input(key="cost_basis_market_value").value == "650,000"
+        assert at.text_input(key="cost_basis_realized_pnl").value == "10,000"
+        assert at.text_input(key="cost_basis_cash_dividend").value == "1,500"
+
+    @pytest.mark.scenario("SC-088")
+    def test_switching_to_month_without_record_resets_to_zero(self):
+        at = _run_app(
+            today=date(2026, 5, 15),
+            service=_SpyMonthlyInputService(),
+            holding_repo=_StubCostBasisHoldingRepo(),
+            record_repo=self._stock_repo_with_record(),
+        )
+        at.selectbox(key="input_target_month").set_value(6).run()
+        for key in (
+            "cost_basis_total_cost",
+            "cost_basis_market_value",
+            "cost_basis_realized_pnl",
+            "cost_basis_cash_dividend",
+        ):
+            assert at.text_input(key=key).value == "0"
+
+    @pytest.mark.scenario("SC-090")
+    def test_two_fields_sum_into_preview_and_saved_record(self):
+        record_repo = _StubRecordRepo()
+        at = _run_app(
+            today=date(2026, 6, 15),
+            service=_SpyMonthlyInputService(),
+            holding_repo=_StubCostBasisHoldingRepo(),
+            record_repo=record_repo,
+        )
+        at.text_input(key="cost_basis_realized_pnl").set_value("100000").run()
+        at.text_input(key="cost_basis_cash_dividend").set_value("2000").run()
+        # 前期總成本＝初始成本 300000；(0−300000)−(100000+2000)＝−402000
+        assert "推算本月淨投入：-402,000" in _all_written_text(at)
+
+        _click(at, "儲存此列")
+        saved = record_repo.batch_upserted[0]
+        assert saved.realized_income == 102000.0
+        assert saved.cash_dividend == 2000.0
+        assert saved.net_investment == -402000.0
+
+    @pytest.mark.scenario("SC-090")
+    def test_transfer_hint_shown_next_to_realized_fields(self):
+        at = _run_app(
+            today=date(2026, 5, 15),
+            service=_SpyMonthlyInputService(),
+            holding_repo=_StubCostBasisHoldingRepo(),
+        )
+        assert any("項目間轉移" in c.value and "重複計入" in c.value for c in at.caption)
+
+    @pytest.mark.scenario("SC-091")
+    def test_negative_dividend_rejected_in_preview_and_on_save(self):
+        record_repo = _StubRecordRepo()
+        at = _run_app(
+            today=date(2026, 6, 15),
+            service=_SpyMonthlyInputService(),
+            holding_repo=_StubCostBasisHoldingRepo(),
+            record_repo=record_repo,
+        )
+        at.text_input(key="cost_basis_realized_pnl").set_value("100000").run()
+        at.text_input(key="cost_basis_cash_dividend").set_value("-1000").run()
+
+        assert any("現金股利不可為負" in e.value for e in at.error)
+        assert not any("輸入完成後顯示推算值" in c.value for c in at.caption)
+
+        _click(at, "儲存此列")
+        assert record_repo.batch_upserted == []
+        assert any("現金股利不可為負" in e.value for e in at.error)
+
+    @pytest.mark.scenario("SC-091")
+    def test_zero_dividend_and_negative_pnl_are_valid(self):
+        at = _run_app(
+            today=date(2026, 6, 15),
+            service=_SpyMonthlyInputService(),
+            holding_repo=_StubCostBasisHoldingRepo(),
+        )
+        at.text_input(key="cost_basis_realized_pnl").set_value("-5000").run()
+        assert not at.error
+        assert any("推算本月淨投入" in v for v in _all_written_text(at))
+
+
+class TestMonthRecordsTable:
+    """本月已存紀錄表格：逐列顯示、市值未填提醒、空狀態、存檔後即時反映。"""
+
+    @staticmethod
+    def _repo() -> _StubRecordRepo:
+        record_repo = _StubRecordRepo()
+        record_repo.month_records["2026-06"] = [
+            _rec(10, "2026-06", market_value=0.0, total_cost=0.0, realized_income=50000.0),
+            _rec(20, "2026-06", market_value=None, net_investment=-1000.0),
+        ]
+        return record_repo
+
+    @pytest.mark.scenario("SC-089")
+    def test_table_lists_rows_and_flags_missing_market_value(self):
+        at = _run_app(
+            today=date(2026, 6, 15),
+            service=_SpyMonthlyInputService(),
+            holding_repo=_StubCostBasisHoldingRepo(),
+            record_repo=self._repo(),
+        )
+        rows = at.dataframe[0].value.to_dict("records")
+        by_name = {r["項目"]: r for r in rows}
+        assert set(by_name) == {"台積電", "現金"}
+        assert "尚未填" in by_name["現金"]["提醒"]
+        assert not by_name["台積電"]["提醒"]
+        assert by_name["台積電"]["已實現收益"] == "50,000"
+        assert by_name["現金"]["淨投入"] == "-1,000"
+
+    @pytest.mark.scenario("SC-089")
+    def test_empty_month_shows_empty_state_without_reminder(self):
+        at = _run_app(
+            today=date(2026, 6, 15),
+            service=_SpyMonthlyInputService(),
+            holding_repo=_StubCostBasisHoldingRepo(),
+        )
+        assert len(at.dataframe) == 0
+        assert any("尚無" in c.value for c in at.caption)
+
+    @pytest.mark.scenario("SC-089")
+    def test_table_reflects_saved_record_immediately(self):
+        record_repo = _StubRecordRepo()
+
+        def _save(*, record):
+            record_repo.month_records.setdefault(record.year_month, []).append(record)
+
+        record_repo.upsert_record = _save
+        at = _run_app(
+            today=date(2026, 6, 15),
+            service=_SpyMonthlyInputService(),
+            record_repo=record_repo,
+        )
+        assert len(at.dataframe) == 0
+        at.text_input(key="record_market_value").set_value("370000").run()
+        _click(at, "儲存此列")
+
+        assert len(at.dataframe) == 1
+        assert any("已儲存" in s.value for s in at.success)

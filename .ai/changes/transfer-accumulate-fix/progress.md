@@ -20,7 +20,7 @@
 | t03 CostBasisService 已實現損益／現金股利拆分與非負驗證 | 完成 | SC-074/075/076/078/088/090/091；derive/plan_save 改收 realized_pnl＋cash_dividend、股利負值拒絕、build_cost_basis_prefill；views/input.py 兩處呼叫最小橋接（t06 再整合）；+13 tests，累計 547 綠 |
 | t04 CSV records 契約附加 cash_dividend | 完成 | SC-031/084；RECORDS_COLUMNS 7 欄、必填改 RECORDS_COLUMNS[:4]（4 欄與 6 欄舊 CSV 皆可匯入）；+3 tests，累計 550 綠 |
 | t05 amount_widget 新增 seed_amount_inputs（帶入重新播種機制） | 完成 | SC-087/088；來源改變或 key 被清掉才重新播種、來源相同保留使用者未存檔輸入；+5 tests，累計 555 綠 |
-| t06 views/input.py 整合（累加轉移、帶入既有值、本月紀錄表、股利欄位） | 未開始 | SC-086~091、SC-079/080（既有測試機械更新） |
+| t06 views/input.py 整合（累加轉移、帶入既有值、本月紀錄表、股利欄位） | 完成 | SC-086~091、SC-079/080；轉移改 accumulate_net_investments、兩種錄入框接帶入與播種、本月紀錄表＋市值未填提醒、股利兩格＋BR-7 提示、寫入後 flash＋rerun；+17 tests，累計 572 綠；待回報：一般分類無紀錄時市值帶 0（沿用設計預設），SC-087 文字寫「留空」 |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
 
 ## Phase 3：審查
