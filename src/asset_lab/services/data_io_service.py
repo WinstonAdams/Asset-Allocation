@@ -193,11 +193,12 @@ class DataIoService:
     def _build_records(df: pd.DataFrame) -> list[MonthlyRecordModel]:
         """逐列還原月度紀錄並驗證 (holding_id, year_month) 唯一鍵不重複。
 
-        total_cost/realized_income 為向後相容附加欄位：舊版 CSV 無此欄，或欄位存在
+        total_cost/realized_income/cash_dividend 為向後相容附加欄位：舊版 CSV 無此欄，或欄位存在
         但個別列留白，皆視為未填、還原為 None。
         """
         has_total_cost_column = "total_cost" in df.columns
         has_realized_income_column = "realized_income" in df.columns
+        has_cash_dividend_column = "cash_dividend" in df.columns
         records: list[MonthlyRecordModel] = []
         seen: set[tuple[int, str]] = set()
         for row in df.to_dict(orient="records"):
@@ -221,6 +222,11 @@ class DataIoService:
                     realized_income=(
                         _optional_float(row["realized_income"])
                         if has_realized_income_column
+                        else None
+                    ),
+                    cash_dividend=(
+                        _optional_float(row["cash_dividend"])
+                        if has_cash_dividend_column
                         else None
                     ),
                 )

@@ -44,14 +44,14 @@ def _holdings() -> list[HoldingModel]:
 def _records_df() -> pd.DataFrame:
     """主檔對應的月度紀錄（市值/淨投入/總成本/已實現收益、負債餘額），欄序同 read_all。
 
-    holding_id=1 的第一筆為新制股票/ETF 列（total_cost/realized_income 皆有值）；
-    其餘列非股票/ETF 或舊制，total_cost/realized_income 皆未填（None）。
+    holding_id=1 的第一筆為新制股票/ETF 列（total_cost/realized_income/cash_dividend 皆有值）；
+    其餘列非股票/ETF 或舊制，這三欄皆未填（None）。
     """
     return pd.DataFrame(
         [
-            (1, "2026-01", 510000.0, 0.0, 300000.0, 0.0),
-            (1, "2026-02", 0.0, -520000.0, None, None),
-            (2, "2026-01", 800000.0, 0.0, None, None),
+            (1, "2026-01", 510000.0, 0.0, 300000.0, 5000.0, 1200.0),
+            (1, "2026-02", 0.0, -520000.0, None, None, None),
+            (2, "2026-01", 800000.0, 0.0, None, None, None),
         ],
         columns=[
             "holding_id",
@@ -60,6 +60,7 @@ def _records_df() -> pd.DataFrame:
             "net_investment",
             "total_cost",
             "realized_income",
+            "cash_dividend",
         ],
     )
 
@@ -110,10 +111,12 @@ class TestExportImportRoundTrip:
             "net_investment",
             "total_cost",
             "realized_income",
+            "cash_dividend",
         ]
         assert len(df) == 3
         assert df["total_cost"].iloc[0] == 300000.0
-        assert df["realized_income"].iloc[0] == 0.0
+        assert df["realized_income"].iloc[0] == 5000.0
+        assert df["cash_dividend"].iloc[0] == 1200.0
 
     @pytest.mark.scenario("SC-031")
     def test_sc031_export_targets_has_header_and_all_rows(self, service):
@@ -149,7 +152,8 @@ class TestExportImportRoundTrip:
                 market_value=510000.0,
                 net_investment=0.0,
                 total_cost=300000.0,
-                realized_income=0.0,
+                realized_income=5000.0,
+                cash_dividend=1200.0,
             ),
             MonthlyRecordModel(
                 holding_id=1, year_month="2026-02", market_value=0.0, net_investment=-520000.0
@@ -562,3 +566,63 @@ class TestLegacyRecordsCsvWithoutCostBasisColumns:
         )
         assert records[0].total_cost is None
         assert records[0].realized_income is None
+
+
+def _six_column_records_csv_bytes() -> bytes:
+    """模擬前一個 Change 匯出的月度紀錄 CSV：6 欄（有總成本/已實現收益，無現金股利）。"""
+    return (
+        b"holding_id,year_month,market_value,net_investment,total_cost,realized_income\n"
+        b"1,2026-01,510000.0,0.0,300000.0,8000.0\n"
+        b"2,2026-01,800000.0,0.0,,\n"
+    )
+
+
+class TestLegacyRecordsCsvWithoutCashDividendColumn:
+    """SC-084：舊格式 CSV（4 欄或前一 Change 的 6 欄）無現金股利欄，視為未填。"""
+
+    @pytest.mark.scenario("SC-084")
+    def test_sc084_four_column_csv_cash_dividend_is_none(self, service):
+        holdings_csv = service.export_holdings_csv(holdings=_holdings())
+        targets_csv = service.export_targets_csv(targets=_targets())
+        _, records, _ = service.parse_and_validate(
+            holdings_csv=holdings_csv,
+            records_csv=_legacy_records_csv_bytes(),
+            targets_csv=targets_csv,
+            target_db_empty=True,
+        )
+        assert all(record.cash_dividend is None for record in records)
+
+    @pytest.mark.scenario("SC-084")
+    def test_sc084_six_column_csv_imports_with_cash_dividend_none(self, service):
+        holdings_csv = service.export_holdings_csv(holdings=_holdings())
+        targets_csv = service.export_targets_csv(targets=_targets())
+        _, records, _ = service.parse_and_validate(
+            holdings_csv=holdings_csv,
+            records_csv=_six_column_records_csv_bytes(),
+            targets_csv=targets_csv,
+            target_db_empty=True,
+        )
+        assert len(records) == 2
+        assert records[0].market_value == 510000.0
+        assert records[0].total_cost == 300000.0
+        # 已實現收益原值全數保留，不拆出股利
+        assert records[0].realized_income == 8000.0
+        assert all(record.cash_dividend is None for record in records)
+
+    @pytest.mark.scenario("SC-084")
+    def test_sc084_new_format_blank_cash_dividend_defaults_to_none(self, service):
+        holdings_csv = service.export_holdings_csv(holdings=_holdings())
+        targets_csv = service.export_targets_csv(targets=_targets())
+        csv_bytes = (
+            b"holding_id,year_month,market_value,net_investment,total_cost,"
+            b"realized_income,cash_dividend\n"
+            b"1,2026-01,510000.0,0.0,300000.0,5000.0,\n"
+        )
+        _, records, _ = service.parse_and_validate(
+            holdings_csv=holdings_csv,
+            records_csv=csv_bytes,
+            targets_csv=targets_csv,
+            target_db_empty=True,
+        )
+        assert records[0].realized_income == 5000.0
+        assert records[0].cash_dividend is None

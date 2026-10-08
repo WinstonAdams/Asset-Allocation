@@ -277,8 +277,8 @@ class CSV_EXPORT:
     HOLDINGS_COLUMNS 末端附加 purpose（純附加，既有欄序不變）；HOLDINGS_REQUIRED_COLUMNS
     為匯入表頭驗證的強制欄位集，不含 purpose——舊版 CSV 缺此欄仍能通過表頭驗證並匯入，
     缺欄視為未填、補一般（向後相容）。RECORDS_COLUMNS 同理末端附加 total_cost、
-    realized_income；RECORDS_REQUIRED_COLUMNS 不含這兩欄，舊版 CSV 缺欄仍可匯入，
-    缺欄視為未填（還原為 None）。
+    realized_income、cash_dividend；RECORDS_REQUIRED_COLUMNS 固定為前 4 欄，不含這三欄，
+    舊版 CSV（4 欄或僅 6 欄）缺欄仍可匯入，缺欄視為未填（還原為 None）。
     """
 
     HOLDINGS_COLUMNS = (
@@ -298,8 +298,9 @@ class CSV_EXPORT:
         "net_investment",
         "total_cost",
         "realized_income",
+        "cash_dividend",
     )
-    RECORDS_REQUIRED_COLUMNS = RECORDS_COLUMNS[:-2]
+    RECORDS_REQUIRED_COLUMNS = RECORDS_COLUMNS[:4]
     TARGETS_COLUMNS = (
         "category",
         "target_weight",
