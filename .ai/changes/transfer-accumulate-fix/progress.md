@@ -21,7 +21,7 @@
 | t04 CSV records 契約附加 cash_dividend | 完成 | SC-031/084；RECORDS_COLUMNS 7 欄、必填改 RECORDS_COLUMNS[:4]（4 欄與 6 欄舊 CSV 皆可匯入）；+3 tests，累計 550 綠 |
 | t05 amount_widget 新增 seed_amount_inputs（帶入重新播種機制） | 完成 | SC-087/088；來源改變或 key 被清掉才重新播種、來源相同保留使用者未存檔輸入；+5 tests，累計 555 綠 |
 | t06 views/input.py 整合（累加轉移、帶入既有值、本月紀錄表、股利欄位） | 完成 | SC-086~091、SC-079/080；轉移改 accumulate_net_investments、兩種錄入框接帶入與播種、本月紀錄表＋市值未填提醒、股利兩格＋BR-7 提示、寫入後 flash＋rerun；+17 tests，累計 572 綠；待回報：一般分類無紀錄時市值帶 0（沿用設計預設），SC-087 文字寫「留空」 |
-| 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
+| 2-Z 整合驗證 | 完成 | 首輪 haiku 誤報 20 個孤兒（以註解式 marker 為判準），主 AI 核對 lint 輸出不成立，升 sonnet 重跑：lint 91/91 SC 覆蓋、38 個既有技術債孤兒、本 Change 新增 0；pytest 572 綠；啟動 health ok 無異常 log；畫面待使用者目視；移除 .auto-gate，Phase 3 恢復逐步確認 |
 
 ## Phase 3：審查
 
