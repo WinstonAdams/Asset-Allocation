@@ -194,3 +194,26 @@ class ProtocolStatus(BaseModel):
     drawdown: float | None = None
     current_cumulative_twr: float | None = None
     data_month_count: int
+
+
+class RecordEditorPrefill(BaseModel):
+    """一般分類單列錄入框的帶入值。沒有紀錄時為現行預設；市值 None 代表帶入空白。"""
+
+    market_value: float | None
+    net_investment: float
+
+
+class MonthRecordRow(BaseModel):
+    """「本月已存紀錄」唯讀表格的單列。
+
+    total_cost/realized_income 只有新制股票/ETF 列有值；
+    market_value_missing 為 True 時需提醒補填市值。
+    """
+
+    holding_id: int
+    name: str
+    market_value: float | None
+    net_investment: float
+    total_cost: float | None
+    realized_income: float | None
+    market_value_missing: bool

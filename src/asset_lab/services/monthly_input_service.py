@@ -24,6 +24,7 @@ from typing import Protocol
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
+from asset_lab.models.results import MonthRecordRow, RecordEditorPrefill
 
 # 出清語意：賣出當月記市值 0，視為已不再持有，後續月份不帶入
 _SOLD_OUT_MARKET_VALUE = 0.0
@@ -120,6 +121,58 @@ class MonthlyInputService:
             holding_id=dest_id, year_month=year_month, net_investment=amount
         )
         return source, dest
+
+    def build_record_prefill(
+        self, *, records: list[MonthlyRecordModel], holding_id: int, year_month: str
+    ) -> RecordEditorPrefill:
+        """算出一般分類錄入框的帶入值：該月已有紀錄就照存的值，沒有則為現行預設。
+
+        已存的市值為空白（None）時保持空白，避免使用者誤以為是 0 而把空白存成 0。
+
+        Args:
+            records: 已讀好的紀錄清單（通常為當月全部紀錄）。
+            holding_id: 選取的項目。
+            year_month: 選取的月份，'YYYY-MM' 格式。
+
+        Returns:
+            帶入值；無相符紀錄時市值與淨投入皆為 0。
+        """
+        for record in records:
+            if record.holding_id == holding_id and record.year_month == year_month:
+                return RecordEditorPrefill(
+                    market_value=record.market_value,
+                    net_investment=record.net_investment,
+                )
+        return RecordEditorPrefill(market_value=0.0, net_investment=0.0)
+
+    def summarize_month(
+        self, *, records: list[MonthlyRecordModel], holdings: list[HoldingModel]
+    ) -> list[MonthRecordRow]:
+        """把本月已存紀錄組成唯讀表格列，並標記市值（或負債餘額）未填的列。
+
+        提醒只看市值是否空白，不分項目分類。項目名稱由主檔對應；項目不可刪除且匯入
+        會拒絕孤兒紀錄，故主檔必定涵蓋所有紀錄的項目。
+
+        Args:
+            records: 當月紀錄，輸出依此順序一筆一列。
+            holdings: 項目主檔，用於對應名稱。
+
+        Returns:
+            與 records 同順序的表格列；無紀錄時為空清單。
+        """
+        names = {holding.holding_id: holding.name for holding in holdings}
+        return [
+            MonthRecordRow(
+                holding_id=record.holding_id,
+                name=names[record.holding_id],
+                market_value=record.market_value,
+                net_investment=record.net_investment,
+                total_cost=record.total_cost,
+                realized_income=record.realized_income,
+                market_value_missing=record.market_value is None,
+            )
+            for record in records
+        ]
 
     def _prefill_from_holdings(self, *, target_ym: str) -> list[MonthlyRecordModel]:
         """首月無上月可帶：由主檔列出所有項目作為待輸入清單。"""

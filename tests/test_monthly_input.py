@@ -916,3 +916,104 @@ class TestAccumulateNetInvestments:
 
         assert record_repo.read_month(year_month="2026-05")[0].net_investment == 1000.0
         assert record_repo.read_month(year_month="2026-06") == []
+
+
+class TestBuildRecordPrefill:
+    """build_record_prefill：一般分類錄入框帶入當月既有值 —— SC-087。"""
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_existing_record_prefilled_as_stored(self):
+        records = [_prev_record(1, "2026-05", 350000.0, -150000.0)]
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=records, holding_id=1, year_month="2026-05"
+        )
+        assert prefill.market_value == 350000.0
+        assert prefill.net_investment == -150000.0
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_no_record_for_holding_returns_current_defaults(self):
+        # 「活存」有紀錄、「定存」該月無紀錄 → 定存回現行預設
+        records = [_prev_record(1, "2026-05", 350000.0, -150000.0)]
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=records, holding_id=2, year_month="2026-05"
+        )
+        assert prefill.market_value == 0.0
+        assert prefill.net_investment == 0.0
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_empty_records_returns_current_defaults(self):
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=[], holding_id=1, year_month="2026-05"
+        )
+        assert prefill.market_value == 0.0
+        assert prefill.net_investment == 0.0
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_null_market_value_prefilled_as_blank_not_zero(self):
+        records = [_prev_record(1, "2026-05", None, 200.0)]
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=records, holding_id=1, year_month="2026-05"
+        )
+        assert prefill.market_value is None
+        assert prefill.net_investment == 200.0
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_other_month_record_not_matched(self):
+        records = [_prev_record(1, "2026-04", 999.0, 5.0)]
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=records, holding_id=1, year_month="2026-05"
+        )
+        assert prefill.market_value == 0.0
+        assert prefill.net_investment == 0.0
+
+
+class TestSummarizeMonth:
+    """summarize_month：本月已存紀錄彙總與市值未填提醒 —— SC-089。"""
+
+    @pytest.mark.scenario("SC-089")
+    def test_sc089_rows_follow_record_order_with_matched_names(self):
+        holdings = [_asset(1, "活存"), _liability(2, "房貸"), _asset(3, "聯發科")]
+        records = [
+            _prev_record(1, "2026-06", 370000.0),
+            _prev_record(2, "2026-06", None),
+            MonthlyRecordModel(
+                holding_id=3,
+                year_month="2026-06",
+                market_value=0.0,
+                net_investment=-100.0,
+                total_cost=0.0,
+                realized_income=50000.0,
+            ),
+        ]
+        rows = _service(_StubRecordRepo(latest_ym=None)).summarize_month(
+            records=records, holdings=holdings
+        )
+        assert [row.name for row in rows] == ["活存", "房貸", "聯發科"]
+        assert [row.holding_id for row in rows] == [1, 2, 3]
+        assert rows[0].market_value == 370000.0
+        assert rows[0].total_cost is None
+        assert rows[0].realized_income is None
+        assert rows[2].net_investment == -100.0
+        assert rows[2].total_cost == 0.0
+        assert rows[2].realized_income == 50000.0
+
+    @pytest.mark.scenario("SC-089")
+    def test_sc089_missing_flag_only_for_blank_market_value_including_liability(self):
+        holdings = [_asset(1, "活存"), _liability(2, "房貸"), _asset(3, "聯發科")]
+        records = [
+            _prev_record(1, "2026-06", 370000.0),
+            _prev_record(2, "2026-06", None),
+            _prev_record(3, "2026-06", 0.0),
+        ]
+        rows = _service(_StubRecordRepo(latest_ym=None)).summarize_month(
+            records=records, holdings=holdings
+        )
+        # 市值 0 是已填（出清語意），不提醒；只有空白（含負債）才提醒
+        assert [row.market_value_missing for row in rows] == [False, True, False]
+
+    @pytest.mark.scenario("SC-089")
+    def test_sc089_no_records_returns_empty_list(self):
+        rows = _service(_StubRecordRepo(latest_ym=None)).summarize_month(
+            records=[], holdings=[_asset(1, "活存")]
+        )
+        assert rows == []

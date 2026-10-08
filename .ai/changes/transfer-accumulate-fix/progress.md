@@ -16,7 +16,7 @@
 | Task | 狀態 | 備註 |
 |------|------|------|
 | t01 monthly_records 加欄（cash_dividend）+ 轉移累加 Repository 方法 | 完成 | SC-006/085/086；cash_dividend 附加欄（idempotent 遷移）、accumulate_net_investments 單一交易 ON CONFLICT 累加保留市值；+11 tests，累計 526 綠 |
-| t02 MonthlyInputService 新增純方法（單列帶入值 + 本月已存紀錄彙總） | 未開始 | SC-087/089 |
+| t02 MonthlyInputService 新增純方法（單列帶入值 + 本月已存紀錄彙總） | 完成 | SC-087/089；build_record_prefill（市值 NULL 帶空白）、summarize_month（市值空白即提醒、不分類）；+8 tests，累計 534 綠（未先跑紅燈、未跑 lint，留 2-Z 檢查） |
 | t03 CostBasisService 已實現損益／現金股利拆分與非負驗證 | 未開始 | SC-074/075/076/078/088/090/091 |
 | t04 CSV records 契約附加 cash_dividend | 未開始 | SC-031/084 |
 | t05 amount_widget 新增 seed_amount_inputs（帶入重新播種機制） | 未開始 | SC-087/088（widget 層落實） |
