@@ -225,7 +225,7 @@ class CostBasisService:
     ) -> CostBasisEditorPrefill:
         """算出股票/ETF 錄入框的帶入值：該月已有紀錄就照存的值，沒有則為現行預設。
 
-        總成本／現值為空白（None）時保持空白，避免把空白存成 0（0 代表清倉）。
+        總成本／現值為空白（None）或該月無紀錄時保持空白，避免把空白存成 0（0 代表清倉）。
         已實現損益由存下來的合計扣除現金股利還原；現金股利為空白的舊紀錄，
         合計全數視為已實現損益。
 
@@ -234,7 +234,7 @@ class CostBasisService:
             year_month: 選取的月份，'YYYY-MM' 格式。
 
         Returns:
-            帶入值；無相符紀錄時四欄皆為 0。
+            帶入值；無相符紀錄時總成本與現值留空（None），已實現損益與現金股利為 0。
         """
         for record in records:
             if record.year_month == year_month:
@@ -246,7 +246,7 @@ class CostBasisService:
                     cash_dividend=cash_dividend,
                 )
         return CostBasisEditorPrefill(
-            total_cost=0.0, market_value=0.0, realized_pnl=0.0, cash_dividend=0.0
+            total_cost=None, market_value=None, realized_pnl=0.0, cash_dividend=0.0
         )
 
     def transfer_records_to_write(

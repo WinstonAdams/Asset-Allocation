@@ -931,21 +931,21 @@ class TestBuildRecordPrefill:
         assert prefill.net_investment == -150000.0
 
     @pytest.mark.scenario("SC-087")
-    def test_sc087_no_record_for_holding_returns_current_defaults(self):
+    def test_sc087_no_record_for_holding_market_value_blank_net_investment_zero(self):
         # 「活存」有紀錄、「定存」該月無紀錄 → 定存回現行預設
         records = [_prev_record(1, "2026-05", 350000.0, -150000.0)]
         prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
             records=records, holding_id=2, year_month="2026-05"
         )
-        assert prefill.market_value == 0.0
+        assert prefill.market_value is None
         assert prefill.net_investment == 0.0
 
     @pytest.mark.scenario("SC-087")
-    def test_sc087_empty_records_returns_current_defaults(self):
+    def test_sc087_empty_records_market_value_blank_net_investment_zero(self):
         prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
             records=[], holding_id=1, year_month="2026-05"
         )
-        assert prefill.market_value == 0.0
+        assert prefill.market_value is None
         assert prefill.net_investment == 0.0
 
     @pytest.mark.scenario("SC-087")
@@ -963,7 +963,7 @@ class TestBuildRecordPrefill:
         prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
             records=records, holding_id=1, year_month="2026-05"
         )
-        assert prefill.market_value == 0.0
+        assert prefill.market_value is None
         assert prefill.net_investment == 0.0
 
 

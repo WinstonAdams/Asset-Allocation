@@ -197,14 +197,14 @@ class ProtocolStatus(BaseModel):
 
 
 class RecordEditorPrefill(BaseModel):
-    """一般分類單列錄入框的帶入值。沒有紀錄時為現行預設；市值 None 代表帶入空白。"""
+    """一般分類單列錄入框的帶入值。沒有紀錄時市值留空、淨投入為 0；市值 None 代表帶入空白。"""
 
     market_value: float | None
     net_investment: float
 
 
 class CostBasisEditorPrefill(BaseModel):
-    """股票/ETF 錄入框的帶入值。沒有紀錄時四欄皆為 0；總成本／市值 None 代表帶入空白。"""
+    """股票/ETF 錄入框的帶入值。沒有紀錄時總成本／市值留空、損益與股利為 0；None 代表帶入空白。"""
 
     total_cost: float | None
     market_value: float | None

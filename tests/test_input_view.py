@@ -292,13 +292,14 @@ class TestCostBasisPreviewAndDelegation:
 
     @pytest.mark.scenario("SC-074")
     def test_preview_shows_previous_total_cost_and_derived_investment(self):
-        # 預設欄位皆為 0：無任何前期紀錄，前期總成本＝初始成本 300000；
-        # 推算淨投入＝(0−300000)−0＝−300000
+        # 無紀錄時總成本/現值預設留空，使用者填入總成本 0：無任何前期紀錄，
+        # 前期總成本＝初始成本 300000；推算淨投入＝(0−300000)−0＝−300000
         at = _run_app(
             today=date(2026, 5, 15),
             service=_SpyMonthlyInputService(),
             holding_repo=_StubCostBasisHoldingRepo(),
         )
+        at.text_input(key="cost_basis_total_cost").set_value("0").run()
         written = _all_written_text(at)
         assert "前期總成本：300,000" in written
         assert "推算本月淨投入：-300,000" in written
@@ -497,7 +498,7 @@ class TestRecordEditorPrefill:
         assert saved.net_investment == -150000.0
 
     @pytest.mark.scenario("SC-087")
-    def test_switching_holding_resets_to_defaults_when_no_record(self):
+    def test_switching_holding_blanks_market_value_when_no_record(self):
         record_repo = _StubRecordRepo()
         record_repo.month_records["2026-05"] = [
             _rec(1, "2026-05", market_value=350000.0, net_investment=-150000.0)
@@ -507,8 +508,20 @@ class TestRecordEditorPrefill:
         )
         next(sb for sb in at.selectbox if sb.label == "項目").set_value(2).run()
 
-        assert at.text_input(key="record_market_value").value == "0"
+        assert at.text_input(key="record_market_value").value == ""
         assert at.text_input(key="record_net_investment").value == "0"
+
+    @pytest.mark.scenario("SC-087")
+    def test_save_with_blank_market_value_when_no_record_is_rejected(self):
+        record_repo = _StubRecordRepo()
+        at = _run_app(
+            today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
+        )
+        assert at.text_input(key="record_market_value").value == ""
+        _click(at, "儲存此列")
+
+        assert record_repo.upserted == []
+        assert at.error
 
     @pytest.mark.scenario("SC-087")
     def test_blank_market_value_prefills_blank_not_zero(self):
@@ -530,7 +543,7 @@ class TestRecordEditorPrefill:
         at = _run_app(
             today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
         )
-        assert at.text_input(key="record_market_value").value == "0"
+        assert at.text_input(key="record_market_value").value == ""
         at.selectbox(key="input_target_month").set_value(4).run()
         assert at.text_input(key="record_market_value").value == "500,000"
 
@@ -581,7 +594,7 @@ class TestCostBasisPrefillAndDividendFields:
         assert at.text_input(key="cost_basis_cash_dividend").value == "1,500"
 
     @pytest.mark.scenario("SC-088")
-    def test_switching_to_month_without_record_resets_to_zero(self):
+    def test_switching_to_month_without_record_blanks_cost_and_value(self):
         at = _run_app(
             today=date(2026, 5, 15),
             service=_SpyMonthlyInputService(),
@@ -589,13 +602,25 @@ class TestCostBasisPrefillAndDividendFields:
             record_repo=self._stock_repo_with_record(),
         )
         at.selectbox(key="input_target_month").set_value(6).run()
-        for key in (
-            "cost_basis_total_cost",
-            "cost_basis_market_value",
-            "cost_basis_realized_pnl",
-            "cost_basis_cash_dividend",
-        ):
+        for key in ("cost_basis_total_cost", "cost_basis_market_value"):
+            assert at.text_input(key=key).value == ""
+        for key in ("cost_basis_realized_pnl", "cost_basis_cash_dividend"):
             assert at.text_input(key=key).value == "0"
+
+    @pytest.mark.scenario("SC-088")
+    def test_save_with_blank_cost_and_value_when_no_record_is_rejected(self):
+        record_repo = _StubRecordRepo()
+        at = _run_app(
+            today=date(2026, 5, 15),
+            service=_SpyMonthlyInputService(),
+            holding_repo=_StubCostBasisHoldingRepo(),
+            record_repo=record_repo,
+        )
+        assert at.text_input(key="cost_basis_total_cost").value == ""
+        _click(at, "儲存此列")
+
+        assert record_repo.batch_upserted == []
+        assert at.error
 
     @pytest.mark.scenario("SC-090")
     def test_two_fields_sum_into_preview_and_saved_record(self):
@@ -606,6 +631,8 @@ class TestCostBasisPrefillAndDividendFields:
             holding_repo=_StubCostBasisHoldingRepo(),
             record_repo=record_repo,
         )
+        at.text_input(key="cost_basis_total_cost").set_value("0").run()
+        at.text_input(key="cost_basis_market_value").set_value("0").run()
         at.text_input(key="cost_basis_realized_pnl").set_value("100000").run()
         at.text_input(key="cost_basis_cash_dividend").set_value("2000").run()
         # 前期總成本＝初始成本 300000；(0−300000)−(100000+2000)＝−402000
@@ -635,6 +662,8 @@ class TestCostBasisPrefillAndDividendFields:
             holding_repo=_StubCostBasisHoldingRepo(),
             record_repo=record_repo,
         )
+        at.text_input(key="cost_basis_total_cost").set_value("0").run()
+        at.text_input(key="cost_basis_market_value").set_value("0").run()
         at.text_input(key="cost_basis_realized_pnl").set_value("100000").run()
         at.text_input(key="cost_basis_cash_dividend").set_value("-1000").run()
 
@@ -652,6 +681,7 @@ class TestCostBasisPrefillAndDividendFields:
             service=_SpyMonthlyInputService(),
             holding_repo=_StubCostBasisHoldingRepo(),
         )
+        at.text_input(key="cost_basis_total_cost").set_value("0").run()
         at.text_input(key="cost_basis_realized_pnl").set_value("-5000").run()
         assert not at.error
         assert any("推算本月淨投入" in v for v in _all_written_text(at))

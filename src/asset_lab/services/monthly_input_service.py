@@ -127,7 +127,8 @@ class MonthlyInputService:
     ) -> RecordEditorPrefill:
         """算出一般分類錄入框的帶入值：該月已有紀錄就照存的值，沒有則為現行預設。
 
-        已存的市值為空白（None）時保持空白，避免使用者誤以為是 0 而把空白存成 0。
+        已存的市值為空白（None）時保持空白；該月無紀錄時市值同樣留空，
+        避免使用者沒改就存檔而把餘額存成 0。
 
         Args:
             records: 已讀好的紀錄清單（通常為當月全部紀錄）。
@@ -135,7 +136,7 @@ class MonthlyInputService:
             year_month: 選取的月份，'YYYY-MM' 格式。
 
         Returns:
-            帶入值；無相符紀錄時市值與淨投入皆為 0。
+            帶入值；無相符紀錄時市值留空（None）、淨投入為 0。
         """
         for record in records:
             if record.holding_id == holding_id and record.year_month == year_month:
@@ -143,7 +144,7 @@ class MonthlyInputService:
                     market_value=record.market_value,
                     net_investment=record.net_investment,
                 )
-        return RecordEditorPrefill(market_value=0.0, net_investment=0.0)
+        return RecordEditorPrefill(market_value=None, net_investment=0.0)
 
     def summarize_month(
         self, *, records: list[MonthlyRecordModel], holdings: list[HoldingModel]

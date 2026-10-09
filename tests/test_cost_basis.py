@@ -676,11 +676,13 @@ class TestBuildCostBasisPrefill:
     """build_cost_basis_prefill：股票/ETF 錄入框帶入值，損益與現金股利分開（SC-088）。"""
 
     @pytest.mark.scenario("SC-088")
-    def test_sc088_no_record_returns_defaults(self, service: CostBasisService):
+    def test_sc088_no_record_total_cost_and_market_value_blank_others_zero(
+        self, service: CostBasisService
+    ):
         prefill = service.build_cost_basis_prefill(records=[], year_month="2026-06")
 
-        assert prefill.total_cost == 0
-        assert prefill.market_value == 0
+        assert prefill.total_cost is None
+        assert prefill.market_value is None
         assert prefill.realized_pnl == 0
         assert prefill.cash_dividend == 0
 
@@ -709,8 +711,8 @@ class TestBuildCostBasisPrefill:
 
         prefill = service.build_cost_basis_prefill(records=records, year_month="2026-06")
 
-        assert prefill.total_cost == 0
-        assert prefill.market_value == 0
+        assert prefill.total_cost is None
+        assert prefill.market_value is None
 
     @pytest.mark.scenario("SC-088")
     def test_sc088_null_total_cost_and_market_value_prefill_blank(self, service: CostBasisService):
