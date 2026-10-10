@@ -279,6 +279,50 @@ def _render_cost_basis_editor(
         "否則整體報酬率會重複計入資金流入；若存入的是工具未追蹤的帳戶則不需轉移。"
     )
 
+    _render_derivation_preview(
+        cost_basis_service=cost_basis_service,
+        holding=holding,
+        records=records,
+        target_ym=target_ym,
+        total_cost_text=total_cost_text,
+        realized_pnl_text=realized_pnl_text,
+        cash_dividend_text=cash_dividend_text,
+    )
+
+    col_save, col_delete = st.columns(2)
+    if col_save.button("儲存此列"):
+        plan = cost_basis_service.plan_save(
+            holding=holding,
+            records=records,
+            year_month=target_ym,
+            market_value=parse_amount(market_value_text, field_label="現值"),
+            total_cost=parse_amount(total_cost_text, field_label="目前總成本"),
+            realized_pnl=parse_amount(realized_pnl_text, field_label="本月已實現損益"),
+            cash_dividend=parse_amount(cash_dividend_text, field_label="本月現金股利"),
+        )
+        record_repo.upsert_records(records=plan)
+        _flash_and_rerun("已儲存")
+    if col_delete.button("刪除此列"):
+        plan = cost_basis_service.plan_delete(
+            holding=holding, records=records, year_month=target_ym
+        )
+        record_repo.delete_record_and_upsert(
+            holding_id=holding.holding_id, year_month=target_ym, records=plan
+        )
+        _flash_and_rerun("已刪除")
+
+
+def _render_derivation_preview(
+    *,
+    cost_basis_service: CostBasisService,
+    holding: HoldingModel,
+    records: list[MonthlyRecordModel],
+    target_ym: str,
+    total_cost_text: str,
+    realized_pnl_text: str,
+    cash_dividend_text: str,
+) -> None:
+    """股票/ETF 推算淨投入預覽：欄位未輸入完成顯示佔位提示，推算被拒絕顯示原因。"""
     try:
         total_cost = parse_amount(total_cost_text, field_label="目前總成本")
         realized_pnl = parse_amount(realized_pnl_text, field_label="本月已實現損益")
@@ -304,28 +348,6 @@ def _render_cost_basis_editor(
                 st.warning(
                     "前期總成本為過渡期估算值，可能與券商實際總成本有落差，請留意核對。"
                 )
-
-    col_save, col_delete = st.columns(2)
-    if col_save.button("儲存此列"):
-        plan = cost_basis_service.plan_save(
-            holding=holding,
-            records=records,
-            year_month=target_ym,
-            market_value=parse_amount(market_value_text, field_label="現值"),
-            total_cost=parse_amount(total_cost_text, field_label="目前總成本"),
-            realized_pnl=parse_amount(realized_pnl_text, field_label="本月已實現損益"),
-            cash_dividend=parse_amount(cash_dividend_text, field_label="本月現金股利"),
-        )
-        record_repo.upsert_records(records=plan)
-        _flash_and_rerun("已儲存")
-    if col_delete.button("刪除此列"):
-        plan = cost_basis_service.plan_delete(
-            holding=holding, records=records, year_month=target_ym
-        )
-        record_repo.delete_record_and_upsert(
-            holding_id=holding.holding_id, year_month=target_ym, records=plan
-        )
-        _flash_and_rerun("已刪除")
 
 
 def _render_transfer(

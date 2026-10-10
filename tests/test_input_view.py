@@ -50,6 +50,12 @@ class _StubHoldingRepo:
         ]
 
 
+@pytest.fixture
+def record_repo():
+    """每個測試獨立的記錄層替身。"""
+    return _StubRecordRepo()
+
+
 class _StubRecordRepo:
     """記錄層替身：不觸真實 I/O，只記錄是否被呼叫。"""
 
@@ -317,8 +323,7 @@ class TestCostBasisPreviewAndDelegation:
         assert any("輸入完成後顯示推算值" in c.value for c in at.caption)
 
     @pytest.mark.scenario("SC-074")
-    def test_save_button_delegates_to_plan_save_then_batch_upsert(self):
-        record_repo = _StubRecordRepo()
+    def test_save_button_delegates_to_plan_save_then_batch_upsert(self, record_repo):
         at = _run_app(
             today=date(2026, 5, 15),
             service=_SpyMonthlyInputService(),
@@ -339,8 +344,9 @@ class TestCostBasisPreviewAndDelegation:
         assert saved.net_investment == 50000.0
 
     @pytest.mark.scenario("SC-077")
-    def test_delete_button_delegates_to_plan_delete_then_delete_record_and_upsert(self):
-        record_repo = _StubRecordRepo()
+    def test_delete_button_delegates_to_plan_delete_then_delete_record_and_upsert(
+        self, record_repo
+    ):
         at = _run_app(
             today=date(2026, 5, 15),
             service=_SpyMonthlyInputService(),
@@ -432,8 +438,7 @@ class TestTransferAccumulates:
     """轉移改走累加寫入，成功訊息經 rerun 後顯示，錄入框與本月表格重新帶入最新值。"""
 
     @pytest.mark.scenario("SC-086")
-    def test_transfer_uses_accumulate_not_overwrite_upsert(self):
-        record_repo = _StubRecordRepo()
+    def test_transfer_uses_accumulate_not_overwrite_upsert(self, record_repo):
         at = _run_app(
             today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
         )
@@ -448,8 +453,7 @@ class TestTransferAccumulates:
 
     @pytest.mark.scenario("SC-086")
     @pytest.mark.scenario("SC-087")
-    def test_editor_and_table_reflect_latest_values_after_transfer(self):
-        record_repo = _StubRecordRepo()
+    def test_editor_and_table_reflect_latest_values_after_transfer(self, record_repo):
         record_repo.month_records["2026-05"] = [
             _rec(1, "2026-05", market_value=350000.0, net_investment=0.0)
         ]
@@ -471,8 +475,7 @@ class TestRecordEditorPrefill:
     """一般分類錄入框帶入當月既有值，切換後跟著換，使用者輸入在未切換時不被洗掉。"""
 
     @pytest.mark.scenario("SC-087")
-    def test_existing_record_prefills_fields(self):
-        record_repo = _StubRecordRepo()
+    def test_existing_record_prefills_fields(self, record_repo):
         record_repo.month_records["2026-05"] = [
             _rec(1, "2026-05", market_value=350000.0, net_investment=-150000.0)
         ]
@@ -483,8 +486,7 @@ class TestRecordEditorPrefill:
         assert at.text_input(key="record_net_investment").value == "-150,000"
 
     @pytest.mark.scenario("SC-087")
-    def test_save_without_edit_keeps_existing_values(self):
-        record_repo = _StubRecordRepo()
+    def test_save_without_edit_keeps_existing_values(self, record_repo):
         record_repo.month_records["2026-05"] = [
             _rec(1, "2026-05", market_value=350000.0, net_investment=-150000.0)
         ]
@@ -498,8 +500,7 @@ class TestRecordEditorPrefill:
         assert saved.net_investment == -150000.0
 
     @pytest.mark.scenario("SC-087")
-    def test_switching_holding_blanks_market_value_when_no_record(self):
-        record_repo = _StubRecordRepo()
+    def test_switching_holding_blanks_market_value_when_no_record(self, record_repo):
         record_repo.month_records["2026-05"] = [
             _rec(1, "2026-05", market_value=350000.0, net_investment=-150000.0)
         ]
@@ -512,8 +513,7 @@ class TestRecordEditorPrefill:
         assert at.text_input(key="record_net_investment").value == "0"
 
     @pytest.mark.scenario("SC-087")
-    def test_save_with_blank_market_value_when_no_record_is_rejected(self):
-        record_repo = _StubRecordRepo()
+    def test_save_with_blank_market_value_when_no_record_is_rejected(self, record_repo):
         at = _run_app(
             today=date(2026, 5, 15), service=_SpyMonthlyInputService(), record_repo=record_repo
         )
@@ -524,8 +524,7 @@ class TestRecordEditorPrefill:
         assert at.error
 
     @pytest.mark.scenario("SC-087")
-    def test_blank_market_value_prefills_blank_not_zero(self):
-        record_repo = _StubRecordRepo()
+    def test_blank_market_value_prefills_blank_not_zero(self, record_repo):
         record_repo.month_records["2026-05"] = [
             _rec(1, "2026-05", market_value=None, net_investment=-100000.0)
         ]
@@ -535,8 +534,7 @@ class TestRecordEditorPrefill:
         assert at.text_input(key="record_market_value").value == ""
 
     @pytest.mark.scenario("SC-087")
-    def test_switching_month_reprefills(self):
-        record_repo = _StubRecordRepo()
+    def test_switching_month_reprefills(self, record_repo):
         record_repo.month_records["2026-04"] = [
             _rec(1, "2026-04", market_value=500000.0, net_investment=0.0)
         ]
@@ -548,8 +546,7 @@ class TestRecordEditorPrefill:
         assert at.text_input(key="record_market_value").value == "500,000"
 
     @pytest.mark.scenario("SC-087")
-    def test_unsaved_input_survives_rerun_without_switching(self):
-        record_repo = _StubRecordRepo()
+    def test_unsaved_input_survives_rerun_without_switching(self, record_repo):
         record_repo.month_records["2026-05"] = [
             _rec(1, "2026-05", market_value=350000.0, net_investment=0.0)
         ]
@@ -608,8 +605,7 @@ class TestCostBasisPrefillAndDividendFields:
             assert at.text_input(key=key).value == "0"
 
     @pytest.mark.scenario("SC-088")
-    def test_save_with_blank_cost_and_value_when_no_record_is_rejected(self):
-        record_repo = _StubRecordRepo()
+    def test_save_with_blank_cost_and_value_when_no_record_is_rejected(self, record_repo):
         at = _run_app(
             today=date(2026, 5, 15),
             service=_SpyMonthlyInputService(),
@@ -623,8 +619,7 @@ class TestCostBasisPrefillAndDividendFields:
         assert at.error
 
     @pytest.mark.scenario("SC-090")
-    def test_two_fields_sum_into_preview_and_saved_record(self):
-        record_repo = _StubRecordRepo()
+    def test_two_fields_sum_into_preview_and_saved_record(self, record_repo):
         at = _run_app(
             today=date(2026, 6, 15),
             service=_SpyMonthlyInputService(),
@@ -654,8 +649,7 @@ class TestCostBasisPrefillAndDividendFields:
         assert any("項目間轉移" in c.value and "重複計入" in c.value for c in at.caption)
 
     @pytest.mark.scenario("SC-091")
-    def test_negative_dividend_rejected_in_preview_and_on_save(self):
-        record_repo = _StubRecordRepo()
+    def test_negative_dividend_rejected_in_preview_and_on_save(self, record_repo):
         at = _run_app(
             today=date(2026, 6, 15),
             service=_SpyMonthlyInputService(),
@@ -726,8 +720,7 @@ class TestMonthRecordsTable:
         assert any("尚無" in c.value for c in at.caption)
 
     @pytest.mark.scenario("SC-089")
-    def test_table_reflects_saved_record_immediately(self):
-        record_repo = _StubRecordRepo()
+    def test_table_reflects_saved_record_immediately(self, record_repo):
 
         def _save(*, record):
             record_repo.month_records.setdefault(record.year_month, []).append(record)
