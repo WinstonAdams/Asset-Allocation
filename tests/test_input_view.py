@@ -710,7 +710,7 @@ class TestMonthRecordsTable:
         assert set(by_name) == {"台積電", "現金"}
         assert "尚未填" in by_name["現金"]["提醒"]
         assert not by_name["台積電"]["提醒"]
-        assert by_name["台積電"]["已實現收益"] == "50,000"
+        assert by_name["台積電"]["已實現收益（損益＋股利）"] == "50,000"
         assert by_name["現金"]["淨投入"] == "-1,000"
 
     @pytest.mark.scenario("SC-089")

@@ -142,7 +142,7 @@ def _render_month_records(
                 "市值 / 餘額": format_amount(row.market_value),
                 "淨投入": format_amount(row.net_investment),
                 "總成本": format_amount(row.total_cost),
-                "已實現收益": format_amount(row.realized_income),
+                "已實現收益（損益＋股利）": format_amount(row.realized_income),
                 "提醒": "本月市值尚未填" if row.market_value_missing else "",
             }
             for row in rows
