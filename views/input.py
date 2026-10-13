@@ -50,6 +50,14 @@ _FLASH_KEY = "input_flash_message"
 _RECORD_SEED_KEY = "input_record_seed"
 _COST_BASIS_SEED_KEY = "input_cost_basis_seed"
 
+# 金額輸入框的 session_state key：播種（seed_amount_inputs）與建立 widget（amount_input）共用。
+_KEY_RECORD_MARKET_VALUE = "record_market_value"
+_KEY_RECORD_NET_INVESTMENT = "record_net_investment"
+_KEY_COST_TOTAL_COST = "cost_basis_total_cost"
+_KEY_COST_MARKET_VALUE = "cost_basis_market_value"
+_KEY_COST_REALIZED_PNL = "cost_basis_realized_pnl"
+_KEY_COST_CASH_DIVIDEND = "cost_basis_cash_dividend"
+
 
 def _container() -> Container:
     """取放行後存入 session 的依賴容器。"""
@@ -216,13 +224,13 @@ def _render_record_editor(
         seed_key=_RECORD_SEED_KEY,
         source=(holding_id, target_ym, prefill),
         values={
-            "record_market_value": prefill.market_value,
-            "record_net_investment": prefill.net_investment,
+            _KEY_RECORD_MARKET_VALUE: prefill.market_value,
+            _KEY_RECORD_NET_INVESTMENT: prefill.net_investment,
         },
     )
-    market_value_text = amount_input("市值 / 餘額", key="record_market_value")
+    market_value_text = amount_input("市值 / 餘額", key=_KEY_RECORD_MARKET_VALUE)
     net_investment_text = amount_input(
-        "當月淨投入（正投入 / 負提領）", key="record_net_investment"
+        "當月淨投入（正投入 / 負提領）", key=_KEY_RECORD_NET_INVESTMENT
     )
 
     col_save, col_delete = st.columns(2)
@@ -263,17 +271,17 @@ def _render_cost_basis_editor(
         seed_key=_COST_BASIS_SEED_KEY,
         source=(holding.holding_id, target_ym, prefill),
         values={
-            "cost_basis_total_cost": prefill.total_cost,
-            "cost_basis_market_value": prefill.market_value,
-            "cost_basis_realized_pnl": prefill.realized_pnl,
-            "cost_basis_cash_dividend": prefill.cash_dividend,
+            _KEY_COST_TOTAL_COST: prefill.total_cost,
+            _KEY_COST_MARKET_VALUE: prefill.market_value,
+            _KEY_COST_REALIZED_PNL: prefill.realized_pnl,
+            _KEY_COST_CASH_DIVIDEND: prefill.cash_dividend,
         },
     )
 
-    total_cost_text = amount_input("目前總成本", key="cost_basis_total_cost")
-    market_value_text = amount_input("現值", key="cost_basis_market_value")
-    realized_pnl_text = amount_input("本月已實現損益（可為負）", key="cost_basis_realized_pnl")
-    cash_dividend_text = amount_input("本月現金股利（不可為負）", key="cost_basis_cash_dividend")
+    total_cost_text = amount_input("目前總成本", key=_KEY_COST_TOTAL_COST)
+    market_value_text = amount_input("現值", key=_KEY_COST_MARKET_VALUE)
+    realized_pnl_text = amount_input("本月已實現損益（可為負）", key=_KEY_COST_REALIZED_PNL)
+    cash_dividend_text = amount_input("本月現金股利（不可為負）", key=_KEY_COST_CASH_DIVIDEND)
     st.caption(
         "若賣出款項或股利存入本工具有追蹤的帳戶（例如活存），請另外用「項目間轉移」記錄該帳戶端，"
         "否則整體報酬率會重複計入資金流入；若存入的是工具未追蹤的帳戶則不需轉移。"

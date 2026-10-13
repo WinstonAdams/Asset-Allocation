@@ -540,7 +540,11 @@ CREATE TABLE {MONTHLY_RECORDS_TABLE.TABLE_NAME} (
 
 
 def _seed_prev_monthly_records_db() -> "libsql.Connection":
-    """建一個 6 欄（無 cash_dividend）的既有資料庫，含一筆新制股票列。"""
+    """建一個 6 欄（無 cash_dividend）的既有資料庫，含一筆新制股票列。
+
+    Returns:
+        已寫入一筆紀錄的記憶體資料庫連線。
+    """
     connection = libsql.connect(":memory:")
     cursor = connection.cursor()
     cursor.execute(_PREV_CREATE_MONTHLY_RECORDS)

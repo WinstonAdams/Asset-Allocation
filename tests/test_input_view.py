@@ -52,7 +52,11 @@ class _StubHoldingRepo:
 
 @pytest.fixture
 def record_repo():
-    """每個測試獨立的記錄層替身。"""
+    """每個測試獨立的記錄層替身。
+
+    Returns:
+        全新的 `_StubRecordRepo`。
+    """
     return _StubRecordRepo()
 
 

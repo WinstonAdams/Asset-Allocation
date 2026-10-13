@@ -569,7 +569,11 @@ class TestLegacyRecordsCsvWithoutCostBasisColumns:
 
 
 def _six_column_records_csv_bytes() -> bytes:
-    """模擬前一個 Change 匯出的月度紀錄 CSV：6 欄（有總成本/已實現收益，無現金股利）。"""
+    """模擬前一個 Change 匯出的月度紀錄 CSV：6 欄（有總成本/已實現收益，無現金股利）。
+
+    Returns:
+        CSV 的位元組內容。
+    """
     return (
         b"holding_id,year_month,market_value,net_investment,total_cost,realized_income\n"
         b"1,2026-01,510000.0,0.0,300000.0,8000.0\n"
