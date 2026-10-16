@@ -98,4 +98,77 @@ Baseline 命中：0 條（本專案無 baseline 檔，下列 HIGH 皆為既有�
 
 ## 3-4 行為對映審查
 
-<!-- scenario-mapper subagent 產出（AI 比對 SC 描述 vs test 內容，分「不對齊」「對齊」兩類）-->
+審查範圍：18 個 SC（SC-008/009/031/074/075/076/078/079/082/083/084/085/086/087/088/089/090/091）× 約 120 個 (SC, test) 對映
+核准判定：有條件通過（無數值／語義直接矛盾；有 2 項覆蓋缺口、4 項弱對映，皆可在第二段改 test 修正；無 SC 本身寫錯需使用者確認）
+
+### 不對齊
+
+- SC-075 ↔ （無對應 view 層 test）
+  SC 描述：「AND 存檔前畫面另外標示前期總成本 250000 是用過渡規則估算的，提醒使用者注意可能與券商實際總成本有落差」
+  test 內容：`test_cost_basis.py::test_sc075_...` 只斷言 `previous_total_cost=250000`、`is_transition_estimate is True`、`net_investment=30000`；`views/input.py:355-357` 有實際顯示警語，但 `test_input_view.py` 無任何 test 驗證該警語出現
+  判斷：覆蓋缺口（畫面標示 AND 子句未被驗證）。建議在 test_input_view.py 新增 SC-075 test：兩筆舊制列＋初始成本 200000、輸入總成本 280000，斷言畫面出現「前期總成本：250,000」與「過渡期估算」警語
+
+- SC-089 ↔ tests/test_input_view.py::TestTransferAccumulates::test_editor_and_table_reflect_latest_values_after_transfer
+  SC 描述：「WHEN ...執行一次涉及『活存』的項目間轉移 THEN 表格立即反映最新的已存紀錄內容」
+  test 內容：函式名稱含 table，但只斷言 `record_net_investment`／`record_market_value` 輸入框的值（-100,000／350,000），沒有讀 `at.dataframe`；且僅掛 SC-086/087，未掛 SC-089
+  判斷：轉移後本月表格即時更新未被驗證。建議補斷言（`at.dataframe[0]` 活存列淨投入 = -100,000）並加掛 SC-089 marker
+
+- SC-089 ↔ tests/test_input_view.py::TestMonthRecordsTable::test_table_reflects_saved_record_immediately
+  SC 描述：「存檔補上『房貸』當月餘額 → 表格立即反映」（原本餘額留空顯示提醒，補後提醒應消失）
+  test 內容：從空月份存第一筆（0 列 → 1 列），未驗證「原本有提醒的列被補值後提醒消失」
+  判斷：弱對映（只證明新增列可見，沒證明既有未填列被更新）。建議改為先預置市值 None 的列、存檔補值後斷言該列市值已顯示且提醒為空
+
+- SC-088 ↔ tests/test_input_view.py::TestCostBasisPrefillAndDividendFields::test_save_with_blank_cost_and_value_when_no_record_is_rejected
+  SC 描述：「在總成本『或』現值留空的狀態下直接存檔 → 拒絕並提示必填」
+  test 內容：總成本與現值同時留空（預設狀態），只斷言總成本 value == ""，無法區分單一欄位留空是否也被拒絕
+  判斷：弱對映（「或」語意只驗到「兩者皆空」）。建議補 parametrize：僅留空總成本、僅留空現值各一組（另一欄填值）皆被拒絕
+
+- SC-086 ↔ tests/test_input_view.py::TestSelectedMonthPassedDownstream::test_transfer_button_passes_selected_year_month
+  SC 描述：SC-086 為「轉移累加且保留市值」
+  test 內容：驗證的是下拉年月 2025-07 正確傳給 build_transfer_pair，僅附帶 `len(accumulated) == 2`；與累加／保留市值無直接關係
+  判斷：marker 掛得牽強（年月傳遞屬 UI 機制，無 SC）；建議移除 SC-086 marker（SC-086 已由 `test_transfer_uses_accumulate_not_overwrite_upsert` 與 repo 層 TestAccumulateNetInvestments 完整覆蓋）。此為 marker 精確度問題，不影響行為覆蓋
+
+- SC-090 ↔ tests/test_input_view.py::TestCostBasisPrefillAndDividendFields::test_transfer_hint_shown_next_to_realized_fields
+  SC 描述：SC-090 只寫兩欄相加、推算淨投入、分開落地，未提及「項目間轉移／重複計入」提示文字
+  test 內容：斷言 caption 含「項目間轉移」「重複計入」
+  判斷：test 驗證的是 proposal BR-7（提示）而非 SC-090 任何 GIVEN/WHEN/THEN。屬 SC 缺漏而非 test 錯：建議在 SC-090 補一條 AND（畫面在已實現欄位旁提示：賣股款若已用項目間轉移記入請勿重複計入），或改掛無 SC 的說明。**SC 變更需使用者確認，不擅自改**
+
+### 對齊但數值與 SC 範例不同（僅供參考，不需修正）
+
+- SC-074 ↔ test_input_view.py::test_preview_shows_previous_total_cost_and_derived_investment：SC 範例為總成本 350000 → 淨投入 50000；此 view test 用總成本 0 → 前期 300000、淨投入 -300000。同一公式的委派線路測試，數學一致；SC 範例數值已由 `test_save_button_delegates_to_plan_save_then_batch_upsert`（350000/400000 → 50000）與 service 層 test 覆蓋。
+- SC-090 ↔ test_input_view.py::test_two_fields_sum_into_preview_and_saved_record：view test 以初始成本 300000 無前期紀錄 → -402000；SC 範例為前期總成本 200000 → -302000。service 層 `test_sc090_*` 數值與 SC 完全一致（-302000、合計 102000、股利 2000 分開），view test 為同公式委派驗證。
+- SC-084（6 欄 CSV）：`test_sc084_six_column_csv_imports_with_cash_dividend_none` 未斷言 `net_investment` 依原值還原（SC 寫「市值、淨投入、總成本、已實現收益依原值還原」）；其餘斷言（市值 510000、總成本 300000、已實現收益 8000 全保留、股利 None）對齊。建議順手補一行 `records[0].net_investment == 0.0`。
+- SC-082：SC 的「嘗試存檔 → 拒絕並提示帶欄位名稱、不落庫」被分拆為 `test_core_utils.py::TestParseAmount`（1,00,000／abc／空字串／空白／None／欄位名稱／0 合法）＋ `test_amount_widget.py`（widget 層原樣保留文字，供存檔時拒絕）；兩層合起來對齊 SC，view 層無端到端「輸入 1,00,000 按存檔被擋」的 test，但已有 SC-087/088 的空白拒絕端到端覆蓋，視為可接受。
+- SC-083：只以玩具頁面驗證樣式選擇器前綴命中 `amount_input` 容器、字級／高度 > 1rem、非金額 `text_input` 不被包入；SC 列舉的金額欄位（含新增「現金股利」）是否皆走 `amount_input` 由 `views/input.py:281-284、386` 的實作保證，無 view 層斷言。可接受。
+
+### 對齊
+
+| SC | test 函式（代表） | 判斷依據 |
+|----|------------------|---------|
+| SC-008 | test_monthly_input.py::TestBuildTransferPair（4 個 test） | 來源 -50000／目標 +50000、同月、金額相等方向相反、市值留空 |
+| SC-009 | TestPrefillSoldExclusion、TestSaleMonthClearoutPersisted、test_sc005_sold_item_not_carried | 賣出月市值 0／淨投入 -530000 落地並進入 read_range；次月不帶入已出清項目 |
+| SC-031 | test_data_io.py::TestExportImportRoundTrip（6 個 test） | 匯出表頭含 total_cost／realized_income／cash_dividend 七欄；round-trip 還原與匯出前一致（含 1200 股利） |
+| SC-074 | test_cost_basis.py::TestDeriveHappyPath／TestUsesCostBasis／TestPlanSaveDeletePlanValidation／TestRealizedPnlAndCashDividendSplit；test_input_view.py 預覽／儲存／欄位切換 | 初始成本 300000 作前期、後續取前一筆 350000、淨投入 50000；負損益加回；兩欄相加；儲存落地現值 400000／淨投入 50000 |
+| SC-075 | test_cost_basis.py::TestDeriveTransitionEstimate | 前期 250000＝200000+30000+20000、is_transition_estimate、淨投入 30000（畫面標示見上方缺口） |
+| SC-076 | TestDeriveLiquidation | 前期 350000、賣出實收 400000（損益 50000、股利 0）→ 淨投入 -400000 |
+| SC-078 | TestPlanDeleteAcrossTransitionRecords、test_sc078_recalculation_uses_stored_realized_income_total | 刪 2026-01 只重算 2026-03（集合僅含 2026-03、值 25000）；已存合計直接用於重算 |
+| SC-079 | TestTransferRecordsToWrite 三個 test；view test_transfer_involving_stock_end_writes_only_non_stock_leg | 股票端不寫、非股票端 -80000／+50000 保留；View 只累加非股票端 |
+| SC-082 | test_core_utils.py::TestParseAmount；test_amount_widget.py 無法解析輸入測試 | 1,00,000／abc／空字串皆拒絕、訊息帶欄位名（見參考說明） |
+| SC-083 | test_amount_widget.py::TestInjectAmountInputStyleTargetsAmountFieldsOnly | 放大樣式命中金額欄、非金額欄不受影響 |
+| SC-084 | test_data_io.py::TestLegacyRecords...（6 個 test） | 4 欄／6 欄舊 CSV 匯入成功、新欄位 None、舊已實現收益 8000 全保留不拆股利 |
+| SC-085 | TestBatchWriteRollbackOnFailure、test_sc085_accumulate_failure_rolls_back_all_writes | 注入第 N 次 execute 失敗，整批回滾；原錯誤 RuntimeError 原樣拋出；刪除＋upsert 失敗還原被刪列 |
+| SC-086 | TestAccumulateNetInvestments（repo 層 7 個）、view test_transfer_uses_accumulate_not_overwrite_upsert | 市值 350000 不變、-100000 → -150000 累加、先轉移後補市值結果相同、不覆蓋 |
+| SC-087 | TestBuildRecordPrefill、TestSeedAmountInputs、TestRecordEditorPrefill | 既有值帶入 350,000／-150,000、不改直接存檔不變、無紀錄市值留空淨投入 0、留空存檔被拒、切換跟著換、未切換不洗掉輸入 |
+| SC-088 | TestBuildCostBasisPrefill、view TestCostBasisPrefillAndDividendFields | 四欄分開帶回 10,000／1,500（不顯示合計）、無紀錄總成本／現值留空、損益／股利預設 0 |
+| SC-089 | TestSummarizeMonth（3 個）、view 表格 test | 逐列名稱／市值／淨投入／總成本／合計已實現收益、市值空白（含負債）才提醒、市值 0 不提醒、空狀態 |
+| SC-090 | test_cost_basis.py::test_sc090_*（數值與 SC 完全一致）、view 兩欄相加 test | 100000+2000 → 淨投入 -302000、plan_save 落地 realized_income 102000／cash_dividend 2000 分開 |
+| SC-091 | test_cost_basis.py::test_sc091_*、view test_negative_dividend_rejected_in_preview_and_on_save／test_zero_dividend_and_negative_pnl_are_valid | 股利 -1000 於 derive／plan_save 拋 DataValidationError（訊息含「現金股利」）；預覽顯示拒絕原因且無佔位提示；存檔不落庫；0 股利＋負損益合法 |
+
+### 其他觀察
+
+- `python .claude/skills/spec-driven-flow/scripts/scenario_lint.py --project-dir 資產管理` 結果 FAIL，列出的皆為既有無 marker 技術債孤兒測試（如 test_core_utils.py 的年月工具函式），依派工說明不屬本 Change；本審查範圍內 18 張 SC 皆有 marker 對映。
+- 本次比對 SC 修訂卡（SC-008/009/031/074/075/076/078/079/082/083/084/085）時，未發現 test 仍殘留舊語意（例如仍把已實現收益當單一輸入欄位）的情形。
+
+### 需使用者確認
+
+- SC-090：是否要把 BR-7「賣股款若已用項目間轉移記入請勿重複計入」提示補進 SC-090 作為 AND 子句（目前 test 有驗、SC 無寫）。其餘不對齊項皆為 test 側修正，無 SC 寫錯的情形。

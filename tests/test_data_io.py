@@ -608,6 +608,7 @@ class TestLegacyRecordsCsvWithoutCashDividendColumn:
         )
         assert len(records) == 2
         assert records[0].market_value == 510000.0
+        assert records[0].net_investment == 0.0
         assert records[0].total_cost == 300000.0
         # 已實現收益原值全數保留，不拆出股利
         assert records[0].realized_income == 8000.0
