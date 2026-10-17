@@ -1,12 +1,12 @@
-# Progress: [Change 名稱]
+# Progress: simplify-non-stock-input
 
 ## Phase 1：規劃
 
 | 步驟 | 狀態 | 備註 |
 |------|------|------|
 | 1-1 提案 | 完成 | 活存/定存淨投入＝餘額變動、保險改填累計保費＋解約金＋領回、負債只填應繳金額、移除項目間轉移、修改時下一筆連動重算、資產配置頁新增各項目市值趨勢圖；BR-1~8 |
-| 1-2a 技術選型 | 未開始 | 按需，tech-researcher 產 tech-research.md；不需要時改「跳過」|
-| 1-2b 架構分析 | 未開始 | 按需，architect 產 architecture-brief.md；不需要時改「跳過」|
+| 1-2a 技術選型 | 跳過 | 無新外部依賴（趨勢圖沿用既有 Plotly） |
+| 1-2b 架構分析 | 跳過 | 沿用既有分層與 CostBasisService 架構 |
 | 1-2 設計 | 未開始 | — |
 | 1-3 行為規格化 | 未開始 | scenario-author 產 scenarios/ 卡片 |
 | 1-4 任務拆解 | 未開始 | — |
