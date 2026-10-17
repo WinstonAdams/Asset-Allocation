@@ -33,7 +33,7 @@
 | 3-2 安全審查 | 跳過 | 未動登入/付款；使用者確認 Phase 3 範圍為 3-1/3-3/3-4/3-Z |
 | 3-3 規則符合度審查 | 完成 | 有條件通過（無 CRITICAL/新增 HIGH）；使用者選修 MEDIUM-1（3 處測試輔助 docstring 補 Returns）＋LOW-3（錄入頁 6 個 widget key 抽常數）；不補 noqa；欄名「已實現收益」另開 t08；574 綠、無新增孤兒 |
 | 3-4 行為對映審查 | 完成 | 有條件通過（18 張 SC 無矛盾）；補 SC-075 過渡警語 view test、SC-089 轉移後表格與補值後提醒消失斷言、SC-088 單欄留空 parametrize、SC-086 牽強 marker 改掛 SC-008、SC-084 6 欄 CSV 補 net_investment 斷言；使用者決定 BR-7 提示補進 SC-090；578 綠、無新增孤兒 |
-| 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
+| 3-Z 最終驗證 | 完成 | sonnet 執行：lint 91/91 SC 覆蓋、38 個既有技術債孤兒、本 Change 新增 0；pytest 578 綠；headless 啟動 health ok、log 無例外；畫面待使用者目視 |
 
 ## Phase 4：收尾
 
