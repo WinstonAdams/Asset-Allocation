@@ -1,14 +1,17 @@
 """設定頁呈現層與持有項目主檔編輯行為的測試。
 
-本檔含兩類測試：
+本檔含三類測試：
 ①純呈現層調整（無新業務語義，不掛 SC marker）——「性質」selectbox 改用 format_func
 顯示中文「資產/負債」，內部值仍為 HOLDING_KIND.ASSET="asset"/LIABILITY="liability"；
-初始市值/初始成本 number_input 改用 format="%.0f" 不顯示小數，內部值仍為 float；目標
-比重 number_input 的 label 加註「（%）」。這些皆不改變下層 Model/Service/Repository
-的介面或值。既有項目的編輯入口（改名/改分類/改初始值後委派 HoldingRepository.
-update_holding）亦屬此類——holding_id 穩定與改分類非時間版本化的業務正確性已由
-test_holding_master.py 的 SC-003/SC-004 覆蓋，本檔只驗證 UI 到 Repository 呼叫邊界
-的資料傳遞，不重掛 marker。
+目標比重 number_input 的 label 加註「（%）」。這些皆不改變下層 Model/Service/Repository
+的介面或值。既有項目的編輯入口（改名/改分類/改初始值後委派 HoldingRepository.update_holding）
+亦屬此類——holding_id 穩定與改分類非時間版本化的業務正確性已由 test_holding_master.py 的
+SC-003/SC-004 覆蓋，本檔只驗證 UI 到 Repository 呼叫邊界的資料傳遞，不重掛 marker。
+
+初始市值/初始成本改用 amount_input（text_input＋整數千分位顯示），存檔時以 parse_amount
+解析回 float，內部值語意不變。千分位顯示與逗號解析的業務規則本身已由 test_core_utils.py／
+test_amount_widget.py 的 SC-081 覆蓋，本檔驗證的是設定頁把這兩個欄位接上 amount_input／
+parse_amount 沒有接錯，故掛回 SC-081。
 
 ②SC-051（活存/定存分類初始成本預設帶入初始市值）——新增或編輯資產項目時，只要當下
 分類為活存/定存，初始成本欄位即自動帶入與初始市值相同的數字，使用者仍可手動覆蓋。
@@ -122,21 +125,27 @@ class TestHoldingKindChineseLabel:
 
 
 class TestInitialValueCostNoDecimal:
-    """初始市值/初始成本輸入框不顯示小數，內部值仍為 float。"""
+    """初始市值/初始成本輸入框以整數千分位顯示，不顯示小數；存檔後內部值仍為 float。"""
 
-    def test_market_value_and_cost_use_integer_display_format(self):
+    @pytest.mark.scenario("SC-081")
+    def test_market_value_and_cost_show_thousand_separator_display(self):
         at = _run_app()
-        market_value = at.number_input(key="new_market_value")
-        cost = at.number_input(key="new_cost")
-        assert market_value.proto.format == "%.0f"
-        assert cost.proto.format == "%.0f"
+        market_value = at.text_input(key="new_market_value")
+        cost = at.text_input(key="new_cost")
+        assert market_value.value == "0"
+        assert cost.value == "0"
 
-    def test_market_value_and_cost_internal_value_still_float(self):
-        at = _run_app()
-        market_value = at.number_input(key="new_market_value")
-        cost = at.number_input(key="new_cost")
-        assert isinstance(market_value.value, float)
-        assert isinstance(cost.value, float)
+    @pytest.mark.scenario("SC-081")
+    def test_market_value_and_cost_parse_to_float_on_save(self):
+        repo = _StubHoldingRepo()
+        at = _run_app(holding_repo=repo)
+        at.text_input(key="new_name").set_value("測試項目").run()
+        at.text_input(key="new_market_value").set_value("1,234,567").run()
+        at.text_input(key="new_cost").set_value("500,000").run()
+        add_button = next(b for b in at.button if b.label == "新增")
+        add_button.click().run()
+        assert repo.added[0].initial_market_value == 1234567.0
+        assert repo.added[0].initial_cost == 500000.0
 
 
 class TestTargetWeightPercentLabel:
@@ -162,57 +171,57 @@ class TestNewHoldingCashLikeCategoryCostDefaultsToMarketValue:
     def test_sc043_demand_deposit_cost_follows_market_value(self):
         at = _run_app()
         at.selectbox(key="new_cat").select(ASSET_CATEGORIES.DEMAND_DEPOSIT).run()
-        at.number_input(key="new_market_value").set_value(123456.0).run()
-        cost = at.number_input(key="new_cost")
-        assert cost.value == 123456.0
+        at.text_input(key="new_market_value").set_value("123456").run()
+        cost = at.text_input(key="new_cost")
+        assert cost.value == "123,456"
 
     @pytest.mark.scenario("SC-051")
     def test_sc043_time_deposit_cost_follows_market_value(self):
         at = _run_app()
         at.selectbox(key="new_cat").select(ASSET_CATEGORIES.TIME_DEPOSIT).run()
-        at.number_input(key="new_market_value").set_value(50000.0).run()
-        cost = at.number_input(key="new_cost")
-        assert cost.value == 50000.0
+        at.text_input(key="new_market_value").set_value("50000").run()
+        cost = at.text_input(key="new_cost")
+        assert cost.value == "50,000"
 
     @pytest.mark.scenario("SC-051")
     def test_sc043_user_can_still_manually_override_cost(self):
         # 自動帶入後使用者再手動改成別的值：改後的值須維持，不被覆蓋回市值
         at = _run_app()
         at.selectbox(key="new_cat").select(ASSET_CATEGORIES.DEMAND_DEPOSIT).run()
-        at.number_input(key="new_market_value").set_value(123456.0).run()
-        at.number_input(key="new_cost").set_value(999.0).run()
-        cost = at.number_input(key="new_cost")
-        assert cost.value == 999.0
+        at.text_input(key="new_market_value").set_value("123456").run()
+        at.text_input(key="new_cost").set_value("999").run()
+        cost = at.text_input(key="new_cost")
+        assert cost.value == "999"
 
     @pytest.mark.scenario("SC-051")
     def test_sc043_non_cash_category_cost_not_auto_filled(self):
         # 其他分類（股票/ETF 等）行為不變：改市值不影響成本欄位既有值
         at = _run_app()
         at.selectbox(key="new_cat").select(ASSET_CATEGORIES.TW_STOCK).run()
-        at.number_input(key="new_market_value").set_value(500000.0).run()
-        cost = at.number_input(key="new_cost")
-        assert cost.value == 0.0
+        at.text_input(key="new_market_value").set_value("500000").run()
+        cost = at.text_input(key="new_cost")
+        assert cost.value == "0"
 
     @pytest.mark.scenario("SC-051")
     def test_sc043_switching_from_cash_to_other_category_stops_auto_fill(self):
         # 從活存切回股票分類後，成本欄位不再隨市值自動帶入
         at = _run_app()
         at.selectbox(key="new_cat").select(ASSET_CATEGORIES.DEMAND_DEPOSIT).run()
-        at.number_input(key="new_market_value").set_value(123456.0).run()
+        at.text_input(key="new_market_value").set_value("123456").run()
         at.selectbox(key="new_cat").select(ASSET_CATEGORIES.TW_STOCK).run()
-        at.number_input(key="new_market_value").set_value(777.0).run()
-        cost = at.number_input(key="new_cost")
-        assert cost.value == 123456.0
+        at.text_input(key="new_market_value").set_value("777").run()
+        cost = at.text_input(key="new_cost")
+        assert cost.value == "123,456"
 
     @pytest.mark.scenario("SC-051")
     def test_sc043_switching_into_cash_category_syncs_existing_market_value(self):
         # 已在其他分類填好市值，才改選活存/定存：切換當下即以既有市值覆蓋成本欄位
         at = _run_app()
         at.selectbox(key="new_cat").select(ASSET_CATEGORIES.TW_STOCK).run()
-        at.number_input(key="new_market_value").set_value(500000.0).run()
+        at.text_input(key="new_market_value").set_value("500000").run()
         at.selectbox(key="new_cat").select(ASSET_CATEGORIES.DEMAND_DEPOSIT).run()
-        cost = at.number_input(key="new_cost")
-        assert cost.value == 500000.0
+        cost = at.text_input(key="new_cost")
+        assert cost.value == "500,000"
 
 
 class TestEditExistingHoldingWiresToRepository:
@@ -325,9 +334,9 @@ class TestEditExistingHoldingCashLikeCategoryCostDefaultsToMarketValue:
         )
         at = _run_app(holding_repo=_StubHoldingRepo(holdings=[holding]))
         at.selectbox(key="edit_1_cat").select(ASSET_CATEGORIES.DEMAND_DEPOSIT).run()
-        at.number_input(key="edit_1_market_value").set_value(88000.0).run()
-        cost = at.number_input(key="edit_1_cost")
-        assert cost.value == 88000.0
+        at.text_input(key="edit_1_market_value").set_value("88000").run()
+        cost = at.text_input(key="edit_1_cost")
+        assert cost.value == "88,000"
 
     @pytest.mark.scenario("SC-051")
     def test_sc043_edit_already_cash_category_cost_follows_market_value_change(self):
@@ -341,9 +350,9 @@ class TestEditExistingHoldingCashLikeCategoryCostDefaultsToMarketValue:
             initial_cost=100000.0,
         )
         at = _run_app(holding_repo=_StubHoldingRepo(holdings=[holding]))
-        at.number_input(key="edit_2_market_value").set_value(150000.0).run()
-        cost = at.number_input(key="edit_2_cost")
-        assert cost.value == 150000.0
+        at.text_input(key="edit_2_market_value").set_value("150000").run()
+        cost = at.text_input(key="edit_2_cost")
+        assert cost.value == "150,000"
 
     @pytest.mark.scenario("SC-051")
     def test_sc043_edit_user_can_still_manually_override_cost(self):
@@ -356,10 +365,10 @@ class TestEditExistingHoldingCashLikeCategoryCostDefaultsToMarketValue:
             initial_cost=200000.0,
         )
         at = _run_app(holding_repo=_StubHoldingRepo(holdings=[holding]))
-        at.number_input(key="edit_3_market_value").set_value(250000.0).run()
-        at.number_input(key="edit_3_cost").set_value(210000.0).run()
-        cost = at.number_input(key="edit_3_cost")
-        assert cost.value == 210000.0
+        at.text_input(key="edit_3_market_value").set_value("250000").run()
+        at.text_input(key="edit_3_cost").set_value("210000").run()
+        cost = at.text_input(key="edit_3_cost")
+        assert cost.value == "210,000"
 
     @pytest.mark.scenario("SC-051")
     def test_sc043_edit_non_cash_category_cost_not_auto_filled(self):
@@ -372,9 +381,9 @@ class TestEditExistingHoldingCashLikeCategoryCostDefaultsToMarketValue:
             initial_cost=300000.0,
         )
         at = _run_app(holding_repo=_StubHoldingRepo(holdings=[holding]))
-        at.number_input(key="edit_4_market_value").set_value(600000.0).run()
-        cost = at.number_input(key="edit_4_cost")
-        assert cost.value == 300000.0
+        at.text_input(key="edit_4_market_value").set_value("600000").run()
+        cost = at.text_input(key="edit_4_cost")
+        assert cost.value == "300,000"
 
     @pytest.mark.scenario("SC-051")
     def test_sc043_edit_save_persists_auto_filled_cost_when_not_overridden(self):
@@ -389,7 +398,7 @@ class TestEditExistingHoldingCashLikeCategoryCostDefaultsToMarketValue:
         )
         repo = _StubHoldingRepo(holdings=[holding])
         at = _run_app(holding_repo=repo)
-        at.number_input(key="edit_8_market_value").set_value(120000.0).run()
+        at.text_input(key="edit_8_market_value").set_value("120000").run()
         save_button = next(b for b in at.button if b.key == "edit_8_save")
         save_button.click().run()
         assert repo.updated[0].initial_market_value == 120000.0

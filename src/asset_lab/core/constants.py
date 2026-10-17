@@ -104,13 +104,29 @@ class HOLDINGS_TABLE:
 
 
 class MONTHLY_RECORDS_TABLE:
-    """項目 × 月份時間序列資料表結構。(holding_id, year_month) 為唯一鍵。"""
+    """項目 × 月份時間序列資料表結構。(holding_id, year_month) 為唯一鍵。
+
+    total_cost/realized_income 為股票/ETF 總成本推算功能附加欄位，可為 NULL：
+    total_cost 不為 NULL 即為新制股票/ETF 列，其 net_investment 為推算值；
+    NULL 代表非股票/ETF 分類，或本功能上線前建立的舊制列。
+    realized_income 為「已實現損益＋現金股利」的合計；cash_dividend 為其中的現金股利，
+    NULL（非股票/ETF 列、舊制列、或本功能上線前的新制列）視為 0，其合計全數視為已實現損益。
+    """
 
     TABLE_NAME = "monthly_records"
     HOLDING_ID = "holding_id"
     YEAR_MONTH = "year_month"
     MARKET_VALUE = "market_value"
     NET_INVESTMENT = "net_investment"
+    TOTAL_COST = "total_cost"
+    REALIZED_INCOME = "realized_income"
+    CASH_DIVIDEND = "cash_dividend"
+
+
+class COST_BASIS_INPUT:
+    """依總成本＋已實現收益推算月淨投入的資產分類；其餘分類仍手填市值/餘額與淨投入。"""
+
+    CATEGORIES = frozenset({ASSET_CATEGORIES.TW_STOCK, ASSET_CATEGORIES.US_STOCK})
 
 
 class TARGET_ALLOCATIONS_TABLE:
@@ -260,7 +276,9 @@ class CSV_EXPORT:
     欄位即各 model 的欄位、欄序固定；此為對外契約，發布後改欄位須維持相容。
     HOLDINGS_COLUMNS 末端附加 purpose（純附加，既有欄序不變）；HOLDINGS_REQUIRED_COLUMNS
     為匯入表頭驗證的強制欄位集，不含 purpose——舊版 CSV 缺此欄仍能通過表頭驗證並匯入，
-    缺欄視為未填、補一般（向後相容）。
+    缺欄視為未填、補一般（向後相容）。RECORDS_COLUMNS 同理末端附加 total_cost、
+    realized_income、cash_dividend；RECORDS_REQUIRED_COLUMNS 固定為前 4 欄，不含這三欄，
+    舊版 CSV（4 欄或僅 6 欄）缺欄仍可匯入，缺欄視為未填（還原為 None）。
     """
 
     HOLDINGS_COLUMNS = (
@@ -278,7 +296,11 @@ class CSV_EXPORT:
         "year_month",
         "market_value",
         "net_investment",
+        "total_cost",
+        "realized_income",
+        "cash_dividend",
     )
+    RECORDS_REQUIRED_COLUMNS = RECORDS_COLUMNS[:4]
     TARGETS_COLUMNS = (
         "category",
         "target_weight",

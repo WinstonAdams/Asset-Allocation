@@ -299,12 +299,22 @@ def seeded_holding_id(conn):
     )
 
 
-def _record(holding_id: int, year_month: str, market_value: float, net_investment: float = 0.0):
+def _record(
+    holding_id: int,
+    year_month: str,
+    market_value: float,
+    net_investment: float = 0.0,
+    *,
+    total_cost: float | None = None,
+    realized_income: float | None = None,
+):
     return MonthlyRecordModel(
         holding_id=holding_id,
         year_month=year_month,
         market_value=market_value,
         net_investment=net_investment,
+        total_cost=total_cost,
+        realized_income=realized_income,
     )
 
 
@@ -485,6 +495,9 @@ class TestRecordRepositoryEmptyAndIdempotency:
             "year_month",
             "market_value",
             "net_investment",
+            "total_cost",
+            "realized_income",
+            "cash_dividend",
         ]
 
     @pytest.mark.scenario("SC-006")
@@ -498,3 +511,509 @@ class TestRecordRepositoryEmptyAndIdempotency:
         record_repo.upsert_record(record=_record(seeded_holding_id, "2026-05", 520000.0, 0.0))
         record_repo.delete_record(holding_id=999, year_month="2099-01")
         assert len(record_repo.read_month(year_month="2026-05")) == 1
+
+
+# === Repository 層新增能力：讀單一項目全部紀錄、批次寫入（compound method）===
+# 這些方法是後續股票/ETF 總成本推算（CostBasisService）共用的資料底座，
+# 本身不含業務判斷，屬既有月度紀錄 CRUD 能力（SC-006）的機械擴充。
+
+
+class TestReadHoldingRecords:
+    """read_holding_records：讀單一項目的全部月度紀錄，依 year_month 由舊到新排序。"""
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_returns_all_months_sorted_ascending_by_year_month(
+        self, record_repo, seeded_holding_id
+    ):
+        # 寫入順序刻意打亂，讀回仍依 year_month 由舊到新排序
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-07", 420000.0, 20000.0)
+        )
+        record_repo.upsert_record(
+            record=_record(
+                seeded_holding_id, "2026-05", 400000.0, 50000.0,
+                total_cost=350000.0, realized_income=0.0,
+            )
+        )
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-06", 410000.0, 10000.0)
+        )
+
+        records = record_repo.read_holding_records(holding_id=seeded_holding_id)
+
+        assert [r.year_month for r in records] == ["2026-05", "2026-06", "2026-07"]
+        # 新制列（total_cost 不為 None）的附加欄位隨列一併正確讀回
+        assert records[0].total_cost == 350000.0
+        assert records[0].realized_income == 0.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_excludes_other_holdings_records(self, record_repo, conn, seeded_holding_id):
+        # 只回傳指定項目的紀錄，不含其他項目同月的紀錄
+        other_id = HoldingRepository(conn=conn).add_holding(
+            holding=HoldingModel(
+                holding_id=None,
+                name="0050",
+                kind=HOLDING_KIND.ASSET,
+                category=ASSET_CATEGORIES.TW_STOCK,
+                initial_market_value=200000.0,
+                initial_cost=200000.0,
+            )
+        )
+        record_repo.upsert_record(record=_record(seeded_holding_id, "2026-05", 520000.0, 0.0))
+        record_repo.upsert_record(record=_record(other_id, "2026-05", 200000.0, 0.0))
+
+        records = record_repo.read_holding_records(holding_id=seeded_holding_id)
+
+        assert len(records) == 1
+        assert records[0].holding_id == seeded_holding_id
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_empty_when_holding_has_no_records(self, record_repo, seeded_holding_id):
+        assert record_repo.read_holding_records(holding_id=seeded_holding_id) == []
+
+
+class TestUpsertRecordsBatch:
+    """upsert_records：批次 upsert 多列，單一交易。"""
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_writes_multiple_new_rows_in_one_call(self, record_repo, seeded_holding_id):
+        record_repo.upsert_records(
+            records=[
+                _record(
+                    seeded_holding_id, "2026-05", 400000.0, 50000.0,
+                    total_cost=350000.0, realized_income=0.0,
+                ),
+                _record(
+                    seeded_holding_id, "2026-06", 420000.0, 20000.0,
+                    total_cost=370000.0, realized_income=0.0,
+                ),
+            ]
+        )
+
+        may = record_repo.read_month(year_month="2026-05")[0]
+        june = record_repo.read_month(year_month="2026-06")[0]
+        assert may.net_investment == 50000.0
+        assert may.total_cost == 350000.0
+        assert june.net_investment == 20000.0
+        assert june.total_cost == 370000.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_updates_existing_and_inserts_new_together(
+        self, record_repo, seeded_holding_id
+    ):
+        # 先存在一筆 2026-05；批次寫入同時更新它並新增 2026-06
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)
+        )
+
+        record_repo.upsert_records(
+            records=[
+                _record(seeded_holding_id, "2026-05", 410000.0, 60000.0),
+                _record(seeded_holding_id, "2026-06", 420000.0, 20000.0),
+            ]
+        )
+
+        assert record_repo.read_month(year_month="2026-05")[0].market_value == 410000.0
+        assert len(record_repo.read_month(year_month="2026-05")) == 1
+        assert record_repo.read_month(year_month="2026-06")[0].market_value == 420000.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_empty_list_is_noop(self, record_repo, seeded_holding_id):
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)
+        )
+
+        record_repo.upsert_records(records=[])
+
+        assert len(record_repo.read_month(year_month="2026-05")) == 1
+
+
+class TestDeleteRecordAndUpsertBatch:
+    """delete_record_and_upsert：刪除單列後批次 upsert 受影響列，單一交易。"""
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_removes_target_month_and_writes_affected_months(
+        self, record_repo, seeded_holding_id
+    ):
+        record_repo.upsert_record(
+            record=_record(
+                seeded_holding_id, "2026-05", 400000.0, 50000.0,
+                total_cost=350000.0, realized_income=0.0,
+            )
+        )
+        record_repo.upsert_record(
+            record=_record(
+                seeded_holding_id, "2026-06", 420000.0, 20000.0,
+                total_cost=370000.0, realized_income=0.0,
+            )
+        )
+
+        record_repo.delete_record_and_upsert(
+            holding_id=seeded_holding_id,
+            year_month="2026-05",
+            records=[
+                _record(
+                    seeded_holding_id, "2026-06", 420000.0, 70000.0,
+                    total_cost=370000.0, realized_income=0.0,
+                ),
+            ],
+        )
+
+        assert record_repo.read_month(year_month="2026-05") == []
+        assert record_repo.read_month(year_month="2026-06")[0].net_investment == 70000.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_with_empty_records_only_deletes(self, record_repo, seeded_holding_id):
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)
+        )
+
+        record_repo.delete_record_and_upsert(
+            holding_id=seeded_holding_id, year_month="2026-05", records=[]
+        )
+
+        assert record_repo.read_month(year_month="2026-05") == []
+
+
+class _FailingCursor:
+    """包一個真實 cursor：前面呼叫正常執行，第 fail_at 次 execute 起拋出例外，
+    用來模擬批次寫入中途失敗（不 mock 整個連線，交易控制仍走真實 libsql rollback/commit）。
+    """
+
+    def __init__(self, real_cursor, *, fail_at: int) -> None:
+        self._real_cursor = real_cursor
+        self._fail_at = fail_at
+        self._call_count = 0
+
+    def execute(self, *args: object, **kwargs: object):
+        self._call_count += 1
+        if self._call_count == self._fail_at:
+            raise RuntimeError("模擬批次寫入中途失敗")
+        return self._real_cursor.execute(*args, **kwargs)
+
+    def fetchall(self):
+        return self._real_cursor.fetchall()
+
+    def fetchone(self):
+        return self._real_cursor.fetchone()
+
+
+class _FailAfterNCallsConnection:
+    """包一個真實連線：cursor() 回傳會在第 fail_at 次 execute 時失敗的版本，
+    commit/rollback 照轉呼叫真實連線，讓交易狀態仍由真實 libsql 連線管理。
+    只用來對「同一個」RecordRepository 注入批次寫入中途失敗，不影響其他經由原連線
+    直接查驗結果的 Repository 實例（用於斷言 rollback 後的資料狀態）。
+    """
+
+    def __init__(self, real_conn, *, fail_at: int) -> None:
+        self._real_conn = real_conn
+        self._fail_at = fail_at
+
+    def cursor(self):
+        return _FailingCursor(self._real_conn.cursor(), fail_at=self._fail_at)
+
+    def commit(self):
+        self._real_conn.commit()
+
+    def rollback(self):
+        self._real_conn.rollback()
+
+
+class TestBatchWriteRollbackOnFailure:
+    """批次寫入中途失敗時，已執行的部分不留存（SC-085）。"""
+
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_upsert_records_failure_rolls_back_all_writes(
+        self, record_repo, conn, seeded_holding_id
+    ):
+        # 兩筆待寫入，第二筆 execute 時失敗：第一筆也不應該被留存
+        failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=2))
+
+        with pytest.raises(RuntimeError):
+            failing_repo.upsert_records(
+                records=[
+                    _record(seeded_holding_id, "2026-05", 400000.0, 50000.0),
+                    _record(seeded_holding_id, "2026-06", 420000.0, 20000.0),
+                ]
+            )
+
+        assert record_repo.read_month(year_month="2026-05") == []
+        assert record_repo.read_month(year_month="2026-06") == []
+
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_upsert_records_failure_reraises_original_error(
+        self, record_repo, conn, seeded_holding_id
+    ):
+        # 錯誤原樣往上拋，不被吞掉也不被轉譯成其他例外類型
+        failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=1))
+
+        with pytest.raises(RuntimeError, match="模擬批次寫入中途失敗"):
+            failing_repo.upsert_records(
+                records=[_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)]
+            )
+
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_delete_record_and_upsert_failure_restores_deleted_record(
+        self, record_repo, conn, seeded_holding_id
+    ):
+        # 既有 2026-05 紀錄；刪除＋批次 upsert 中途失敗，原本的 2026-05 紀錄應維持存在
+        # （未被真的刪除）
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)
+        )
+        # call 1 = DELETE、call 2 = 第一筆 upsert（成功）、call 3 = 第二筆 upsert（失敗）
+        failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=3))
+
+        with pytest.raises(RuntimeError):
+            failing_repo.delete_record_and_upsert(
+                holding_id=seeded_holding_id,
+                year_month="2026-05",
+                records=[
+                    _record(seeded_holding_id, "2026-06", 420000.0, 20000.0),
+                    _record(seeded_holding_id, "2026-07", 430000.0, 10000.0),
+                ],
+            )
+
+        assert record_repo.read_month(year_month="2026-05")[0].market_value == 400000.0
+        assert record_repo.read_month(year_month="2026-06") == []
+        assert record_repo.read_month(year_month="2026-07") == []
+
+
+class TestAccumulateNetInvestments:
+    """accumulate_net_investments：只累加 net_investment，其餘欄位不動。"""
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_on_existing_row_keeps_market_value(
+        self, record_repo, seeded_holding_id
+    ):
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 350000.0, 0.0)
+        )
+
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -100000.0)]
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.market_value == 350000.0
+        assert stored.net_investment == -100000.0
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_twice_adds_up(self, record_repo, seeded_holding_id):
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 350000.0, 0.0)
+        )
+
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -100000.0)]
+        )
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -50000.0)]
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.market_value == 350000.0
+        assert stored.net_investment == -150000.0
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_leaves_cost_columns_untouched(
+        self, record_repo, seeded_holding_id
+    ):
+        record_repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=seeded_holding_id,
+                year_month="2026-05",
+                market_value=400000.0,
+                net_investment=10000.0,
+                total_cost=350000.0,
+                realized_income=1200.0,
+                cash_dividend=200.0,
+            )
+        )
+
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 999.0, 5000.0,
+                             total_cost=1.0, realized_income=2.0)]
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.net_investment == 15000.0
+        assert stored.market_value == 400000.0
+        assert stored.total_cost == 350000.0
+        assert stored.realized_income == 1200.0
+        assert stored.cash_dividend == 200.0
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_without_existing_row_creates_net_only_row(
+        self, record_repo, seeded_holding_id
+    ):
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -100000.0)]
+        )
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -50000.0)]
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.market_value is None
+        assert stored.net_investment == -150000.0
+        assert stored.total_cost is None
+        assert stored.realized_income is None
+        assert stored.cash_dividend is None
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_transfer_then_single_row_input_gives_same_result(
+        self, record_repo, seeded_holding_id
+    ):
+        # 先轉移（無既有列）、再單列錄入補市值：錄入帶入的淨投入為累加後的值
+        record_repo.accumulate_net_investments(
+            records=[_record(seeded_holding_id, "2026-05", 0.0, -150000.0)]
+        )
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 350000.0, -150000.0)
+        )
+
+        stored = record_repo.read_month(year_month="2026-05")[0]
+        assert stored.market_value == 350000.0
+        assert stored.net_investment == -150000.0
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_empty_list_is_noop(self, record_repo, seeded_holding_id):
+        record_repo.accumulate_net_investments(records=[])
+
+        assert record_repo.read_month(year_month="2026-05") == []
+
+    @pytest.mark.scenario("SC-086")
+    def test_sc086_accumulate_multiple_holdings_in_one_call(
+        self, record_repo, seeded_holding_id
+    ):
+        record_repo.accumulate_net_investments(
+            records=[
+                _record(seeded_holding_id, "2026-05", 0.0, 30000.0),
+                _record(seeded_holding_id, "2026-06", 0.0, 40000.0),
+            ]
+        )
+
+        assert record_repo.read_month(year_month="2026-05")[0].net_investment == 30000.0
+        assert record_repo.read_month(year_month="2026-06")[0].net_investment == 40000.0
+
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_accumulate_failure_rolls_back_all_writes(
+        self, record_repo, conn, seeded_holding_id
+    ):
+        record_repo.upsert_record(
+            record=_record(seeded_holding_id, "2026-05", 350000.0, 1000.0)
+        )
+        failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=2))
+
+        with pytest.raises(RuntimeError, match="模擬批次寫入中途失敗"):
+            failing_repo.accumulate_net_investments(
+                records=[
+                    _record(seeded_holding_id, "2026-05", 0.0, -100000.0),
+                    _record(seeded_holding_id, "2026-06", 0.0, -50000.0),
+                ]
+            )
+
+        assert record_repo.read_month(year_month="2026-05")[0].net_investment == 1000.0
+        assert record_repo.read_month(year_month="2026-06") == []
+
+
+class TestBuildRecordPrefill:
+    """build_record_prefill：一般分類錄入框帶入當月既有值 —— SC-087。"""
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_existing_record_prefilled_as_stored(self):
+        records = [_prev_record(1, "2026-05", 350000.0, -150000.0)]
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=records, holding_id=1, year_month="2026-05"
+        )
+        assert prefill.market_value == 350000.0
+        assert prefill.net_investment == -150000.0
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_no_record_for_holding_market_value_blank_net_investment_zero(self):
+        # 「活存」有紀錄、「定存」該月無紀錄 → 定存回現行預設
+        records = [_prev_record(1, "2026-05", 350000.0, -150000.0)]
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=records, holding_id=2, year_month="2026-05"
+        )
+        assert prefill.market_value is None
+        assert prefill.net_investment == 0.0
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_empty_records_market_value_blank_net_investment_zero(self):
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=[], holding_id=1, year_month="2026-05"
+        )
+        assert prefill.market_value is None
+        assert prefill.net_investment == 0.0
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_null_market_value_prefilled_as_blank_not_zero(self):
+        records = [_prev_record(1, "2026-05", None, 200.0)]
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=records, holding_id=1, year_month="2026-05"
+        )
+        assert prefill.market_value is None
+        assert prefill.net_investment == 200.0
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_other_month_record_not_matched(self):
+        records = [_prev_record(1, "2026-04", 999.0, 5.0)]
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=records, holding_id=1, year_month="2026-05"
+        )
+        assert prefill.market_value is None
+        assert prefill.net_investment == 0.0
+
+
+class TestSummarizeMonth:
+    """summarize_month：本月已存紀錄彙總與市值未填提醒 —— SC-089。"""
+
+    @pytest.mark.scenario("SC-089")
+    def test_sc089_rows_follow_record_order_with_matched_names(self):
+        holdings = [_asset(1, "活存"), _liability(2, "房貸"), _asset(3, "聯發科")]
+        records = [
+            _prev_record(1, "2026-06", 370000.0),
+            _prev_record(2, "2026-06", None),
+            MonthlyRecordModel(
+                holding_id=3,
+                year_month="2026-06",
+                market_value=0.0,
+                net_investment=-100.0,
+                total_cost=0.0,
+                realized_income=50000.0,
+            ),
+        ]
+        rows = _service(_StubRecordRepo(latest_ym=None)).summarize_month(
+            records=records, holdings=holdings
+        )
+        assert [row.name for row in rows] == ["活存", "房貸", "聯發科"]
+        assert [row.holding_id for row in rows] == [1, 2, 3]
+        assert rows[0].market_value == 370000.0
+        assert rows[0].total_cost is None
+        assert rows[0].realized_income is None
+        assert rows[2].net_investment == -100.0
+        assert rows[2].total_cost == 0.0
+        assert rows[2].realized_income == 50000.0
+
+    @pytest.mark.scenario("SC-089")
+    def test_sc089_missing_flag_only_for_blank_market_value_including_liability(self):
+        holdings = [_asset(1, "活存"), _liability(2, "房貸"), _asset(3, "聯發科")]
+        records = [
+            _prev_record(1, "2026-06", 370000.0),
+            _prev_record(2, "2026-06", None),
+            _prev_record(3, "2026-06", 0.0),
+        ]
+        rows = _service(_StubRecordRepo(latest_ym=None)).summarize_month(
+            records=records, holdings=holdings
+        )
+        # 市值 0 是已填（出清語意），不提醒；只有空白（含負債）才提醒
+        assert [row.market_value_missing for row in rows] == [False, True, False]
+
+    @pytest.mark.scenario("SC-089")
+    def test_sc089_no_records_returns_empty_list(self):
+        rows = _service(_StubRecordRepo(latest_ym=None)).summarize_month(
+            records=[], holdings=[_asset(1, "活存")]
+        )
+        assert rows == []

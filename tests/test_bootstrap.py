@@ -32,8 +32,16 @@ from streamlit.errors import StreamlitSecretNotFoundError
 
 # ==== 專案內部 ====
 from asset_lab import bootstrap
-from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND, HOLDING_PURPOSE, HOLDINGS_TABLE
+from asset_lab.core.constants import (
+    ASSET_CATEGORIES,
+    COST_BASIS_INPUT,
+    HOLDING_KIND,
+    HOLDING_PURPOSE,
+    HOLDINGS_TABLE,
+    MONTHLY_RECORDS_TABLE,
+)
 from asset_lab.models.holding import HoldingModel
+from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
 from asset_lab.repositories.record_repository import RecordRepository
@@ -41,6 +49,7 @@ from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
+from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 from asset_lab.services.period_service import PeriodService
@@ -155,11 +164,14 @@ def test_build_container_wires_services() -> None:
     assert isinstance(container.period_service, PeriodService)
     assert isinstance(container.data_io_service, DataIoService)
     assert isinstance(container.monthly_input_service, MonthlyInputService)
+    assert isinstance(container.cost_basis_service, CostBasisService)
     assert isinstance(container.protocol_service, ProtocolService)
     assert isinstance(container.affordability_service, AffordabilityService)
     # 月度錄入服務的 I/O 委派接上容器內的 Repository 實例
     assert container.monthly_input_service._record_repo is container.record_repo
     assert container.monthly_input_service._holding_repo is container.holding_repo
+    # 總成本推算服務的分類集合注入自常數，不寫死在組裝邏輯裡
+    assert container.cost_basis_service.cost_basis_categories == COST_BASIS_INPUT.CATEGORIES
 
 
 # === holdings 用途欄位加欄遷移：舊庫升級 / 新庫直建 / 重複啟動三路徑 ===
@@ -332,6 +344,264 @@ class TestHoldingsPurposeMigrationFreshDb:
         stored = repo.get_holding(holding_id=new_id)
         assert stored is not None
         assert stored.purpose == HOLDING_PURPOSE.GENERAL
+
+
+# === monthly_records 總成本/已實現收益欄位加欄遷移：舊庫升級 / 新庫直建 / 重複啟動三路徑 ===
+
+# 本 Change 之前（無 total_cost/realized_income 欄）的 monthly_records 表結構，直接以原始
+# SQL 建出，模擬既有部署資料庫；不可呼叫現行 SchemaRepository._CREATE_MONTHLY_RECORDS
+# （其已含兩個新欄，無法重現舊庫缺欄的情境）。
+_LEGACY_CREATE_MONTHLY_RECORDS = f"""
+CREATE TABLE {MONTHLY_RECORDS_TABLE.TABLE_NAME} (
+    {MONTHLY_RECORDS_TABLE.HOLDING_ID} INTEGER NOT NULL,
+    {MONTHLY_RECORDS_TABLE.YEAR_MONTH} TEXT NOT NULL,
+    {MONTHLY_RECORDS_TABLE.MARKET_VALUE} REAL,
+    {MONTHLY_RECORDS_TABLE.NET_INVESTMENT} REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY ({MONTHLY_RECORDS_TABLE.HOLDING_ID}, {MONTHLY_RECORDS_TABLE.YEAR_MONTH})
+)
+"""
+
+
+def _seed_legacy_monthly_records_db() -> "libsql.Connection":
+    """建一個模擬「本功能上線前」的既有資料庫：monthly_records 表無新欄，已有 2 筆紀錄。"""
+    connection = libsql.connect(":memory:")
+    cursor = connection.cursor()
+    cursor.execute(_LEGACY_CREATE_MONTHLY_RECORDS)
+    for holding_id, year_month, market_value, net_investment in (
+        (1, "2026-01", 500000.0, 0.0),
+        (2, "2026-01", 20000.0, 30000.0),
+    ):
+        cursor.execute(
+            f"INSERT INTO {MONTHLY_RECORDS_TABLE.TABLE_NAME} "
+            f"({MONTHLY_RECORDS_TABLE.HOLDING_ID}, {MONTHLY_RECORDS_TABLE.YEAR_MONTH}, "
+            f"{MONTHLY_RECORDS_TABLE.MARKET_VALUE}, {MONTHLY_RECORDS_TABLE.NET_INVESTMENT}) "
+            f"VALUES (?, ?, ?, ?)",
+            (holding_id, year_month, market_value, net_investment),
+        )
+    connection.commit()
+    return connection
+
+
+class TestMonthlyRecordsCostColumnsMigrationLegacyUpgrade:
+    """既有（本功能上線前）資料庫首次啟動升級：既有紀錄補上 total_cost/realized_income 為
+    NULL（＝舊制列），資料無遺失。"""
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_legacy_db_upgrade_adds_nullable_cost_columns(self) -> None:
+        connection = _seed_legacy_monthly_records_db()
+
+        SchemaRepository(conn=connection).ensure_schema()
+
+        records = RecordRepository(conn=connection).read_month(year_month="2026-01")
+        assert len(records) == 2
+        assert {r.total_cost for r in records} == {None}
+        assert {r.realized_income for r in records} == {None}
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_legacy_db_upgrade_preserves_existing_values(self) -> None:
+        connection = _seed_legacy_monthly_records_db()
+
+        SchemaRepository(conn=connection).ensure_schema()
+
+        records = {
+            r.holding_id: r
+            for r in RecordRepository(conn=connection).read_month(year_month="2026-01")
+        }
+        assert records[1].market_value == 500000.0
+        assert records[2].net_investment == 30000.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_upgraded_legacy_record_can_be_edited_with_cost_columns(self) -> None:
+        # 升級後舊庫的既有列可正常編輯，補上總成本／已實現收益成為新制列
+        connection = _seed_legacy_monthly_records_db()
+        SchemaRepository(conn=connection).ensure_schema()
+        repo = RecordRepository(conn=connection)
+
+        repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=1,
+                year_month="2026-01",
+                market_value=510000.0,
+                net_investment=0.0,
+                total_cost=350000.0,
+                realized_income=0.0,
+            )
+        )
+
+        edited = next(
+            r for r in repo.read_month(year_month="2026-01") if r.holding_id == 1
+        )
+        assert edited.total_cost == 350000.0
+        assert edited.realized_income == 0.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_repeated_ensure_schema_on_upgraded_monthly_records_db_is_idempotent(
+        self,
+    ) -> None:
+        # 重複啟動安全：升級後再跑 2、3 次 ensure_schema 不報錯、既有資料不重複變更
+        connection = _seed_legacy_monthly_records_db()
+        schema_repo = SchemaRepository(conn=connection)
+
+        schema_repo.ensure_schema()
+        schema_repo.ensure_schema()
+        schema_repo.ensure_schema()
+
+        records = RecordRepository(conn=connection).read_month(year_month="2026-01")
+        assert len(records) == 2
+        assert {r.total_cost for r in records} == {None}
+
+
+class TestMonthlyRecordsCostColumnsMigrationFreshDb:
+    """全新資料庫首次啟動：直接支援 total_cost/realized_income，行為與升級後的舊庫一致。"""
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_fresh_db_supports_cost_columns_immediately(self) -> None:
+        connection = libsql.connect(":memory:")
+        SchemaRepository(conn=connection).ensure_schema()
+        repo = RecordRepository(conn=connection)
+
+        repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=1,
+                year_month="2026-05",
+                market_value=400000.0,
+                net_investment=50000.0,
+                total_cost=350000.0,
+                realized_income=0.0,
+            )
+        )
+
+        stored = repo.read_month(year_month="2026-05")[0]
+        assert stored.total_cost == 350000.0
+        assert stored.realized_income == 0.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_fresh_db_new_record_without_cost_columns_defaults_to_null(self) -> None:
+        connection = libsql.connect(":memory:")
+        SchemaRepository(conn=connection).ensure_schema()
+        repo = RecordRepository(conn=connection)
+
+        repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=1,
+                year_month="2026-05",
+                market_value=400000.0,
+                net_investment=50000.0,
+            )
+        )
+
+        stored = repo.read_month(year_month="2026-05")[0]
+        assert stored.total_cost is None
+        assert stored.realized_income is None
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_repeated_ensure_schema_on_fresh_monthly_records_db_is_idempotent(
+        self,
+    ) -> None:
+        # 重複啟動安全：全新庫也可重跑 ensure_schema 多次，不報錯、既有資料不受影響
+        connection = libsql.connect(":memory:")
+        schema_repo = SchemaRepository(conn=connection)
+        schema_repo.ensure_schema()
+        repo = RecordRepository(conn=connection)
+        repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=1,
+                year_month="2026-05",
+                market_value=400000.0,
+                net_investment=50000.0,
+                total_cost=350000.0,
+                realized_income=0.0,
+            )
+        )
+
+        schema_repo.ensure_schema()
+        schema_repo.ensure_schema()
+
+        stored = repo.read_month(year_month="2026-05")[0]
+        assert stored is not None
+        assert stored.total_cost == 350000.0
+
+
+# === monthly_records 現金股利欄位加欄遷移：6 欄舊庫升級 / 重複啟動 ===
+
+# 前一 Change（已有 total_cost/realized_income，尚無 cash_dividend）的 monthly_records 結構，
+# 直接以原始 SQL 建出，模擬既有部署資料庫。
+_PREV_CREATE_MONTHLY_RECORDS = f"""
+CREATE TABLE {MONTHLY_RECORDS_TABLE.TABLE_NAME} (
+    {MONTHLY_RECORDS_TABLE.HOLDING_ID} INTEGER NOT NULL,
+    {MONTHLY_RECORDS_TABLE.YEAR_MONTH} TEXT NOT NULL,
+    {MONTHLY_RECORDS_TABLE.MARKET_VALUE} REAL,
+    {MONTHLY_RECORDS_TABLE.NET_INVESTMENT} REAL NOT NULL DEFAULT 0,
+    {MONTHLY_RECORDS_TABLE.TOTAL_COST} REAL,
+    {MONTHLY_RECORDS_TABLE.REALIZED_INCOME} REAL,
+    PRIMARY KEY ({MONTHLY_RECORDS_TABLE.HOLDING_ID}, {MONTHLY_RECORDS_TABLE.YEAR_MONTH})
+)
+"""
+
+
+def _seed_prev_monthly_records_db() -> "libsql.Connection":
+    """建一個 6 欄（無 cash_dividend）的既有資料庫，含一筆新制股票列。
+
+    Returns:
+        已寫入一筆紀錄的記憶體資料庫連線。
+    """
+    connection = libsql.connect(":memory:")
+    cursor = connection.cursor()
+    cursor.execute(_PREV_CREATE_MONTHLY_RECORDS)
+    cursor.execute(
+        f"INSERT INTO {MONTHLY_RECORDS_TABLE.TABLE_NAME} VALUES (?, ?, ?, ?, ?, ?)",
+        (1, "2026-01", 500000.0, 20000.0, 400000.0, 1500.0),
+    )
+    connection.commit()
+    return connection
+
+
+class TestMonthlyRecordsCashDividendMigration:
+    """前一 Change 的 6 欄庫升級後多出可為 NULL 的 cash_dividend，既有值不變。"""
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_prev_schema_upgrade_adds_nullable_cash_dividend(self) -> None:
+        connection = _seed_prev_monthly_records_db()
+
+        SchemaRepository(conn=connection).ensure_schema()
+
+        record = RecordRepository(conn=connection).read_month(year_month="2026-01")[0]
+        assert record.cash_dividend is None
+        assert record.market_value == 500000.0
+        assert record.net_investment == 20000.0
+        assert record.total_cost == 400000.0
+        assert record.realized_income == 1500.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_prev_schema_repeated_ensure_schema_is_idempotent(self) -> None:
+        connection = _seed_prev_monthly_records_db()
+        schema_repo = SchemaRepository(conn=connection)
+
+        schema_repo.ensure_schema()
+        schema_repo.ensure_schema()
+
+        records = RecordRepository(conn=connection).read_month(year_month="2026-01")
+        assert len(records) == 1
+        assert records[0].realized_income == 1500.0
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_fresh_db_round_trips_cash_dividend(self) -> None:
+        connection = libsql.connect(":memory:")
+        SchemaRepository(conn=connection).ensure_schema()
+        repo = RecordRepository(conn=connection)
+
+        repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=1,
+                year_month="2026-05",
+                market_value=400000.0,
+                total_cost=350000.0,
+                realized_income=1200.0,
+                cash_dividend=200.0,
+            )
+        )
+
+        assert repo.read_month(year_month="2026-05")[0].cash_dividend == 200.0
 
 
 class _FakeSchemaRepo:

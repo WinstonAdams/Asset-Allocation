@@ -9,6 +9,19 @@ from pydantic import BaseModel
 # 無
 
 
+class NetInvestmentDerivation(BaseModel):
+    """股票/ETF 依總成本與已實現收益推算的當月淨投入（存檔前預覽用）。
+
+    is_transition_estimate 為 True 表示前期總成本查無新制上一筆（上一筆是本功能
+    上線前建立的舊制列），改以「初始成本＋該月以前所有淨投入」估算，可能與券商
+    實際總成本有落差，呈現時應提醒使用者留意。
+    """
+
+    previous_total_cost: float
+    is_transition_estimate: bool
+    net_investment: float
+
+
 class ReturnResult(BaseModel):
     """單一維度的報酬率結果。
 
@@ -181,3 +194,35 @@ class ProtocolStatus(BaseModel):
     drawdown: float | None = None
     current_cumulative_twr: float | None = None
     data_month_count: int
+
+
+class RecordEditorPrefill(BaseModel):
+    """一般分類單列錄入框的帶入值。沒有紀錄時市值留空、淨投入為 0；市值 None 代表帶入空白。"""
+
+    market_value: float | None
+    net_investment: float
+
+
+class CostBasisEditorPrefill(BaseModel):
+    """股票/ETF 錄入框的帶入值。沒有紀錄時總成本／市值留空、損益與股利為 0；None 代表帶入空白。"""
+
+    total_cost: float | None
+    market_value: float | None
+    realized_pnl: float
+    cash_dividend: float
+
+
+class MonthRecordRow(BaseModel):
+    """「本月已存紀錄」唯讀表格的單列。
+
+    total_cost/realized_income 只有新制股票/ETF 列有值；
+    market_value_missing 為 True 時需提醒補填市值。
+    """
+
+    holding_id: int
+    name: str
+    market_value: float | None
+    net_investment: float
+    total_cost: float | None
+    realized_income: float | None
+    market_value_missing: bool

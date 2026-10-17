@@ -6,7 +6,9 @@ Service 與 Repository 皆可呼叫（見架構合約 §8）。
 
 # ==== 原生（標準庫） ====
 import re
+import unicodedata
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 
 # ==== 第三方套件 ====
 import pandas as pd
@@ -18,6 +20,13 @@ from asset_lab.models.holding import HoldingModel
 
 # 'YYYY-MM'：四位數年、兩位數補零的月（01–12）；用於從介面攔下格式不合的年月。
 _YEAR_MONTH_PATTERN = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
+
+# 金額文字：可選負號 + (標準三位一組千分位 或 純數字) + 可選小數部分；
+# 千分位分組要求嚴格（如 "1,00,000" 不合），避免使用者誤打多餘或缺漏的 0。
+_AMOUNT_PATTERN = re.compile(r"^-?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$")
+
+# 整數量化目標：配合 ROUND_HALF_UP 做「四捨五入、遠離零」取整。
+_INTEGER_QUANTUM = Decimal("1")
 
 
 def current_year_month(today: date) -> str:
@@ -112,3 +121,49 @@ def filter_asset_records(range_df: pd.DataFrame, holdings: list[HoldingModel]) -
         return range_df
     asset_ids = {h.holding_id for h in holdings if h.kind == HOLDING_KIND.ASSET}
     return range_df[range_df[MONTHLY_RECORDS_TABLE.HOLDING_ID].isin(asset_ids)]
+
+
+def format_amount(value: float | None) -> str:
+    """將金額格式化為整數千分位字串。
+
+    金額欄位一律以整數千分位顯示，所見即所存；帶小數的儲存值先四捨五入
+    （遠離零）成整數再加千分位逗號，讓顯示格式與輸入格式一致。
+
+    Args:
+        value: 金額數值；None 代表尚無資料。
+
+    Returns:
+        千分位字串（如 "1,234,567"、"-50,000"）；value 為 None 時回傳空字串。
+    """
+    if value is None:
+        return ""
+    rounded = int(Decimal(str(value)).quantize(_INTEGER_QUANTUM, rounding=ROUND_HALF_UP))
+    sign = "-" if rounded < 0 else ""
+    return f"{sign}{abs(rounded):,}"
+
+
+def parse_amount(text: str | None, *, field_label: str) -> float:
+    """將使用者輸入的金額文字解析為數值。
+
+    先做 NFKC 正規化，讓全形數字／全形逗號（中文輸入法常見）等價於半形
+    輸入；千分位分組比對從嚴，攔下「1,00,000」這類多打或少打 0 的輸入。
+    通過格式檢查後四捨五入（遠離零）成整數，對齊金額欄「整數千分位」的
+    顯示規格。
+
+    Args:
+        text: 使用者輸入的原始文字；None 或空字串視為未填。
+        field_label: 欄位名稱，用於解析失敗時的錯誤訊息。
+
+    Returns:
+        解析後的金額數值（整數值，以 float 回傳）。
+
+    Raises:
+        DataValidationError: 輸入為 None、空字串，或格式不符千分位規則。
+    """
+    normalized = unicodedata.normalize("NFKC", text).strip() if text is not None else ""
+    if not normalized or _AMOUNT_PATTERN.match(normalized) is None:
+        raise DataValidationError(f"{field_label}輸入無效，請輸入正確的金額格式：{text!r}")
+    rounded = int(
+        Decimal(normalized.replace(",", "")).quantize(_INTEGER_QUANTUM, rounding=ROUND_HALF_UP)
+    )
+    return float(rounded)
