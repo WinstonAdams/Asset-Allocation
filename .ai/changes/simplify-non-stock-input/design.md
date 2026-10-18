@@ -27,7 +27,8 @@
 | 推算值在存檔時寫入既有 `net_investment` 欄，下游零改動 | 股票 Change AD-1 | 活存/定存/保險的推算值同樣落地在 `net_investment`；報酬率、淨值、配置、協定、CSV 匯出都不必改（proposal「本次不做」） |
 | 純運算 Service（無 I/O、無 Streamlit），由 Page 編排，Service 之間不互相注入 | `CostBasisService`、`HouseService`（股票 Change AD-3） | 新增 `BalanceInputService`；保險併入 `CostBasisService`（AD-2、AD-4） |
 | 連動重算：先在記憶體中套用異動，再往後重算，只回傳數值有變的列 | `CostBasisService._recalculate_following`（股票 Change AD-4） | 保險直接沿用；活存/定存另訂規則（AD-3，原因見該 ADR） |
-| 多列寫入用 Repository compound method，單一交易，失敗時 rollback 後原樣往上拋 | `RecordRepository.upsert_records` / `delete_record_and_upsert`（股票 Change AD-5） | 活存/定存/保險的存檔與刪除全部改走這兩個方法，讓 BR-7「與存檔在同一交易寫入」直接成立 |
+| 多列寫入用 Repository compound method，單一交易，失敗時 rollback 後原樣往上拋 | `RecordRepository.upsert_records` / `delete_record_and_upsert`（股票 Change AD-5） | 活存/定存/保險（以及負債）的存檔與刪除全部改走這兩個方法，讓 BR-7「與存檔在同一交易寫入」直接成立；兩個方法改用共用的 `write_transaction`，失敗時轉成友善的 `PersistenceError`；同樣的保證擴大到 CSV 整批覆蓋（AD-10） |
+| Controller 建立 `with` 區塊、Repository 的 `*_with_context` 方法在其中執行、不自行 commit | 02-architecture §9（本專案尚無實例） | CSV 匯入的三張表寫入改成在同一個交易 context 裡完成（AD-10） |
 | 業務分類集合由 constants 定義，bootstrap 用建構子注入 Service | `COST_BASIS_INPUT.CATEGORIES` → `CostBasisService(cost_basis_categories=...)` | 新增 `PREMIUM_INPUT`、`BALANCE_INPUT` 與 `INPUT_MODE` 對照，一樣用注入（AD-1） |
 | 錄入框帶入既有值，資料來源改變時才重新播種 | `amount_widget.seed_amount_inputs`（轉移 Change AD-2） | 三個新編輯器各用一組獨立的 widget key 和 seed key（AD-7） |
 | 寫入成功後 `st.rerun()`，成功訊息走 flash | `views/input.py::_flash_and_rerun`（轉移 Change AD-3） | 新編輯器照用 |
@@ -40,6 +41,8 @@
 - **`total_cost` / `realized_income` 兩欄的語意改成依分類而定**（AD-4）：股票/ETF 是「總成本／已實現收益合計」，保險是「累計已繳保費／本月領回金額」。這是刻意重用欄位，好讓 schema 和 CSV 契約都不用動。
 - **活存/定存的連動重算會改寫舊制列**（AD-3）：股票 Change 的連動重算永遠不碰舊制列，這次 BR-7 明定活存/定存的下一筆即使是舊紀錄也要重算，所以活存/定存另訂一套規則。
 - **刪除一個既有功能（項目間轉移）連同其 Service/Repository 方法**（AD-6）：不留 dead code。
+- **新增跨表交易的 context（`TransactionRepository`）**（AD-10）：既有的 Repository 都是單表 I/O、各自 commit。CSV 匯入要一次寫三張表，而且要求「全部成功或全部不生效」，所以照 02 §9 由 Page 持有交易 context，三個 Repository 在其中寫入、不自行 commit。月度錄入的批次寫入仍是單一方法交易，但和 CSV 匯入共用同一個 `write_transaction` helper。
+- **Repository 在寫入交易失敗時把原始錯誤轉成領域例外 `PersistenceError`**（AD-10）：04 §2.1 的原則是 Repository 直接往上拋，但 libsql 拋的是無法和程式錯誤區分的 `ValueError`，而公開部署不能讓堆疊露在畫面上。轉譯只發生在交易邊界，原始錯誤保留在 `__cause__`，Repository 仍然不記錄錯誤（先例：`insert_record` 會把唯一鍵衝突轉成 `DataValidationError`）。
 
 ---
 
@@ -135,7 +138,7 @@
 
 - **背景**：BR-3 規定負債只填應繳金額、淨投入固定 0；BR-4 規定負債的金額欄在畫面上一律稱「應繳金額」。proposal 把「負債在本月紀錄表的欄名呈現方式」交給設計決定。負債的金額照舊存在 `market_value` 欄（淨值計算 `net_worth_series` 讀這一欄），只是畫面上換名稱。
 - **選擇**：
-  - **存檔**：`MonthlyInputService.build_amount_due_record(*, holding, year_month, amount_due) -> MonthlyRecordModel`，回傳 `market_value=amount_due`、`net_investment=0.0`、成本欄全 None；`holding` 不是負債時拋 `DataValidationError`。Page 拿到後呼叫既有的 `upsert_record`；刪除呼叫既有的 `delete_record`。負債沒有推算鏈，不需要連動重算，也就不需要 compound 寫入。
+  - **存檔**：`MonthlyInputService.build_amount_due_record(*, holding, year_month, amount_due) -> MonthlyRecordModel`，回傳 `market_value=amount_due`、`net_investment=0.0`、成本欄全 None；`holding` 不是負債時拋 `DataValidationError`。Page 拿到後呼叫 `upsert_records(records=[record])`；刪除呼叫 `delete_record_and_upsert(holding_id=..., year_month=..., records=[])`。負債沒有推算鏈、不需要連動重算，單筆寫入的效果和 `upsert_record` / `delete_record` 相同；改走 compound 方法，是為了讓寫入失敗時和其他錄入方式一樣得到友善訊息（AD-10）。
   - **錄入框**：只有一個 `amount_input`，標籤為「應繳金額」；帶入值沿用 `build_record_prefill` 的 `market_value`。
   - **本月紀錄表**（`summarize_month` → `MonthRecordRow`）：新增 `is_liability: bool`（Service 用注入的 `liability_kind` 判斷）。Page 的表格把金額拆成兩欄：資產的值放在「市值 / 餘額」欄，負債的值放在「應繳金額」欄，另一欄留空。負債列的未填提醒改用「應繳金額」的字樣，資產列維持原本的提醒（具體字樣由 SC 定）。`total_cost` / `realized_income` 兩欄的表頭改成能同時涵蓋股票和保險的名稱（例如「總成本 / 累計保費」、「已實現收益 / 領回」，具體字樣由 SC 定，Q5）。
   - **CSV 欄名、DB 欄名都不改**（`market_value` 是技術契約，不是畫面）。
@@ -180,7 +183,9 @@
   | `COST_BASIS` | `_render_cost_basis_editor`（既有，只拿掉轉移提示） | 總成本、現值、已實現損益、現金股利 | `derive`（既有） | `plan_save` → `upsert_records` | `plan_delete` → `delete_record_and_upsert` |
   | `PREMIUM` | `_render_premium_editor`（新增） | 累計已繳保費、解約金、本月領回金額 | `derive_premium`：前期累計保費、推算淨投入、過渡估算提醒 | `plan_save_premium` → `upsert_records` | `plan_delete` → `delete_record_and_upsert` |
   | `BALANCE` | `_render_balance_editor`（新增） | 餘額 | `balance_input_service.derive`：前期餘額、推算淨投入（Q6） | `balance_input_service.plan_save` → `upsert_records` | `balance_input_service.plan_delete` → `delete_record_and_upsert` |
-  | `AMOUNT_DUE` | `_render_amount_due_editor`（新增） | 應繳金額 | 無 | `build_amount_due_record` → `upsert_record` | `delete_record` |
+  | `AMOUNT_DUE` | `_render_amount_due_editor`（新增） | 應繳金額 | 無 | `build_amount_due_record` → `upsert_records(records=[...])` | `delete_record_and_upsert(records=[])` |
+
+  - **寫入失敗**：四種方式的寫入都經過 `write_transaction`，失敗時 rollback 並拋 `PersistenceError`，由頁面既有的 `except AssetLabError` 顯示友善訊息、細節寫進 log（AD-10）。
 
   - **一般編輯器移除**：`_KEY_RECORD_NET_INVESTMENT` 等手填淨投入的 key 一併拿掉。
   - **每個編輯器用獨立的 widget key 與 seed key**（例如 `balance_*`、`premium_*`、`amount_due_*`），避免在不同錄入方式的項目之間切換時讀到前一種編輯器留下的 session state。帶入值：BALANCE 和 AMOUNT_DUE 用 `build_record_prefill(...).market_value`；PREMIUM 用 `build_premium_prefill`。
@@ -229,6 +234,65 @@
   - 正面：上線零風險，舊資料、舊備份都照常可用。
   - 負面：歷史月份的活存/定存報酬仍然反映舊的手填口徑，要等使用者修改某月時，才會因 AD-3 連帶改到下一筆。
 
+### AD-10：寫入失敗時 rollback 並轉成友善的領域例外 `PersistenceError`；CSV 整批覆蓋改成跨三張表的單一交易（使用者於 1-4 確認 SC-085 時決定）
+
+- **背景**：使用者在 1-4 確認 SC-085 的待確認事項時做了以下決定（Q9、Q10 已定案）：
+  1. **錯誤呈現**：批次寫入（本月＋連動的下一筆）與 CSV 匯入失敗時，頁面要接住資料庫錯誤，以紅字顯示類似「存檔失敗，資料未變更，請重試」的友善訊息；錯誤細節寫進 log，**畫面不顯示程式堆疊**（app 公開部署）。這取代了原本「沿用頁面一般錯誤提示」的決定。
+  2. **原子性**：「要嘛全部成功、要嘛全部不生效」的保證也要套用到 CSV 整批覆蓋 `replace_all`；單筆 `upsert_record` 不需要。範圍採 Q9-B：整個 CSV 匯入（主檔、紀錄、目標配置）放進同一個交易。
+
+  **能接哪一類例外（已查證）**：libsql 的寫入錯誤（唯一鍵衝突、表不存在、語法錯誤，以及 bootstrap 註解記載的 stream 失效）拋出的都是**標準庫的 `ValueError`**。`libsql` 模組雖然有 `Error` 類別，但實際拋出的不是它。而 pydantic 的 `ValidationError` 也是 `ValueError` 的子類別。因此 Page 無法用型別分辨「資料庫錯誤」和「程式錯誤」；如果在 Page 寫 `except ValueError` 或 `except Exception`，會連程式 bug 都包成「存檔失敗」。唯一可靠的落點是 **Repository 的寫入交易邊界**：那裡的 try 區塊只包含 `execute` / `commit`。
+
+  **`replace_all` 的現況（已查證）**：`RecordRepository.replace_all` 和 `HoldingRepository.replace_all` 都是「`DELETE` 全表 → 逐筆 `INSERT` → 最後 `commit()` 一次」，**沒有 try/except，也沒有 rollback**。成功時確實是一次 commit；但中途失敗時，已執行的 `DELETE` 和部分 `INSERT` 會停留在連線上、尚未 commit。已在本機 libsql 記憶體 DB 實測：失敗後 `in_transaction` 為 True，之後任何一個不相關的寫入一 commit，就會把「舊資料已刪、新資料只寫一半」的狀態一起寫進去；改成失敗時先 `rollback()`，兩張表都能恢復原狀。此外，`views/data_io.py` 是依序呼叫 `holding_repo.replace_all` → `record_repo.replace_all` → 逐筆 `target_repo.upsert_target`，**每一步各自 commit**，所以就算單一方法改成原子寫入，整個匯入仍可能停在「主檔已寫入、紀錄失敗」的狀態。而匯入只允許還原到空庫（主檔或紀錄不為空就拒絕），一旦停在這個狀態，使用者連重新匯入都做不到，目前也沒有清空資料庫的介面。
+- **選擇**：
+  1. **新增領域例外 `core/exceptions.py::PersistenceError(AssetLabError)`**：表示「資料庫寫入失敗，而且已 rollback，資料未變更」。
+     - 預設訊息就是可以直接給使用者看的友善文字（例如「存檔失敗，資料未變更，請重試」，最終字樣由 SC 定），只定義在這一個地方。
+     - **訊息不得內插原始錯誤內容**，避免把 SQL、表名或連線資訊顯示在公開頁面上。
+     - 原始例外用 `raise PersistenceError() from error` 保留在 `__cause__`，交給 log。
+  2. **單一寫入交易 helper**：在 `repositories/transaction_repository.py` 新增模組層級的 context manager `write_transaction(conn)`，所有「多 statement、單一 commit」的寫入都走它：
+     - 進入時取得 cursor 並 yield。
+     - 區塊正常結束就 `commit()`。**commit 本身也包在保護範圍內**。既有 `upsert_records` / `delete_record_and_upsert` 的 `commit()` 寫在 try 之外，commit 失敗時既不會 rollback，也不會被轉換，這次一併修正。
+     - 區塊內或 commit 時拋出 `Exception`：先 `rollback()`，再 `raise PersistenceError() from error`。如果原例外已經是 `AssetLabError`（領域例外），rollback 後原樣往上拋，不重複包裝。
+     - `rollback()` 本身也失敗時（例如連線 stream 已失效），把 rollback 的錯誤用 `error.add_note(...)` 附在原例外上，**仍然**拋出 `PersistenceError`。這樣畫面不會因為 rollback 失敗而露出堆疊，細節照樣進 log（`add_note` 需要 Python 3.11 以上，專案要求 3.12）。
+     - 不是 `Exception` 的 `BaseException`（例如 `KeyboardInterrupt`、Streamlit 的 `RerunException`，已查證它繼承自 `BaseException`）一樣先 rollback，但原樣往上拋、不轉換。
+     - Repository 層仍然**不記錄錯誤**（04 §2.1）。這裡做的是例外轉譯，有既有先例：`insert_record` 會把唯一鍵衝突轉成 `DataValidationError`。
+  3. **套用範圍**：
+     - `RecordRepository.upsert_records`、`RecordRepository.delete_record_and_upsert`：內部改用 `write_transaction(self._conn)`，簽名不變，空清單仍是 no-op。月度錄入頁的股票、保險、活存/定存存檔與刪除，都經由這兩個方法寫入。
+     - **負債的存檔與刪除也改走這兩個方法**：`upsert_records(records=[record])`、`delete_record_and_upsert(..., records=[])`，取代 AD-5/AD-7 原本規劃的 `upsert_record` / `delete_record`。行為完全相同，但月度錄入頁的每一種寫入失敗，都會得到同樣的友善訊息，不會只有負債露出堆疊。
+     - `TransactionRepository.transaction()`：就是 `write_transaction(self._conn)` 的包裝，給 CSV 匯入用（見第 4 點）。
+  4. **CSV 整批覆蓋採跨表單一交易（Q9-B）**：
+     - 三個 Repository 各新增一個在給定 cursor 上執行、**不 commit、不 catch** 的方法（02 §9 的 `*_with_context` 命名）：`HoldingRepository.replace_all_with_context`、`RecordRepository.replace_all_with_context`、`TargetRepository.upsert_targets_with_context`。SQL 仍由各自的 Repository 持有，不重複寫。
+     - `views/data_io.py::_render_import` 在 `parse_and_validate` 通過之後才開交易：`with transaction_repo.transaction() as cursor:` 依序呼叫上面三個方法；`st.success` 放在 `with` 區塊之後。驗證失敗時根本不會開交易。
+     - 既有的 `HoldingRepository.replace_all` 和 `RecordRepository.replace_all` 唯一的呼叫端就是匯入頁，改走新路徑之後予以**刪除**。這兩個方法沒有 rollback，留著就是危險入口；`tests/` 中也沒有直接呼叫它們的測試。`TargetRepository.upsert_target`（設定頁單筆儲存在用）維持不變。
+     - 目標配置維持既有的 upsert 語意（CSV 沒列到的既有分類保留），只是改在同一個交易內寫入。
+  5. **Page 不用新增 catch**：`views/input.py` 和 `views/data_io.py` 既有的 `except AssetLabError as error: logger.exception(...); st.error(str(error))` 就會接住 `PersistenceError`：
+     - `logger.exception` 會把例外連同 `__cause__` 原始錯誤和 rollback note 的完整堆疊寫進 log。
+     - `st.error(str(error))` 只顯示友善訊息。
+     - 失敗後不會執行 `_flash_and_rerun`，使用者輸入的值留在錄入框裡，可以直接重試。
+  6. **不在範圍內**：
+     - `upsert_record`、`delete_record`、`insert_record` 這些單筆寫入仍是單一 statement，原子性本來就成立，使用者已決定不需要（決定 2 的但書）。錯誤處理維持不變。本 Change 之後，月度錄入頁改用 compound 方法，**它們在正式程式碼中已經沒有呼叫端**（`insert_record` 本來就沒有），只剩 SC-006、SC-007 的 Repository 測試和測試的資料準備在用。本次不刪：SC-006、SC-007 描述的唯一鍵和 CRUD 語意仍然有效，刪除與否另案決定（列技術債）。
+     - 讀取失敗也不在本次範圍，見技術債。
+- **理由**：
+  - libsql 的錯誤型別沒辦法和程式錯誤區分，只有在「try 區塊裡只有 I/O」的交易邊界才能精準判定「這是寫入失敗」。在這裡轉成領域例外，既有的頁面 catch 不用改就能顯示友善訊息，也不會把程式 bug 偽裝成「請重試」。
+  - 只有一個交易 helper：commit、rollback、轉譯三件事集中在一處，月度錄入和 CSV 匯入的行為保證一致，日後新增批次寫入也有固定的路可走。
+  - 只有跨三張表的單一交易，才能讓「CSV 整批覆蓋」真正做到全部成功或全部不生效，也避免空庫守門把使用者卡在半套資料上。交易邊界由 Controller（Page）持有、Repository 只執行，正是 02 §9 規定的分工。
+  - 傳 cursor 而不是讓各 Repository 自己開 cursor：雖然 bootstrap 注入的是同一條連線，明確傳遞可以把「必須同一交易」這個前提寫進介面，不依賴隱含的共用連線。
+- **否決方案**：
+  - **Page 層 `except ValueError` / `except Exception` 顯示友善訊息**：pydantic 驗證錯誤和一般程式 bug 也會被包成「存檔失敗，資料未變更」，誤導使用者，也遮蔽真正的缺陷；而且 Page 沒辦法知道 rollback 是否已完成。否決。
+  - **以 `libsql.Error` 判定資料庫錯誤**：已實測 libsql 實際拋出的是標準庫 `ValueError`，不是 `libsql.Error`。否決。
+  - **Repository 只 rollback、原樣往上拋，由 Page 另外處理**（AD-10 的上一版）：原始 `ValueError` 不是 `AssetLabError`，會以 Streamlit 預設的例外畫面露出堆疊，不符合公開部署的要求。否決。
+  - **只在兩個 `replace_all` 內補 try/except rollback**（Q9-A）：三張表仍分三次 commit，整批匯入可能半套，而且會卡在空庫守門。使用者已選 B。否決。
+  - **新增一個 `restore_snapshot(holdings, records, targets)` 的跨表 Repository，自帶三張表的 SQL**：三張表的 INSERT/UPSERT SQL 要在兩處維護。否決。
+  - **讓 Repository 的寫入方法加一個 `commit: bool` 參數**：交易邊界的控制洩漏成旗標，容易漏傳。否決。
+- **後果**：
+  - 正面：
+    - 月度錄入的批次寫入和 CSV 匯入失敗時，都是「資料不變＋紅字友善訊息＋細節進 log」，畫面不露堆疊。
+    - CSV 匯入要嘛三張表都還原、要嘛完全不動，失敗後可以直接重試。
+    - 順手修正既有 compound method「commit 失敗不會 rollback」的缺口。
+  - 負面：
+    - 新增一種跨 Repository 的寫入模式，`Container` 多一個 `transaction_repo` 欄位。
+    - 既有 `test_sc085_*` 斷言的是原始例外（`pytest.raises(RuntimeError)`），要改成斷言 `PersistenceError`，並且 `__cause__` 是原始錯誤。
+    - rollback 本身失敗時，若連線其實仍然有效，未 commit 的半套狀態理論上仍可能被之後的 commit 帶入。實務上 rollback 失敗幾乎都是 stream 已失效，伺服器端已經丟棄該交易，而下一輪 rerun 會由 `get_resilient_container` 重連。列入技術債。
+
 ---
 
 ## 技術選型
@@ -245,6 +309,16 @@
 
 - **推薦**：Streamlit 1.59.1＋libsql(Turso)＋Pydantic＋pandas＋Plotly，全部沿用（信心度：High）
 - **理由**：proposal 明定沒有新的外部依賴。交易控制沿用既有的 `upsert_records` / `delete_record_and_upsert`（股票 Change TD-3 已查證 libsql 支援 commit/rollback），浮點比較沿用 `math.isclose`（和 `_recalculate_following` 同樣的容差）。
+- **AD-10 的交易行為已在本機 libsql 記憶體 DB 實測**：
+  - `DELETE` 加上部分 `INSERT` 之後失敗，連線停在 `in_transaction=True`；不 rollback 的話，下一個不相關的 commit 會把半套狀態一起寫入。
+  - 失敗後 `rollback()` 可以恢復原狀。
+  - 同一條連線上兩張表的 `DELETE`/`INSERT` 放在同一個交易裡，失敗後 rollback 兩張表都會還原。
+  - context manager 用標準庫 `contextlib.contextmanager` 即可，不需要新依賴。
+- **AD-10 的例外判定也已在本機實測**（libsql 隨 venv、Python 3.12.8、Streamlit 1.59.1）：
+  - 唯一鍵衝突、表不存在、語法錯誤，拋出的都是標準庫 `ValueError`（不是 `libsql.Error`）。
+  - `pydantic_core.ValidationError` 是 `ValueError` 的子類別。
+  - Streamlit 的 `RerunException` 繼承自 `BaseException`，不會被 `except Exception` 接到。
+  - `raise PersistenceError() from error` 搭配 `error.add_note(...)`：`logger.exception` 的輸出含原始錯誤、note 和「direct cause」鏈，`str(error)` 只有友善訊息。
 
 ---
 
@@ -349,18 +423,80 @@ class HoldingValueTrend(BaseModel):
     series: list[HoldingValueSeries]
 ```
 
-### 3. Repositories
+### 3. 例外（`core/exceptions.py`）
 
 ```python
+class PersistenceError(AssetLabError):
+    """資料庫寫入失敗且已 rollback（資料未變更）時拋出（AD-10）。
+
+    訊息為可直接顯示給使用者的友善文字（預設值只定義在本類別；最終字樣由 SC 定），
+    不得內插原始錯誤內容；原始錯誤以 `raise ... from error` 保留在 __cause__ 供 log。
+    """
+
+    def __init__(self, message: str = <友善預設訊息，例如「存檔失敗，資料未變更，請重試」>) -> None: ...
+```
+
+### 4. Repositories
+
+```python
+# repositories/transaction_repository.py（新增）
+@contextmanager
+def write_transaction(conn: "Connection") -> Iterator["Cursor"]: ...
+    # yield conn.cursor()；區塊正常結束 → conn.commit()（commit 也在保護範圍內）
+    # 區塊內或 commit 拋出 Exception：
+    #   先 conn.rollback()（rollback 失敗 → error.add_note(...) 附在原例外上，不另外拋出）
+    #   原例外是 AssetLabError → 原樣往上拋；否則 → raise PersistenceError() from error
+    # BaseException（非 Exception）→ rollback 後原樣往上拋
+    # 不 log（04 §2.1）
+
+
+class TransactionRepository:
+    """跨 Repository 的單一交易邊界（CSV 匯入用，AD-10）。連線由 bootstrap 注入。"""
+
+    def __init__(self, *, conn: "Connection") -> None: ...
+
+    def transaction(self) -> AbstractContextManager["Cursor"]: ...
+        # return write_transaction(self._conn)
+    # "Cursor" / "Connection" 只在 TYPE_CHECKING 區塊 import（同 schema_repository）
+
+
 # repositories/record_repository.py
 #   刪除：accumulate_net_investments、_ACCUMULATE（AD-6）；模組 docstring 的 compound method 清單同步更新
-#   其餘方法簽名與語意不變；活存/定存/保險的存檔與刪除沿用 upsert_records / delete_record_and_upsert，
-#   負債沿用 upsert_record / delete_record
+#   刪除：replace_all（唯一呼叫端是 CSV 匯入，改走 replace_all_with_context，AD-10）
+class RecordRepository:
+    def upsert_records(self, *, records: list[MonthlyRecordModel]) -> None: ...
+        # 簽名不變；空清單 no-op；非空 → with write_transaction(self._conn) 內逐筆 _UPSERT
+        # 失敗 → rollback 後拋 PersistenceError（原為 rollback 後原樣拋出原始例外，AD-10）
+    def delete_record_and_upsert(
+        self, *, holding_id: int, year_month: str, records: list[MonthlyRecordModel]
+    ) -> None: ...
+        # 簽名不變；with write_transaction 內 _DELETE_ONE → 逐筆 _UPSERT；失敗語意同上
+    def replace_all_with_context(self, *, cursor: "Cursor", records: list[MonthlyRecordModel]) -> None: ...
+        # 在給定 cursor 上：DELETE 全表 → 逐筆 _INSERT；不 commit、不 rollback、不 catch（AD-10）
+    # 不變：upsert_record / delete_record / insert_record（單筆；本 Change 後正式程式碼已無呼叫端，
+    #   保留給 SC-006/SC-007 與測試資料準備使用，AD-5/AD-10）
+
+
+# repositories/holding_repository.py
+class HoldingRepository:
+    def replace_all_with_context(self, *, cursor: "Cursor", holdings: list[HoldingModel]) -> None: ...
+        # 在給定 cursor 上：DELETE 全表 → 逐筆 INSERT（保留來源 holding_id）；不 commit（AD-10）
+    # 刪除：replace_all（同上）
+
+
+# repositories/target_repository.py
+class TargetRepository:
+    def upsert_targets_with_context(
+        self, *, cursor: "Cursor", targets: list[TargetAllocationModel]
+    ) -> None: ...
+        # 在給定 cursor 上逐筆 _UPSERT（沒列到的既有分類保留，語意同既有 upsert_target）；不 commit（AD-10）
+    # 不變：upsert_target（設定頁單筆儲存）
+
 
 # repositories/schema_repository.py：不變（AD-9）
 ```
 
-### 4. Services
+### 5. Services
 
 ```python
 # services/monthly_input_service.py
@@ -462,7 +598,7 @@ class AllocationService:
         # 依 holdings 順序；沒有紀錄或市值空白（None/NaN）→ None；沒有資產資料 → year_months=[]、series=[]（AD-8）
 ```
 
-### 5. 圖表元件（`src/asset_lab/charts.py`，新增一個純函式）
+### 6. 圖表元件（`src/asset_lab/charts.py`，新增一個純函式）
 
 ```python
 def holding_value_lines(*, trend: HoldingValueTrend) -> go.Figure: ...
@@ -473,14 +609,15 @@ def holding_value_lines(*, trend: HoldingValueTrend) -> go.Figure: ...
     # series 為空 → 空的 go.Figure()（TD-1）
 ```
 
-### 6. Views／組裝
+### 7. Views／組裝
 
 | 檔案 | 異動 |
 |------|------|
-| `views/input.py` | `_render_record_editor` 改成依 `resolve_input_mode` 分派（AD-7）；新增 `_render_premium_editor`、`_render_balance_editor`、`_render_amount_due_editor`；移除一般編輯器（手填淨投入）、`_render_transfer`、股票編輯器的轉移提示（AD-6）；本月紀錄表依 `is_liability` 拆成「市值 / 餘額」和「應繳金額」兩欄，成本欄表頭改成涵蓋保險的名稱（AD-5）；頁首賣出說明改寫（文案由 SC 定）；模組 docstring 同步更新 |
+| `views/input.py` | `_render_record_editor` 改成依 `resolve_input_mode` 分派（AD-7）；新增 `_render_premium_editor`、`_render_balance_editor`、`_render_amount_due_editor`；移除一般編輯器（手填淨投入）、`_render_transfer`、股票編輯器的轉移提示（AD-6）；本月紀錄表依 `is_liability` 拆成「市值 / 餘額」和「應繳金額」兩欄，成本欄表頭改成涵蓋保險的名稱（AD-5）；頁首賣出說明改寫（文案由 SC 定）；負債的存檔與刪除改呼叫 `upsert_records` / `delete_record_and_upsert`；寫入失敗的 `PersistenceError` 由既有的 `except AssetLabError`（`logger.exception` 加上 `st.error(str(error))`）處理，不新增 catch（AD-10）；模組 docstring 同步更新 |
 | `views/allocation.py` | 新增 `_render_holding_trend`，用同一份 `range_df`，建議放在淨值趨勢之後（AD-8）；模組 docstring 的圖表清單同步更新 |
-| `bootstrap.py` | `Container` 新增 `balance_input_service: BalanceInputService`；`MonthlyInputService(..., input_mode_by_category=INPUT_MODE.BY_ASSET_CATEGORY, liability_kind=HOLDING_KIND.LIABILITY, liability_input_mode=INPUT_MODE.AMOUNT_DUE)`；`CostBasisService(cost_basis_categories=COST_BASIS_INPUT.CATEGORIES, premium_categories=PREMIUM_INPUT.CATEGORIES)`；`BalanceInputService(balance_categories=BALANCE_INPUT.CATEGORIES)` |
-| `views/settings.py`、`views/data_io.py`、`app.py` | 不變 |
+| `views/data_io.py` | `_render_import` 在 `parse_and_validate` 通過之後才開交易：`with container.transaction_repo.transaction() as cursor:` 依序呼叫 `holding_repo.replace_all_with_context`、`record_repo.replace_all_with_context`、`target_repo.upsert_targets_with_context`，`st.success` 放在 `with` 區塊之後；失敗時的 `PersistenceError` 由既有的 `except AssetLabError` 顯示友善訊息、細節寫進 log，不新增 catch（AD-10）；模組 docstring 補上「整批單一交易、失敗不變更資料」 |
+| `bootstrap.py` | `Container` 新增 `balance_input_service: BalanceInputService`、`transaction_repo: TransactionRepository`；`TransactionRepository(conn=conn)`（和其他 Repository 共用同一條連線）；`MonthlyInputService(..., input_mode_by_category=INPUT_MODE.BY_ASSET_CATEGORY, liability_kind=HOLDING_KIND.LIABILITY, liability_input_mode=INPUT_MODE.AMOUNT_DUE)`；`CostBasisService(cost_basis_categories=COST_BASIS_INPUT.CATEGORIES, premium_categories=PREMIUM_INPUT.CATEGORIES)`；`BalanceInputService(balance_categories=BALANCE_INPUT.CATEGORIES)` |
+| `views/settings.py`、`app.py` | 不變 |
 
 ---
 
@@ -492,15 +629,17 @@ def holding_value_lines(*, trend: HoldingValueTrend) -> go.Figure: ...
 | **SC-037**（轉移輸入防呆） | 功能移除 | `delta: REMOVED`；刪除 `TestTransferInputGuard` |
 | **SC-079**、**SC-080**（轉移時濾掉股票/ETF 端） | 功能移除 | `delta: REMOVED`；刪除 `tests/test_cost_basis.py::TestTransferRecordsToWrite` |
 | **SC-086**（轉移累加寫入） | 功能移除 | `delta: REMOVED`；刪除 `tests/test_monthly_input.py` 的 accumulate 測試群 |
-| **SC-085**（批次寫入失敗不留部分結果） | `accumulate_net_investments` 的 rollback 測試失去對象；`upsert_records` / `delete_record_and_upsert` 的 rollback 測試仍然有效，而且現在也涵蓋活存/定存/保險 | 修訂卡片：拿掉轉移相關敘述，觸發情境擴大到活存/定存/保險；刪除 `test_sc085_accumulate_failure_rolls_back_all_writes` |
+| **SC-085**（批次寫入失敗不留部分結果） | `accumulate_net_investments` 的 rollback 測試失去對象；`upsert_records` / `delete_record_and_upsert` 的 rollback 測試仍然有效，而且現在也涵蓋活存/定存/保險。使用者已回答卡片的兩個 `open_questions`（AD-10）。第一題：**畫面改顯示友善訊息**（例如「存檔失敗，資料未變更，請重試」），細節寫進 log，不顯示程式堆疊。第二題：保證延伸到 CSV 整批覆蓋（整個匯入同一交易），單筆 `upsert_record` 不需要 | 修訂卡片：拿掉轉移相關敘述、觸發情境擴大到活存/定存/保險與負債（Change 內的版本已部分改過）；**移除兩個 `open_questions`**，並把答案寫進卡片：(1) THEN 的「錯誤原樣往上拋，交由既有的錯誤處理機制呈現」改成「頁面以紅字顯示友善訊息、告知資料未變更可重試；錯誤細節寫入 log；畫面不顯示程式堆疊」；(2) 補上「單筆寫入不在此保證範圍」。測試：`test_sc085_upsert_records_failure_reraises_original_error` 改成斷言拋出 `PersistenceError`，且 `__cause__` 是原始錯誤；另外兩個 rollback 測試的 `pytest.raises(RuntimeError)` 改成 `pytest.raises(PersistenceError)`；新增「commit 失敗也會 rollback 並轉成 `PersistenceError`」、「rollback 失敗仍拋 `PersistenceError`，原始錯誤帶有 note」兩種邊界；刪除 `test_sc085_accumulate_failure_rolls_back_all_writes`。View 層（`tests/test_input_view.py`）建議加一個用 Record 替身拋 `PersistenceError` 的測試，斷言畫面只出現友善訊息 |
+| **CSV 整批覆蓋的原子性**（新行為，AD-10） | 目前沒有卡片涵蓋；SC-031（往返還原一致）和 SC-032（驗證失敗拒絕）都只管寫入前的驗證和成功路徑，不涉及寫入中途失敗 | scenario-author 新增一張 capability 為 `data-io` 的卡（推薦，和 SC-085 的 `monthly-input` 分開），或在 SC-085 加一條邊界。行為重點：驗證通過後，三張表寫入途中任一步失敗 → 三張表都維持匯入前狀態、資料庫仍為空、可以直接重新匯入；畫面顯示友善訊息（例如「匯入失敗，資料未變更，請重試」，字樣由 SC 定）、不露堆疊、細節寫進 log（同 SC-085）。測試落點建議 `tests/test_data_io.py`，用真的記憶體 DB 搭配 `TransactionRepository` 和三個 `*_with_context` 方法，注入一個中途會失敗的 cursor 替身（比照既有 `test_sc085_*` 的 `_FailingCursor`），斷言拋出 `PersistenceError` 且三張表內容不變 |
+| SC-031、SC-032（CSV 匯出入） | 驗證和往返都在 Service 層，不受寫入路徑改變影響；`tests/` 裡沒有直接呼叫 `replace_all` 的測試 | 不需修改；確認 `tests/test_data_io.py` 仍全數通過即可 |
 | **SC-009**（非股票項目賣出：記市值 0 與負淨投入；例子是保險解約） | 保險改填累計保費＋解約金＋領回，解約月份由推算得到負淨投入（落地結果相同），卡片中「使用者輸入淨投入 −530000」的敘述不再成立 | 修訂卡片，改用 BR-2 的輸入方式；`test_sc009_*` 只驗 Repository/Return 層，若仍然成立可保留，由 scenario-author 判斷 |
 | **SC-087**（一般分類錄入框帶入既有值；例子是活存的市值＋淨投入） | 一般編輯器已移除；活存只剩餘額一格 | 修訂卡片，改成活存/定存的餘額帶入（及負債的應繳金額帶入）；`build_record_prefill` 的 Service 層測試仍然有效 |
 | **SC-089**（本月已存紀錄表） | 負債列改顯示在「應繳金額」欄、提醒字樣改變；卡片中「執行一次涉及活存的項目間轉移」的步驟已經不存在 | 修訂卡片（BR-4、BR-5）；`summarize_month` 測試補上 `is_liability` 斷言 |
 | SC-006（新增/編輯/刪除單列，例子是「填入市值、淨投入 0」） | Repository 層的 CRUD 行為不變；卡片的 UI 敘述（手填淨投入）可能過時 | scenario-author 判斷是否修訂措辭；Repository 測試不受影響 |
 | SC-074（`uses_cost_basis` 只對股票/ETF 為真） | 語意不變（保險另有守門） | 不需修改；`test_cost_basis.py` 的 `service` fixture 要補 `premium_categories`（機械式） |
 | SC-077、SC-078（股票連動重算） | 不變 | 無 |
-| `tests/test_input_view.py` | 轉移相關測試（`test_transfer_button_passes_selected_year_month`、`TestTransferFiltersCostBasisEnd`、`TestTransferAccumulates`）、`test_non_stock_holding_shows_market_value_fields`（一般編輯器）都失效；替身缺 `resolve_input_mode`、`balance_input_service` | 刪除或改寫；補齊替身 |
-| `tests/test_bootstrap.py` | Container 多一欄；`MonthlyInputService` 和 `CostBasisService` 的注入值增加 | 補上斷言 |
+| `tests/test_input_view.py` | 轉移相關測試（`test_transfer_button_passes_selected_year_month`、`TestTransferFiltersCostBasisEnd`、`TestTransferAccumulates`）、`test_non_stock_holding_shows_market_value_fields`（一般編輯器）都失效；替身缺 `resolve_input_mode`、`balance_input_service`；負債的存檔與刪除改呼叫 `upsert_records` / `delete_record_and_upsert` | 刪除或改寫；補齊替身 |
+| `tests/test_bootstrap.py` | Container 多兩欄（`balance_input_service`、`transaction_repo`）；`MonthlyInputService` 和 `CostBasisService` 的注入值增加 | 補上斷言（`transaction_repo` 和其他 Repository 共用同一條連線） |
 | `tests/test_monthly_input.py` 的 `_service()` | `MonthlyInputService` 建構子多三個必填參數 | 機械式補參數 |
 
 scenario-author 另外應該掃過 capability 為 `monthly-input` / `cost-basis-input` 的所有卡片，確認有沒有其他以活存、定存、保險、負債為例、描述「手填淨投入」或「項目間轉移」的敘述。
@@ -517,12 +656,19 @@ scenario-author 另外應該掃過 capability 為 `monthly-input` / `cost-basis-
 - **活存/定存「報酬為 0」只在新制推算的月份成立**：歷史月份仍然是舊的手填口徑（AD-9）。
 - **`views/input.py` 會變長**（AD-7）：四個編輯器加上預覽，刪掉轉移之後預估仍淨增約 100～150 行，建議實作時把共用的預覽骨架抽成私有函式。
 - **趨勢圖項目多時圖例擁擠**（AD-8），項目改名後整條線都用新名稱。
+- **rollback 本身失敗時，「資料未變更」只在實務上成立**（AD-10）：`write_transaction` 會把 rollback 的錯誤附成 note，仍拋 `PersistenceError`，所以畫面不會露出堆疊。但如果連線其實仍然有效，未 commit 的半套狀態理論上仍可能被之後的 commit 帶入。實務上 rollback 失敗幾乎都是 stream 已失效（伺服器端已丟棄該交易），下一輪 rerun 會由 `get_resilient_container` 重連。
+- **友善錯誤只涵蓋「寫入交易」**（AD-10）：
+  - 月度錄入頁的所有寫入，以及 CSV 匯入，失敗時都會顯示友善訊息、不露堆疊。
+  - **讀取失敗**（例如 `read_holding_records`、`read_month`）和**其他頁面的單筆寫入**（設定頁的 `add_holding` / `update_holding` / `upsert_target`、`insert_record` 等）不經過 `write_transaction`。libsql 的 `ValueError` 不是 `AssetLabError`，仍會以 Streamlit 預設例外畫面呈現（含堆疊）。
+  - 每輪 rerun 開頭的 `get_resilient_container` 會先探測並重連失效的連線，降低讀取失敗的機率，但不能完全消除。
+  - 公開部署若要全面隱藏堆疊，建議另案處理：例如讓這些單筆方法也走 `write_transaction`，或在 `app.py` 加一個全站兜底處理。不在本次範圍。
+- **`RecordRepository.upsert_record` / `delete_record` / `insert_record` 在正式程式碼中已無呼叫端**（AD-10）：只剩 SC-006、SC-007 的測試和測試資料準備在用。本次保留，是否刪除（以及 SC-006、SC-007 要不要改寫成以 compound 方法描述）另案決定。
 
 ---
 
 ## 待確認事項
 
-> 以下都不影響架構，只影響個別函式的邊界或呈現。每一項都已標出推薦的預設值，實作會照推薦值進行，除非使用者另有決定。
+> Q9、Q10 已由使用者定案（見 AD-10）。其餘都不影響架構，只影響個別函式的邊界或呈現；每一項都已標出推薦的預設值，實作會照推薦值進行，除非使用者另有決定。
 
 | # | 議題 | 選項 | 推薦 |
 |---|------|------|------|
@@ -534,6 +680,8 @@ scenario-author 另外應該掃過 capability 為 `monthly-input` / `cost-basis-
 | Q6 | 活存/定存編輯器要不要在存檔前顯示「前期餘額、推算淨投入」預覽（proposal 沒有明講） | A：顯示（和股票、保險一致）。B：不顯示 | **A**。使用者可以在存檔前核對自動算出的數字，也幾乎不增加成本 |
 | Q7 | 趨勢圖遇到缺月或市值空白（proposal 交由設計決定） | A：畫成斷點（不連線）。B：沿用前值。C：直接連線跨過 | **A**。和配置頁其他圖「空白不貢獻」的口徑一致，不畫出沒填過的數字 |
 | Q8 | 「應繳金額」的改名範圍 | A：只改單一負債的金額欄（錄入框、本月紀錄表、提醒）；淨值圖的「總負債」彙總線和 CSV／DB 欄名不改。B：連「總負債」也改 | **A**。BR-4 講的是負債的金額欄，「總負債」是彙總概念 |
+| Q9 | 使用者決定「CSV 整批覆蓋 `replace_all` 也要全部成功或全部不生效」，保證範圍要怎麼解讀（AD-10） | A：只在兩個 `replace_all` 內各自補 rollback（字面最小範圍）。三張表仍分三次 commit，整批匯入可能停在「主檔已寫入、紀錄失敗」，而且會卡在空庫守門、無法重新匯入。B：整個 CSV 匯入（主檔、紀錄、目標配置）放進同一個交易 | **已決定：B**（使用者確認）。整個 CSV 匯入在同一個交易內完成 |
+| Q10 | 批次寫入與 CSV 匯入失敗時，畫面怎麼呈現（AD-10） | A：沿用既有行為，libsql 的 `ValueError` 不是 `AssetLabError`，會以 Streamlit 預設例外畫面（含堆疊）呈現。B：頁面接住資料庫錯誤，以紅字顯示友善訊息，細節進 log，不露堆疊 | **已決定：B**（使用者確認，app 公開部署）。做法：Repository 在寫入交易邊界 rollback 後轉成 `PersistenceError`，由頁面既有的 `except AssetLabError` 顯示（AD-10） |
 
 ---
 
@@ -550,5 +698,6 @@ scenario-author 另外應該掃過 capability 為 `monthly-input` / `cost-basis-
 | AD-7 | 架構 | 月度錄入頁依錄入方式分派到四個編輯器，各用獨立的 widget key；存檔一律「Service 規劃 → Repository 寫入」 | High |
 | AD-8 | 架構 | `AllocationService.holding_value_trend` 加上 `charts.holding_value_lines`；x 軸是資產有資料月的聯集，缺月或空白畫成斷點，只畫資產 | High |
 | AD-9 | 架構 | 不做資料遷移、不回溯重算、不動 schema 和 CSV（BR-6） | High |
+| AD-10 | 架構 | 共用 `write_transaction`：commit 和 rollback 集中在一處，失敗時轉成友善的 `PersistenceError`（原始錯誤保留在 `__cause__` 供 log）。月度錄入四種方式的寫入都走 compound 方法；CSV 匯入由 Page 持有 `TransactionRepository.transaction()`，三表用 `*_with_context` 在同一交易內寫入；刪除沒有 rollback 的 `replace_all` | High |
 | TD-1 | 技術 | Plotly `go.Scatter` 多 trace＋`connectgaps=False`＋category 軸固定順序；圖例切換用內建行為 | High |
 | TD-2 | 技術 | 技術棧全部沿用，不加新依賴 | High |
