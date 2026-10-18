@@ -22,6 +22,17 @@ class NetInvestmentDerivation(BaseModel):
     net_investment: float
 
 
+class BalanceDerivation(BaseModel):
+    """活存/定存當月淨投入推算結果（存檔前預覽用）。
+
+    previous_balance 取年月早於推算月、最近一筆有餘額的紀錄；都沒有則為主檔初始市值
+    （None 當 0）。
+    """
+
+    previous_balance: float
+    net_investment: float
+
+
 class ReturnResult(BaseModel):
     """單一維度的報酬率結果。
 

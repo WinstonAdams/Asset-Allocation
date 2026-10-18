@@ -28,7 +28,11 @@ import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import COST_BASIS_INPUT, PROTOCOL_DOC_RELATIVE_PATH
+from asset_lab.core.constants import (
+    BALANCE_INPUT,
+    COST_BASIS_INPUT,
+    PROTOCOL_DOC_RELATIVE_PATH,
+)
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.house_param_repository import HouseParamRepository
 from asset_lab.repositories.protocol_doc_repository import ProtocolDocRepository
@@ -40,6 +44,7 @@ from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.repositories.transaction_repository import TransactionRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
+from asset_lab.services.balance_input_service import BalanceInputService
 from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.house_service import HouseService
@@ -88,6 +93,7 @@ class Container:
     data_io_service: DataIoService
     monthly_input_service: MonthlyInputService
     cost_basis_service: CostBasisService
+    balance_input_service: BalanceInputService
     protocol_service: ProtocolService
     affordability_service: AffordabilityService
     house_service: HouseService
@@ -160,6 +166,7 @@ def build_container(*, conn: "Connection") -> Container:
             holding_repo=holding_repo, record_repo=record_repo
         ),
         cost_basis_service=CostBasisService(cost_basis_categories=COST_BASIS_INPUT.CATEGORIES),
+        balance_input_service=BalanceInputService(balance_categories=BALANCE_INPUT.CATEGORIES),
         protocol_service=ProtocolService(),
         affordability_service=AffordabilityService(),
         house_service=HouseService(),
