@@ -17,7 +17,8 @@ import streamlit as st
 
 # ==== 專案內部 ====
 from asset_lab.bootstrap import Container
-from asset_lab.core.exceptions import AssetLabError
+from asset_lab.core.exceptions import AssetLabError, PersistenceError
+from asset_lab.repositories.csv_import_writer import write_import
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,9 @@ def _render_export(*, container: Container) -> None:
 
 
 def _render_import(*, container: Container) -> None:
-    """上傳三份 CSV，驗證後還原到空庫（驗證失敗的 catch 在 render 統一處理）。"""
+    """上傳三份 CSV，驗證後還原到空庫（驗證失敗的 catch 在 render 統一處理）。
+
+    三張表整批寫入在單一交易內完成；寫入失敗整批復原並顯示友善訊息。"""
     st.subheader("匯入（還原到空庫）")
     st.warning("匯入僅支援還原到空的資料庫；若庫內已有資料，匯入會被拒絕以免污染。")
 
@@ -82,10 +85,21 @@ def _render_import(*, container: Container) -> None:
         targets_csv=targets_file.getvalue(),
         target_db_empty=target_db_empty,
     )
-    holding_repo.replace_all(holdings=holdings)
-    record_repo.replace_all(records=records)
-    for target in targets:
-        target_repo.upsert_target(target=target)
+    # 三張表在同一交易寫入：任一步失敗整批 rollback，資料庫維持匯入前狀態
+    try:
+        write_import(
+            transaction_repo=container.transaction_repo,
+            holding_repo=holding_repo,
+            record_repo=record_repo,
+            target_repo=target_repo,
+            holdings=holdings,
+            records=records,
+            targets=targets,
+        )
+    except PersistenceError:
+        logger.exception("CSV 匯入寫入失敗")
+        st.error("匯入失敗，資料未變更，請重試")
+        return
     st.success("匯入完成")
 
 

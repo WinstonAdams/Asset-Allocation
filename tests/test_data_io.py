@@ -1,16 +1,25 @@
 # ==== 原生（標準庫） ====
 import io
+from types import SimpleNamespace
 
 # ==== 第三方套件 ====
+import libsql
 import pandas as pd
 import pytest
+from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND, HOLDING_PURPOSE
-from asset_lab.core.exceptions import DataValidationError
+from asset_lab.core.exceptions import DataValidationError, PersistenceError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.target import TargetAllocationModel
+from asset_lab.repositories.csv_import_writer import write_import
+from asset_lab.repositories.holding_repository import HoldingRepository
+from asset_lab.repositories.record_repository import RecordRepository
+from asset_lab.repositories.schema_repository import SchemaRepository
+from asset_lab.repositories.target_repository import TargetRepository
+from asset_lab.repositories.transaction_repository import TransactionRepository
 from asset_lab.services.data_io_service import DataIoService
 
 
@@ -631,3 +640,186 @@ class TestLegacyRecordsCsvWithoutCashDividendColumn:
         )
         assert records[0].realized_income == 5000.0
         assert records[0].cash_dividend is None
+
+
+class _FailingCursor:
+    """包真實 cursor：第 fail_at 次 execute 起拋錯，模擬匯入寫入中途失敗。"""
+
+    def __init__(self, real_cursor, *, fail_at: int) -> None:
+        self._real_cursor = real_cursor
+        self._fail_at = fail_at
+        self._calls = 0
+
+    def execute(self, *args: object, **kwargs: object):
+        self._calls += 1
+        if self._calls == self._fail_at:
+            raise RuntimeError("模擬匯入寫入中途失敗")
+        return self._real_cursor.execute(*args, **kwargs)
+
+
+class _FlakyConnection:
+    """包真實連線：cursor 注入中途失敗；可選擇 commit 失敗或 rollback 失敗。"""
+
+    def __init__(
+        self, real_conn, *, fail_at: int = 0, commit_fails: bool = False,
+        rollback_fails: bool = False,
+    ) -> None:
+        self._real_conn = real_conn
+        self._fail_at = fail_at
+        self._commit_fails = commit_fails
+        self._rollback_fails = rollback_fails
+
+    def cursor(self):
+        return _FailingCursor(self._real_conn.cursor(), fail_at=self._fail_at)
+
+    def commit(self):
+        if self._commit_fails:
+            raise RuntimeError("模擬 commit 失敗")
+        self._real_conn.commit()
+
+    def rollback(self):
+        if self._rollback_fails:
+            raise RuntimeError("模擬 rollback 失敗")
+        self._real_conn.rollback()
+
+
+@pytest.fixture
+def real_conn():
+    connection = libsql.connect(":memory:")
+    SchemaRepository(conn=connection).ensure_schema()
+    return connection
+
+
+def _parsed_import(service: DataIoService):
+    """產出一份驗證通過的匯入內容（2 筆主檔、3 筆紀錄、2 筆目標）。"""
+    holdings_csv = service.export_holdings_csv(holdings=_holdings())
+    records_csv = service.export_records_csv(records=_records_df())
+    targets_csv = service.export_targets_csv(targets=_targets())
+    return service.parse_and_validate(
+        holdings_csv=holdings_csv,
+        records_csv=records_csv,
+        targets_csv=targets_csv,
+        target_db_empty=True,
+    )
+
+
+def _run_import(conn, tx_conn, parsed) -> None:
+    """以真實的匯入寫入函式，用 tx_conn 開交易、conn 供各 Repository 持有。"""
+    holdings, records, targets = parsed
+    write_import(
+        transaction_repo=TransactionRepository(conn=tx_conn),
+        holding_repo=HoldingRepository(conn=conn),
+        record_repo=RecordRepository(conn=conn),
+        target_repo=TargetRepository(conn=conn),
+        holdings=holdings,
+        records=records,
+        targets=targets,
+    )
+
+
+def _db_counts(conn) -> tuple[int, int, int]:
+    return (
+        len(HoldingRepository(conn=conn).list_holdings()),
+        len(RecordRepository(conn=conn).read_all()),
+        len(TargetRepository(conn=conn).read_targets()),
+    )
+
+
+class TestImportAtomic:
+    """CSV 整批匯入跨三張表單一交易 —— SC-107。"""
+
+    @pytest.mark.scenario("SC-107")
+    def test_sc107_success_writes_all_three_tables(self, service, real_conn):
+        _run_import(real_conn, real_conn, _parsed_import(service))
+        assert _db_counts(real_conn) == (2, 3, 2)
+
+    @pytest.mark.scenario("SC-107")
+    def test_sc107_mid_failure_leaves_all_three_tables_empty(self, service, real_conn):
+        # execute 順序：1 刪主檔、2-3 寫主檔、4 刪紀錄、5-6 寫紀錄（第 6 次失敗）
+        parsed = _parsed_import(service)
+        tx_conn = _FlakyConnection(real_conn, fail_at=6)
+
+        with pytest.raises(PersistenceError) as exc_info:
+            _run_import(real_conn, tx_conn, parsed)
+
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert _db_counts(real_conn) == (0, 0, 0)
+
+    @pytest.mark.scenario("SC-107")
+    def test_sc107_failure_in_targets_step_also_rolls_back_earlier_tables(
+        self, service, real_conn
+    ):
+        # 第 9 次 execute（寫第二筆目標）失敗：主檔與紀錄也要復原
+        parsed = _parsed_import(service)
+        tx_conn = _FlakyConnection(real_conn, fail_at=9)
+
+        with pytest.raises(PersistenceError):
+            _run_import(real_conn, tx_conn, parsed)
+
+        assert _db_counts(real_conn) == (0, 0, 0)
+
+    @pytest.mark.scenario("SC-107")
+    def test_sc107_can_reimport_same_csv_after_failure(self, service, real_conn):
+        parsed = _parsed_import(service)
+        with pytest.raises(PersistenceError):
+            _run_import(real_conn, _FlakyConnection(real_conn, fail_at=6), parsed)
+
+        _run_import(real_conn, real_conn, parsed)
+
+        assert _db_counts(real_conn) == (2, 3, 2)
+
+    @pytest.mark.scenario("SC-107")
+    def test_sc107_commit_failure_rolls_back_and_raises_same_friendly_error(
+        self, service, real_conn
+    ):
+        parsed = _parsed_import(service)
+
+        with pytest.raises(PersistenceError) as exc_info:
+            _run_import(real_conn, _FlakyConnection(real_conn, commit_fails=True), parsed)
+
+        assert str(exc_info.value) == PersistenceError.DEFAULT_MESSAGE
+        assert _db_counts(real_conn) == (0, 0, 0)
+
+    @pytest.mark.scenario("SC-107")
+    def test_sc107_rollback_failure_still_raises_same_friendly_error(self, service, real_conn):
+        parsed = _parsed_import(service)
+        tx_conn = _FlakyConnection(real_conn, fail_at=6, rollback_fails=True)
+
+        with pytest.raises(PersistenceError) as exc_info:
+            _run_import(real_conn, tx_conn, parsed)
+
+        assert str(exc_info.value) == PersistenceError.DEFAULT_MESSAGE
+
+
+class TestImportFailureMessage:
+    """寫入失敗時頁面顯示友善紅字、不露出原始錯誤 —— SC-107。"""
+
+    @pytest.mark.scenario("SC-107")
+    def test_sc107_failure_shows_friendly_error_without_raw_detail(self, service, real_conn):
+        container = SimpleNamespace(
+            data_io_service=service,
+            holding_repo=HoldingRepository(conn=real_conn),
+            record_repo=RecordRepository(conn=real_conn),
+            target_repo=TargetRepository(conn=real_conn),
+            transaction_repo=TransactionRepository(
+                conn=_FlakyConnection(real_conn, fail_at=6)
+            ),
+        )
+        at = AppTest.from_file("views/data_io.py")
+        at.session_state["container"] = container
+        at.run()
+        for key, content in (
+            ("up_holdings", service.export_holdings_csv(holdings=_holdings())),
+            ("up_records", service.export_records_csv(records=_records_df())),
+            ("up_targets", service.export_targets_csv(targets=_targets())),
+        ):
+            uploader = next(u for u in at.get("file_uploader") if u.key == key)
+            uploader.set_value([("data.csv", content, "text/csv")])
+        at.button[0].click()
+        at.run()
+
+        errors = [e.value for e in at.error]
+        assert errors == ["匯入失敗，資料未變更，請重試"]
+        assert not at.exception
+        assert "模擬匯入寫入中途失敗" not in str(errors)
+        assert _db_counts(real_conn) == (0, 0, 0)

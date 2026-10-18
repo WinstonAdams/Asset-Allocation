@@ -21,7 +21,7 @@ delete_record_and_upsert 任一步失敗（含 commit）就先 rollback 再轉�
 """
 
 # ==== 原生（標準庫） ====
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # ==== 第三方套件 ====
 import pandas as pd
@@ -246,13 +246,13 @@ class RecordRepository:
             for record in records:
                 cursor.execute(_UPSERT, _values(record))
 
-    def replace_all(self, *, records: list[MonthlyRecordModel]) -> None:
-        """清空後批次寫入全部紀錄（CSV 匯入用）。"""
-        cursor = self._conn.cursor()
+    def replace_all_with_context(
+        self, *, cursor: Any, records: list[MonthlyRecordModel]
+    ) -> None:
+        """在呼叫端的交易 context 內清空後批次寫入全部紀錄（CSV 匯入用），不自行 commit。"""
         cursor.execute(_DELETE_ALL)
         for record in records:
             cursor.execute(_INSERT, _values(record))
-        self._conn.commit()
 
     @staticmethod
     def _to_dataframe(rows: list[tuple]) -> pd.DataFrame:

@@ -5,7 +5,7 @@
 """
 
 # ==== 原生（標準庫） ====
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # ==== 第三方套件 ====
 # 無
@@ -55,6 +55,13 @@ class TargetRepository:
         cursor = self._conn.cursor()
         cursor.execute(_UPSERT, (target.category, target.target_weight))
         self._conn.commit()
+
+    def upsert_targets_with_context(
+        self, *, cursor: Any, targets: list[TargetAllocationModel]
+    ) -> None:
+        """在呼叫端的交易 context 內批次 upsert 分類目標（CSV 匯入用），不自行 commit。"""
+        for target in targets:
+            cursor.execute(_UPSERT, (target.category, target.target_weight))
 
     def read_all(self) -> list[TargetAllocationModel]:
         """讀全部目標配置（CSV 匯出用）；與 read_targets 同結果。"""
