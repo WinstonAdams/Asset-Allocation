@@ -15,7 +15,7 @@
 
 | Task | 狀態 | 備註 |
 |------|------|------|
-| t01 寫入交易工具與 PersistenceError | 未開始 | SC-085（Repository 層）|
+| t01 寫入交易工具與 PersistenceError | 完成 | SC-085（Repository 層）；RED 補驗通過，580 passed |
 | t02 CSV 整批匯入單一交易 | 未開始 | SC-107 |
 | t03 錄入方式常數與活存/定存餘額推算 | 未開始 | SC-092/093/094/106/103 |
 | t04 保險併入累計成本鏈 | 未開始 | SC-095~099 |

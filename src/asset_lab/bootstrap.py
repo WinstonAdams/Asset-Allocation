@@ -37,6 +37,7 @@ from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
 from asset_lab.repositories.target_repository import TargetRepository
+from asset_lab.repositories.transaction_repository import TransactionRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.cost_basis_service import CostBasisService
@@ -80,6 +81,7 @@ class Container:
     protocol_doc_repo: ProtocolDocRepository
     house_param_repo: HouseParamRepository
     subjective_trigger_repo: SubjectiveTriggerRepository
+    transaction_repo: TransactionRepository
     return_service: ReturnService
     allocation_service: AllocationService
     period_service: PeriodService
@@ -138,6 +140,7 @@ def build_container(*, conn: "Connection") -> Container:
     protocol_doc_repo = ProtocolDocRepository(doc_path=_PROTOCOL_DOC_PATH)
     house_param_repo = HouseParamRepository(conn=conn)
     subjective_trigger_repo = SubjectiveTriggerRepository(conn=conn)
+    transaction_repo = TransactionRepository(conn=conn)
 
     return Container(
         holding_repo=holding_repo,
@@ -148,6 +151,7 @@ def build_container(*, conn: "Connection") -> Container:
         protocol_doc_repo=protocol_doc_repo,
         house_param_repo=house_param_repo,
         subjective_trigger_repo=subjective_trigger_repo,
+        transaction_repo=transaction_repo,
         return_service=ReturnService(),
         allocation_service=AllocationService(),
         period_service=PeriodService(),

@@ -7,7 +7,7 @@ import pytest
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND
-from asset_lab.core.exceptions import DataValidationError
+from asset_lab.core.exceptions import DataValidationError, PersistenceError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.repositories.holding_repository import HoldingRepository
@@ -705,15 +705,34 @@ class _FailAfterNCallsConnection:
     直接查驗結果的 Repository 實例（用於斷言 rollback 後的資料狀態）。
     """
 
-    def __init__(self, real_conn, *, fail_at: int) -> None:
+    def __init__(self, real_conn, *, fail_at: int, rollback_fails: bool = False) -> None:
         self._real_conn = real_conn
         self._fail_at = fail_at
+        self._rollback_fails = rollback_fails
 
     def cursor(self):
         return _FailingCursor(self._real_conn.cursor(), fail_at=self._fail_at)
 
     def commit(self):
         self._real_conn.commit()
+
+    def rollback(self):
+        if self._rollback_fails:
+            raise RuntimeError("模擬 rollback 失敗")
+        self._real_conn.rollback()
+
+
+class _CommitFailingConnection:
+    """包一個真實連線：execute 正常，commit 一律失敗；rollback 轉呼叫真實連線。"""
+
+    def __init__(self, real_conn) -> None:
+        self._real_conn = real_conn
+
+    def cursor(self):
+        return self._real_conn.cursor()
+
+    def commit(self):
+        raise RuntimeError("模擬 commit 失敗")
 
     def rollback(self):
         self._real_conn.rollback()
@@ -729,7 +748,7 @@ class TestBatchWriteRollbackOnFailure:
         # 兩筆待寫入，第二筆 execute 時失敗：第一筆也不應該被留存
         failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=2))
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(PersistenceError):
             failing_repo.upsert_records(
                 records=[
                     _record(seeded_holding_id, "2026-05", 400000.0, 50000.0),
@@ -741,16 +760,20 @@ class TestBatchWriteRollbackOnFailure:
         assert record_repo.read_month(year_month="2026-06") == []
 
     @pytest.mark.scenario("SC-085")
-    def test_sc085_upsert_records_failure_reraises_original_error(
+    def test_sc085_upsert_records_failure_raises_persistence_error_with_cause(
         self, record_repo, conn, seeded_holding_id
     ):
-        # 錯誤原樣往上拋，不被吞掉也不被轉譯成其他例外類型
+        # 轉成友善的 PersistenceError，原始錯誤保留在 __cause__，訊息不內插原始錯誤
         failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=1))
 
-        with pytest.raises(RuntimeError, match="模擬批次寫入中途失敗"):
+        with pytest.raises(PersistenceError) as exc_info:
             failing_repo.upsert_records(
                 records=[_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)]
             )
+
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert "模擬批次寫入中途失敗" in str(exc_info.value.__cause__)
+        assert "模擬批次寫入中途失敗" not in str(exc_info.value)
 
     @pytest.mark.scenario("SC-085")
     def test_sc085_delete_record_and_upsert_failure_restores_deleted_record(
@@ -764,7 +787,7 @@ class TestBatchWriteRollbackOnFailure:
         # call 1 = DELETE、call 2 = 第一筆 upsert（成功）、call 3 = 第二筆 upsert（失敗）
         failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=3))
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(PersistenceError):
             failing_repo.delete_record_and_upsert(
                 holding_id=seeded_holding_id,
                 year_month="2026-05",
@@ -777,6 +800,41 @@ class TestBatchWriteRollbackOnFailure:
         assert record_repo.read_month(year_month="2026-05")[0].market_value == 400000.0
         assert record_repo.read_month(year_month="2026-06") == []
         assert record_repo.read_month(year_month="2026-07") == []
+
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_commit_failure_rolls_back_and_raises_persistence_error(
+        self, record_repo, conn, seeded_holding_id
+    ):
+        # 所有 execute 都成功、最後 commit 失敗：仍須 rollback，不留下已執行的寫入
+        failing_repo = RecordRepository(conn=_CommitFailingConnection(conn))
+
+        with pytest.raises(PersistenceError) as exc_info:
+            failing_repo.upsert_records(
+                records=[_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)]
+            )
+
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert record_repo.read_month(year_month="2026-05") == []
+
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_rollback_failure_still_raises_persistence_error(
+        self, conn, seeded_holding_id
+    ):
+        # 復原本身也失敗：使用者仍只看到同一則友善訊息，原始錯誤在 __cause__，
+        # rollback 的錯誤以 note 附在原始錯誤上供 log 使用
+        failing_repo = RecordRepository(
+            conn=_FailAfterNCallsConnection(conn, fail_at=1, rollback_fails=True)
+        )
+
+        with pytest.raises(PersistenceError) as exc_info:
+            failing_repo.upsert_records(
+                records=[_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)]
+            )
+
+        assert str(exc_info.value) == PersistenceError.DEFAULT_MESSAGE
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, RuntimeError)
+        assert any("rollback" in note for note in cause.__notes__)
 
 
 class TestAccumulateNetInvestments:

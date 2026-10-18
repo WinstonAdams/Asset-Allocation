@@ -12,8 +12,10 @@
 三個 compound method（upsert_records / delete_record_and_upsert /
 accumulate_net_investments）用於一次寫入多列：股票/
 ETF 存檔或刪除時，可能同時牽動存檔列本身與其後受影響的多筆重算列，寫了一半會讓推算鏈不
-一致，故收斂在單一交易內完成——多個 statement 執行完才 commit 一次；任一步失敗就先
-rollback 再原樣往上拋，不在此層記錄錯誤（錯誤處理仍由上層負責）。
+一致，故收斂在單一交易內完成——多個 statement 執行完才 commit 一次；upsert_records /
+delete_record_and_upsert 任一步失敗（含 commit）就先 rollback 再轉成 PersistenceError
+（見 transaction_repository.write_transaction），accumulate_net_investments 仍原樣往上拋；
+本層不記錄錯誤。
 
 報酬率/趨勢/匯出用的區間與全量讀取以 DataFrame 回傳，方便 Service 端做連乘與彙總。
 """
@@ -28,6 +30,7 @@ import pandas as pd
 from asset_lab.core.constants import MONTHLY_RECORDS_TABLE
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.record import MonthlyRecordModel
+from asset_lab.repositories.transaction_repository import write_transaction
 
 if TYPE_CHECKING:
     from libsql import Connection
@@ -205,20 +208,15 @@ class RecordRepository:
         self._conn.commit()
 
     def upsert_records(self, *, records: list[MonthlyRecordModel]) -> None:
-        """批次 upsert 多列，單一交易；任一步失敗則 rollback 後原樣往上拋。
+        """批次 upsert 多列，單一交易；失敗則 rollback 並拋 PersistenceError。
 
         空清單為無操作（不開交易、不 commit）。
         """
         if not records:
             return
-        cursor = self._conn.cursor()
-        try:
+        with write_transaction(self._conn) as cursor:
             for record in records:
                 cursor.execute(_UPSERT, _values(record))
-        except Exception:
-            self._conn.rollback()
-            raise
-        self._conn.commit()
 
     def accumulate_net_investments(self, *, records: list[MonthlyRecordModel]) -> None:
         """把每筆紀錄的 net_investment 視為增量，累加到同 (holding_id, year_month) 的既有列。
@@ -242,16 +240,11 @@ class RecordRepository:
     def delete_record_and_upsert(
         self, *, holding_id: int, year_month: str, records: list[MonthlyRecordModel]
     ) -> None:
-        """刪除單列後批次 upsert 受影響列，單一交易；任一步失敗則 rollback 後原樣往上拋。"""
-        cursor = self._conn.cursor()
-        try:
+        """刪除單列後批次 upsert 受影響列，單一交易；失敗則 rollback 並拋 PersistenceError。"""
+        with write_transaction(self._conn) as cursor:
             cursor.execute(_DELETE_ONE, (holding_id, year_month))
             for record in records:
                 cursor.execute(_UPSERT, _values(record))
-        except Exception:
-            self._conn.rollback()
-            raise
-        self._conn.commit()
 
     def replace_all(self, *, records: list[MonthlyRecordModel]) -> None:
         """清空後批次寫入全部紀錄（CSV 匯入用）。"""

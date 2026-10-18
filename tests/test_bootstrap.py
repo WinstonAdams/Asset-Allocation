@@ -47,6 +47,7 @@ from asset_lab.repositories.protocol_threshold_repository import ProtocolThresho
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
+from asset_lab.repositories.transaction_repository import TransactionRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.cost_basis_service import CostBasisService
@@ -145,12 +146,14 @@ def test_build_container_wires_repositories_to_connection() -> None:
     assert isinstance(container.target_repo, TargetRepository)
     assert isinstance(container.schema_repo, SchemaRepository)
     assert isinstance(container.protocol_threshold_repo, ProtocolThresholdRepository)
+    assert isinstance(container.transaction_repo, TransactionRepository)
     # 所有 Repository 接上同一連線
     assert container.holding_repo._conn is conn
     assert container.record_repo._conn is conn
     assert container.target_repo._conn is conn
     assert container.schema_repo._conn is conn
     assert container.protocol_threshold_repo._conn is conn
+    assert container.transaction_repo._conn is conn
 
 
 def test_build_container_wires_services() -> None:
