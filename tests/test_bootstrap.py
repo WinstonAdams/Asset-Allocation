@@ -40,6 +40,7 @@ from asset_lab.core.constants import (
     HOLDING_PURPOSE,
     HOLDINGS_TABLE,
     MONTHLY_RECORDS_TABLE,
+    PREMIUM_INPUT,
 )
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
@@ -177,6 +178,8 @@ def test_build_container_wires_services() -> None:
     assert container.monthly_input_service._holding_repo is container.holding_repo
     # 總成本推算服務的分類集合注入自常數，不寫死在組裝邏輯裡
     assert container.cost_basis_service.cost_basis_categories == COST_BASIS_INPUT.CATEGORIES
+    # 保險累計保費推算的分類集合同樣注入自常數
+    assert container.cost_basis_service.premium_categories == PREMIUM_INPUT.CATEGORIES
     # 活存/定存餘額推算服務的分類集合同樣注入自常數
     assert isinstance(container.balance_input_service, BalanceInputService)
     assert container.balance_input_service.balance_categories == BALANCE_INPUT.CATEGORIES

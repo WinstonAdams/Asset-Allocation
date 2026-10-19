@@ -1,4 +1,4 @@
-"""股票/ETF 依總成本與已實現收益推算月淨投入的核心運算（純運算，無 I/O、無 Streamlit）。"""
+"""股票/ETF（總成本）與保險（累計保費）推算月淨投入的核心運算（純運算，無 I/O、無 Streamlit）。"""
 
 # ==== 原生（標準庫） ====
 import math
@@ -9,19 +9,27 @@ import math
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
-from asset_lab.models.results import CostBasisEditorPrefill, NetInvestmentDerivation
+from asset_lab.models.results import (
+    CostBasisEditorPrefill,
+    NetInvestmentDerivation,
+    PremiumEditorPrefill,
+)
 
 
 class CostBasisService:
-    """股票/ETF 總成本推算淨投入（純運算：無 I/O、無 Streamlit）。"""
+    """股票/ETF 總成本與保險累計保費推算淨投入（純運算：無 I/O、無 Streamlit）。"""
 
-    def __init__(self, *, cost_basis_categories: frozenset[str]) -> None:
+    def __init__(
+        self, *, cost_basis_categories: frozenset[str], premium_categories: frozenset[str]
+    ) -> None:
         """初始化總成本推算服務。
 
         Args:
             cost_basis_categories: 走總成本推算的資產分類集合（由 bootstrap 注入）。
+            premium_categories: 走累計保費推算的資產分類集合（由 bootstrap 注入）。
         """
         self.cost_basis_categories = cost_basis_categories
+        self.premium_categories = premium_categories
 
     def uses_cost_basis(self, *, holding: HoldingModel) -> bool:
         """判斷項目是否以總成本＋已實現收益推算月淨投入。
@@ -210,9 +218,9 @@ class CostBasisService:
             異動月份之後推算值有變的新制列，依年月排序；沒有任何列受影響時為空清單。
 
         Raises:
-            DataValidationError: 項目分類不適用總成本推算時拋出。
+            DataValidationError: 項目分類不是股票/ETF 或保險時拋出。
         """
-        self._ensure_uses_cost_basis(holding=holding)
+        self._ensure_uses_cost_chain(holding=holding)
 
         working_records = [record for record in records if record.year_month != year_month]
 
@@ -248,6 +256,133 @@ class CostBasisService:
         return CostBasisEditorPrefill(
             total_cost=None, market_value=None, realized_pnl=0.0, cash_dividend=0.0
         )
+
+    def uses_premium(self, *, holding: HoldingModel) -> bool:
+        """判斷項目是否以累計已繳保費＋本月領回推算月淨投入。
+
+        Args:
+            holding: 項目主檔。
+
+        Returns:
+            項目目前分類屬於保險推算範圍時為 True。
+        """
+        return holding.category in self.premium_categories
+
+    def derive_premium(
+        self,
+        *,
+        holding: HoldingModel,
+        records: list[MonthlyRecordModel],
+        year_month: str,
+        cumulative_premium: float,
+        withdrawal: float,
+    ) -> NetInvestmentDerivation:
+        """推算保險項目當月淨投入：(本月累計保費 − 前期累計保費) − 本月領回。
+
+        前期累計保費的取法（含舊制列的過渡估算）與股票/ETF 的前期總成本相同；
+        回傳的 previous_total_cost 即前期累計保費。
+
+        Args:
+            holding: 項目主檔，須為保險分類。
+            records: 該項目的全部月度紀錄（呼叫端保證只含該項目、任意順序）。
+            year_month: 本次要推算的年月（'YYYY-MM'）。
+            cumulative_premium: 本月累計已繳保費。
+            withdrawal: 本月領回金額（不可為負）。
+
+        Returns:
+            前期累計保費、是否為過渡期估算、推算出的本月淨投入。
+
+        Raises:
+            DataValidationError: 項目分類不是保險，或領回金額為負時拋出。
+        """
+        self._ensure_uses_premium(holding=holding)
+        self._ensure_withdrawal_non_negative(withdrawal=withdrawal)
+
+        return self._derive_from_realized_income(
+            holding=holding,
+            records=records,
+            year_month=year_month,
+            total_cost=cumulative_premium,
+            realized_income=withdrawal,
+        )
+
+    def plan_save_premium(
+        self,
+        *,
+        holding: HoldingModel,
+        records: list[MonthlyRecordModel],
+        year_month: str,
+        surrender_value: float,
+        cumulative_premium: float,
+        withdrawal: float,
+    ) -> list[MonthlyRecordModel]:
+        """規劃保險存檔需要寫入的所有列，含連動重算受影響的後續新制列。
+
+        存檔列：解約金存為市值、累計保費存為總成本、領回存為已實現收益。連動
+        重算規則與股票/ETF 相同（只回傳推算值有變的新制列）。
+
+        Args:
+            holding: 項目主檔，須為保險分類。
+            records: 該項目異動前的全部月度紀錄（呼叫端保證只含該項目、任意順序）。
+            year_month: 本次存檔的年月（'YYYY-MM'）。
+            surrender_value: 本月解約金。
+            cumulative_premium: 本月累計已繳保費。
+            withdrawal: 本月領回金額（不可為負）。
+
+        Returns:
+            [存檔列, *異動月份之後推算值有變的新制列]，依年月排序。
+
+        Raises:
+            DataValidationError: 項目分類不是保險，或領回金額為負時拋出。
+        """
+        derivation = self.derive_premium(
+            holding=holding,
+            records=records,
+            year_month=year_month,
+            cumulative_premium=cumulative_premium,
+            withdrawal=withdrawal,
+        )
+        saved_record = MonthlyRecordModel(
+            holding_id=holding.holding_id,
+            year_month=year_month,
+            market_value=surrender_value,
+            net_investment=derivation.net_investment,
+            total_cost=cumulative_premium,
+            realized_income=withdrawal,
+            cash_dividend=None,
+        )
+
+        working_records = [record for record in records if record.year_month != year_month]
+        working_records.append(saved_record)
+
+        changed_following = self._recalculate_following(
+            holding=holding, working_records=working_records, cutoff_year_month=year_month
+        )
+
+        return [saved_record, *changed_following]
+
+    def build_premium_prefill(
+        self, *, records: list[MonthlyRecordModel], year_month: str
+    ) -> PremiumEditorPrefill:
+        """算出保險錄入框的帶入值：該月已有紀錄就照存的值，沒有則累計保費／解約金留空。
+
+        累計保費／解約金為空白（None）或該月無紀錄時保持空白，避免把空白存成 0。
+
+        Args:
+            records: 該項目的月度紀錄（呼叫端保證只含該項目）。
+            year_month: 選取的月份，'YYYY-MM' 格式。
+
+        Returns:
+            帶入值；無相符紀錄時累計保費與解約金留空（None），領回為 0。
+        """
+        for record in records:
+            if record.year_month == year_month:
+                return PremiumEditorPrefill(
+                    cumulative_premium=record.total_cost,
+                    surrender_value=record.market_value,
+                    withdrawal=record.realized_income or 0.0,
+                )
+        return PremiumEditorPrefill(cumulative_premium=None, surrender_value=None, withdrawal=0.0)
 
     def transfer_records_to_write(
         self,
@@ -290,6 +425,46 @@ class CostBasisService:
             raise DataValidationError(
                 f"項目「{holding.name}」分類不適用總成本推算，請改用市值/餘額與淨投入輸入"
             )
+
+    def _ensure_uses_premium(self, *, holding: HoldingModel) -> None:
+        """確保項目分類為保險，否則拋出例外。
+
+        Args:
+            holding: 項目主檔。
+
+        Raises:
+            DataValidationError: 項目分類不是保險時拋出。
+        """
+        if not self.uses_premium(holding=holding):
+            raise DataValidationError(
+                f"項目「{holding.name}」分類不適用累計保費推算，請改用對應的輸入方式"
+            )
+
+    def _ensure_uses_cost_chain(self, *, holding: HoldingModel) -> None:
+        """確保項目分類屬於累計成本鏈（股票/ETF 或保險），否則拋出例外。
+
+        Args:
+            holding: 項目主檔。
+
+        Raises:
+            DataValidationError: 項目分類不是股票/ETF 或保險時拋出。
+        """
+        if not (self.uses_cost_basis(holding=holding) or self.uses_premium(holding=holding)):
+            raise DataValidationError(
+                f"項目「{holding.name}」分類不適用累計成本推算，請改用對應的輸入方式"
+            )
+
+    def _ensure_withdrawal_non_negative(self, *, withdrawal: float) -> None:
+        """確保保險領回金額非負，否則拋出例外。
+
+        Args:
+            withdrawal: 本月領回金額。
+
+        Raises:
+            DataValidationError: 領回金額為負時拋出。
+        """
+        if withdrawal < 0:
+            raise DataValidationError("領回金額不可為負")
 
     def _ensure_cash_dividend_non_negative(self, *, cash_dividend: float) -> None:
         """確保現金股利非負（入帳金額不會是負的），否則拋出例外。

@@ -31,6 +31,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 from asset_lab.core.constants import (
     BALANCE_INPUT,
     COST_BASIS_INPUT,
+    PREMIUM_INPUT,
     PROTOCOL_DOC_RELATIVE_PATH,
 )
 from asset_lab.repositories.holding_repository import HoldingRepository
@@ -165,7 +166,10 @@ def build_container(*, conn: "Connection") -> Container:
         monthly_input_service=MonthlyInputService(
             holding_repo=holding_repo, record_repo=record_repo
         ),
-        cost_basis_service=CostBasisService(cost_basis_categories=COST_BASIS_INPUT.CATEGORIES),
+        cost_basis_service=CostBasisService(
+            cost_basis_categories=COST_BASIS_INPUT.CATEGORIES,
+            premium_categories=PREMIUM_INPUT.CATEGORIES,
+        ),
         balance_input_service=BalanceInputService(balance_categories=BALANCE_INPUT.CATEGORIES),
         protocol_service=ProtocolService(),
         affordability_service=AffordabilityService(),

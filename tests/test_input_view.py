@@ -27,7 +27,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import ASSET_CATEGORIES, COST_BASIS_INPUT
+from asset_lab.core.constants import ASSET_CATEGORIES, COST_BASIS_INPUT, PREMIUM_INPUT
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.monthly_input_service import MonthlyInputService
@@ -156,7 +156,10 @@ def _run_app(
         holding_repo=holding_repo or _StubHoldingRepo(),
         monthly_input_service=service,
         cost_basis_service=cost_basis_service
-        or CostBasisService(cost_basis_categories=COST_BASIS_INPUT.CATEGORIES),
+        or CostBasisService(
+            cost_basis_categories=COST_BASIS_INPUT.CATEGORIES,
+            premium_categories=PREMIUM_INPUT.CATEGORIES,
+        ),
     )
     with mock.patch("asset_lab.services.period_service.today_in_timezone", return_value=today):
         at = AppTest.from_file("views/input.py")

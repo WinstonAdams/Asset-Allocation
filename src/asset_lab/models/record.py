@@ -21,6 +21,10 @@ class MonthlyRecordModel(BaseModel):
     隨 total_cost 同時填寫，新制列一律有值（預設 0）。realized_income 為已實現損益＋
     現金股利的合計；cash_dividend 為其中的現金股利，None 視為 0，已實現損益不另存
     （＝ realized_income − cash_dividend）。
+
+    保險沿用同兩欄：total_cost 為累計已繳保費，realized_income 為本月領回金額
+    （cash_dividend 為 None），market_value 為解約金；total_cost 不為 None 同樣表示
+    新制列。負債的 market_value 為應繳金額。
     """
 
     holding_id: int

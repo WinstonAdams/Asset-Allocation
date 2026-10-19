@@ -15,6 +15,8 @@ class NetInvestmentDerivation(BaseModel):
     is_transition_estimate 為 True 表示前期總成本查無新制上一筆（上一筆是本功能
     上線前建立的舊制列），改以「初始成本＋該月以前所有淨投入」估算，可能與券商
     實際總成本有落差，呈現時應提醒使用者留意。
+
+    保險沿用同一結構：previous_total_cost 為前期累計已繳保費。
     """
 
     previous_total_cost: float
@@ -221,6 +223,14 @@ class CostBasisEditorPrefill(BaseModel):
     market_value: float | None
     realized_pnl: float
     cash_dividend: float
+
+
+class PremiumEditorPrefill(BaseModel):
+    """保險錄入框的帶入值。沒有紀錄時累計保費／解約金留空（None）、領回為 0。"""
+
+    cumulative_premium: float | None
+    surrender_value: float | None
+    withdrawal: float
 
 
 class MonthRecordRow(BaseModel):
