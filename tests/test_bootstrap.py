@@ -39,6 +39,7 @@ from asset_lab.core.constants import (
     HOLDING_KIND,
     HOLDING_PURPOSE,
     HOLDINGS_TABLE,
+    INPUT_MODE,
     MONTHLY_RECORDS_TABLE,
     PREMIUM_INPUT,
 )
@@ -176,6 +177,12 @@ def test_build_container_wires_services() -> None:
     # 月度錄入服務的 I/O 委派接上容器內的 Repository 實例
     assert container.monthly_input_service._record_repo is container.record_repo
     assert container.monthly_input_service._holding_repo is container.holding_repo
+    # 錄入方式解析的對照表、負債性質與負債錄入方式皆注入自常數
+    assert (
+        container.monthly_input_service._input_mode_by_category == INPUT_MODE.BY_ASSET_CATEGORY
+    )
+    assert container.monthly_input_service._liability_kind == HOLDING_KIND.LIABILITY
+    assert container.monthly_input_service._liability_input_mode == INPUT_MODE.AMOUNT_DUE
     # 總成本推算服務的分類集合注入自常數，不寫死在組裝邏輯裡
     assert container.cost_basis_service.cost_basis_categories == COST_BASIS_INPUT.CATEGORIES
     # 保險累計保費推算的分類集合同樣注入自常數

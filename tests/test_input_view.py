@@ -27,7 +27,13 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import ASSET_CATEGORIES, COST_BASIS_INPUT, PREMIUM_INPUT
+from asset_lab.core.constants import (
+    ASSET_CATEGORIES,
+    COST_BASIS_INPUT,
+    HOLDING_KIND,
+    INPUT_MODE,
+    PREMIUM_INPUT,
+)
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.monthly_input_service import MonthlyInputService
@@ -45,8 +51,12 @@ class _StubHoldingRepo:
 
     def list_holdings(self):
         return [
-            SimpleNamespace(holding_id=1, name="台積電", category=_NON_STOCK_CATEGORY),
-            SimpleNamespace(holding_id=2, name="現金", category=_NON_STOCK_CATEGORY),
+            SimpleNamespace(
+                holding_id=1, name="台積電", kind=HOLDING_KIND.ASSET, category=_NON_STOCK_CATEGORY
+            ),
+            SimpleNamespace(
+                holding_id=2, name="現金", kind=HOLDING_KIND.ASSET, category=_NON_STOCK_CATEGORY
+            ),
         ]
 
 
@@ -114,7 +124,13 @@ class _SpyMonthlyInputService:
         self.prefill_calls: list[str] = []
         self.transfer_calls: list[tuple[int, int, float, str]] = []
         # 純運算方法委派真實 Service（不碰 Repo），讓帶入與本月表格走真實邏輯
-        self._real = MonthlyInputService(holding_repo=None, record_repo=None)
+        self._real = MonthlyInputService(
+            holding_repo=None,
+            record_repo=None,
+            input_mode_by_category=INPUT_MODE.BY_ASSET_CATEGORY,
+            liability_kind=HOLDING_KIND.LIABILITY,
+            liability_input_mode=INPUT_MODE.AMOUNT_DUE,
+        )
 
     def build_record_prefill(self, **kwargs):
         return self._real.build_record_prefill(**kwargs)
@@ -250,10 +266,18 @@ class _StubCostBasisHoldingRepo:
     def list_holdings(self):
         return [
             SimpleNamespace(
-                holding_id=10, name="台積電", category=_STOCK_CATEGORY, initial_cost=300000.0
+                holding_id=10,
+                name="台積電",
+                kind=HOLDING_KIND.ASSET,
+                category=_STOCK_CATEGORY,
+                initial_cost=300000.0,
             ),
             SimpleNamespace(
-                holding_id=20, name="現金", category=_NON_STOCK_CATEGORY, initial_cost=None
+                holding_id=20,
+                name="現金",
+                kind=HOLDING_KIND.ASSET,
+                category=_NON_STOCK_CATEGORY,
+                initial_cost=None,
             ),
         ]
 

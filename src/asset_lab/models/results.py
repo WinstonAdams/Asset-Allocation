@@ -236,8 +236,9 @@ class PremiumEditorPrefill(BaseModel):
 class MonthRecordRow(BaseModel):
     """「本月已存紀錄」唯讀表格的單列。
 
-    total_cost/realized_income 只有新制股票/ETF 列有值；
-    market_value_missing 為 True 時需提醒補填市值。
+    total_cost/realized_income 只有新制股票/ETF 與保險列有值（保險為累計已繳保費與領回）；
+    market_value_missing 為 True 時需提醒補填金額（資產為市值/餘額，負債為應繳金額）；
+    is_liability 為 True 時 market_value 是負債的應繳金額，畫面應放在「應繳金額」欄。
     """
 
     holding_id: int
@@ -247,3 +248,4 @@ class MonthRecordRow(BaseModel):
     total_cost: float | None
     realized_income: float | None
     market_value_missing: bool
+    is_liability: bool
