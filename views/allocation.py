@@ -1,8 +1,9 @@
 """資產配置頁（View / Controller）。
 
-職責：渲染四張配置/趨勢圖——圓餅（選定月資產佔比）、堆疊面積（各分類佔比隨月變化）、
-淨值折線（可疊加總資產/總負債）、累積報酬走勢——委派 AllocationService 與 ReturnService
-算資料、交 charts 元件畫 Plotly Figure 後以 st.plotly_chart 呈現；另以表格呈現當月各分類
+職責：渲染五張配置/趨勢圖——圓餅（選定月資產佔比）、堆疊面積（各分類佔比隨月變化）、
+淨值折線（可疊加總資產/總負債）、各項目市值趨勢折線、累積報酬走勢——委派
+AllocationService 與 ReturnService 算資料、交 charts 元件畫 Plotly Figure 後以
+st.plotly_chart 呈現；另以表格呈現當月各分類
 相對目標比重的偏離與是否需再平衡（目標比重本身的設定仍在「設定」頁）。本頁為唯一
 catch 點。
 
@@ -75,6 +76,9 @@ def render() -> None:
             latest_ym=latest_ym,
         )
         _render_net_worth(
+            allocation_service=allocation_service, holdings=holdings, range_df=range_df
+        )
+        _render_holding_trend(
             allocation_service=allocation_service, holdings=holdings, range_df=range_df
         )
         _render_cumulative_twr(
@@ -176,6 +180,18 @@ def _render_net_worth(
         ),
         use_container_width=True,
     )
+
+
+def _render_holding_trend(
+    *,
+    allocation_service: AllocationService,
+    holdings: list[HoldingModel],
+    range_df: pd.DataFrame,
+) -> None:
+    """各資產項目市值趨勢折線（每項目一條，點圖例可隱藏/顯示；缺月與空白為斷點）。"""
+    st.subheader("各項目市值趨勢（折線，單位：萬元）")
+    trend = allocation_service.holding_value_trend(range_df=range_df, holdings=holdings)
+    st.plotly_chart(charts.holding_value_lines(trend=trend), use_container_width=True)
 
 
 def _render_cumulative_twr(

@@ -1,8 +1,9 @@
 """資產配置佔比、漂移與淨值的純運算服務。
 
-本服務為純運算，不碰 I/O、不依賴 Streamlit。三個資料層方法各對應一類圖表：
+本服務為純運算，不碰 I/O、不依賴 Streamlit。四個資料層方法各對應一類圖表：
 snapshot 供圓餅圖（選定月份的資產佔比）、drift_series 供堆疊面積圖（各分類佔比
-隨月份變化）、net_worth_series 供淨值折線圖（跨月淨值趨勢，可疊加總資產/總負債線）。
+隨月份變化）、net_worth_series 供淨值折線圖（跨月淨值趨勢，可疊加總資產/總負債線）、
+holding_value_trend 供各項目市值趨勢折線圖（每個資產項目一條，缺月與空白為斷點）。
 
 配置口徑只看資產：佔比的分子與分母皆僅由資產組成，負債不出現在任何佔比中；
 負債只在淨值口徑以負向參與（淨值＝總資產 − 總負債）。佔比一律以百分比（0–100）
@@ -24,7 +25,13 @@ from asset_lab.core.constants import HOLDING_KIND, MONTHLY_RECORDS_TABLE
 from asset_lab.core.utils import filter_asset_records, parse_year_month
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
-from asset_lab.models.results import AllocationSnapshot, DriftRow, NetWorthPoint
+from asset_lab.models.results import (
+    AllocationSnapshot,
+    DriftRow,
+    HoldingValueSeries,
+    HoldingValueTrend,
+    NetWorthPoint,
+)
 from asset_lab.models.target import TargetAllocationModel
 
 # 佔比以百分比（0–100）表示，與目標比重同單位。
@@ -189,6 +196,54 @@ class AllocationService:
                 )
             )
         return points
+
+    def holding_value_trend(
+        self, *, range_df: pd.DataFrame, holdings: list[HoldingModel]
+    ) -> HoldingValueTrend:
+        """計算各資產項目跨月市值序列，供各項目市值趨勢折線圖（僅資產，不含負債）。
+
+        x 軸節點為資產紀錄有資料月的聯集並依時間排序（缺月不補插）。每個區間內至少
+        有一筆紀錄的資產項目產生一條序列，順序照傳入的 holdings；序列值與 x 軸節點
+        一一對齊，該月沒有紀錄或市值留空時為 None（不補值、不沿用前值），圖上畫成斷點。
+        以 holding_id 識別序列、名稱取主檔現名，購屋用途的資產同樣納入。
+
+        Args:
+            range_df: 區間月度紀錄 DataFrame，含 holding_id、year_month、market_value 欄。
+            holdings: 項目主檔清單，提供 kind / name。
+
+        Returns:
+            HoldingValueTrend；區間內無資產資料時 year_months 與 series 皆為空。
+        """
+        asset_records = filter_asset_records(range_df, holdings)
+        if asset_records.empty:
+            return HoldingValueTrend(year_months=[], series=[])
+
+        year_months = self._sorted_data_months(asset_records)
+        value_by_id_month: dict[tuple[int, str], float | None] = {}
+        for row in asset_records.itertuples(index=False):
+            market_value = getattr(row, MONTHLY_RECORDS_TABLE.MARKET_VALUE)
+            blank = market_value is None or pd.isna(market_value)
+            value_by_id_month[
+                (
+                    int(getattr(row, MONTHLY_RECORDS_TABLE.HOLDING_ID)),
+                    str(getattr(row, MONTHLY_RECORDS_TABLE.YEAR_MONTH)),
+                )
+            ] = None if blank else float(market_value)
+
+        recorded_ids = {holding_id for holding_id, _ in value_by_id_month}
+        series = [
+            HoldingValueSeries(
+                holding_id=holding.holding_id,
+                name=holding.name,
+                market_values=[
+                    value_by_id_month.get((holding.holding_id, year_month))
+                    for year_month in year_months
+                ],
+            )
+            for holding in holdings
+            if holding.kind == HOLDING_KIND.ASSET and holding.holding_id in recorded_ids
+        ]
+        return HoldingValueTrend(year_months=year_months, series=series)
 
     def compute_drift(
         self,

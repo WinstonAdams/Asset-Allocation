@@ -84,6 +84,25 @@ class NetWorthPoint(BaseModel):
     net_worth: float
 
 
+class HoldingValueSeries(BaseModel):
+    """單一資產項目跨月市值序列。
+
+    market_values 與 HoldingValueTrend.year_months 一一對齊；該月沒有紀錄或市值空白時
+    為 None（圖上畫成斷點）。
+    """
+
+    holding_id: int
+    name: str
+    market_values: list[float | None]
+
+
+class HoldingValueTrend(BaseModel):
+    """各資產項目市值趨勢。year_months 為資產紀錄有資料月的聯集，依時間排序。"""
+
+    year_months: list[str]
+    series: list[HoldingValueSeries]
+
+
 class DriftRow(BaseModel):
     """目標偏離單列。權重一律百分比（0–100）。
 

@@ -17,7 +17,13 @@ import pytest
 
 # ==== 專案內部 ====
 from asset_lab import charts
-from asset_lab.models.results import AllocationSnapshot, CumulativeTwrPoint, NetWorthPoint
+from asset_lab.models.results import (
+    AllocationSnapshot,
+    CumulativeTwrPoint,
+    HoldingValueSeries,
+    HoldingValueTrend,
+    NetWorthPoint,
+)
 
 
 @pytest.mark.scenario("SC-025")
@@ -172,3 +178,77 @@ def test_sc028_cumulative_twr_empty_renders_without_data() -> None:
     assert len(figure.data) <= 1
     if figure.data:
         assert len(figure.data[0].x) == 0
+
+
+@pytest.mark.scenario("SC-104")
+def test_sc104_holding_value_lines_one_trace_per_series_in_wan() -> None:
+    """每個項目一條線，y 以萬元呈現、customdata 保留元，圖例以項目名稱標示。"""
+    trend = HoldingValueTrend(
+        year_months=["2026-04", "2026-05", "2026-06"],
+        series=[
+            HoldingValueSeries(
+                holding_id=1, name="活存", market_values=[500000.0, 600000.0, 580000.0]
+            ),
+            HoldingValueSeries(
+                holding_id=2, name="台積電", market_values=[300000.0, 420000.0, 450000.0]
+            ),
+        ],
+    )
+
+    figure = charts.holding_value_lines(trend=trend)
+
+    assert isinstance(figure, go.Figure)
+    assert [trace.name for trace in figure.data] == ["活存", "台積電"]
+    assert list(figure.data[0].y) == [50.0, 60.0, 58.0]
+    assert list(figure.data[1].y) == [30.0, 42.0, 45.0]
+    assert list(figure.data[0].customdata) == [500000.0, 600000.0, 580000.0]
+    assert list(figure.data[0].x) == ["2026-04", "2026-05", "2026-06"]
+
+
+@pytest.mark.scenario("SC-105")
+def test_sc105_holding_value_lines_gaps_are_breaks_not_filled() -> None:
+    """None 保持為斷點：不補 0、不沿用前值，且不跨斷點連線。"""
+    trend = HoldingValueTrend(
+        year_months=["2026-04", "2026-05", "2026-06"],
+        series=[
+            HoldingValueSeries(
+                holding_id=1, name="定存", market_values=[1000000.0, None, 1000000.0]
+            )
+        ],
+    )
+
+    figure = charts.holding_value_lines(trend=trend)
+
+    trace = figure.data[0]
+    assert trace.y[0] == 100.0
+    assert trace.y[1] is None
+    assert trace.y[2] == 100.0
+    assert trace.customdata[1] is None
+    assert trace.connectgaps is False
+
+
+@pytest.mark.scenario("SC-105")
+def test_sc105_holding_value_lines_fixes_month_order_on_category_axis() -> None:
+    """category 軸以 categoryarray 固定時間順序，不隨各 trace 首次出現順序亂排。"""
+    trend = HoldingValueTrend(
+        year_months=["2026-04", "2026-05"],
+        series=[
+            HoldingValueSeries(holding_id=2, name="晚開始", market_values=[None, 90000.0]),
+            HoldingValueSeries(holding_id=1, name="早開始", market_values=[10000.0, 20000.0]),
+        ],
+    )
+
+    figure = charts.holding_value_lines(trend=trend)
+
+    assert figure.layout.xaxis.type == "category"
+    assert figure.layout.xaxis.categoryorder == "array"
+    assert list(figure.layout.xaxis.categoryarray) == ["2026-04", "2026-05"]
+
+
+@pytest.mark.scenario("SC-105")
+def test_sc105_holding_value_lines_empty_trend_renders_without_data() -> None:
+    """區間內完全沒有資產資料時回空圖，不報錯。"""
+    figure = charts.holding_value_lines(trend=HoldingValueTrend(year_months=[], series=[]))
+
+    assert isinstance(figure, go.Figure)
+    assert len(figure.data) == 0

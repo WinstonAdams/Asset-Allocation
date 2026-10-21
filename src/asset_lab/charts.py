@@ -3,11 +3,12 @@
 把資料層（配置/報酬服務）算好的 Result model 與 DataFrame 轉成 Plotly Figure，供 Page
 以 st.plotly_chart 渲染。本層為純函式：不碰 st.*、不碰 I/O、不做業務運算，只負責呈現契約。
 
-呈現契約對應四張圖：
+呈現契約對應五張圖：
 - 配置圓餅：選定月份資產佔比，僅資產（負債已由資料層排除）。
 - 配置漂移堆疊面積：各資產分類佔比隨月份變化，以百分比堆疊正規化呈現。
 - 淨值折線：跨月淨值趨勢，預設只畫淨值；使用者可選擇疊加總資產線與總負債線。
 - 報酬率走勢：固定只畫一條累積 TWR 折線，不提供指標切換。
+- 各項目市值趨勢：每個資產項目一條折線，缺月與空白市值畫成斷點。
 
 所有輸入可能為空（選定月無有效資產佔比、區間無有資料月等），一律回傳無資料的 Figure
 而非報錯，讓 Page 仍能安全渲染空圖。
@@ -22,7 +23,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # ==== 專案內部 ====
-from asset_lab.models.results import AllocationSnapshot, CumulativeTwrPoint, NetWorthPoint
+from asset_lab.models.results import (
+    AllocationSnapshot,
+    CumulativeTwrPoint,
+    HoldingValueTrend,
+    NetWorthPoint,
+)
 
 # 堆疊面積圖各分類面積的長表欄位（與 AllocationService.drift_series 輸出一致）。
 _AREA_YEAR_MONTH = "year_month"
@@ -187,4 +193,44 @@ def cumulative_twr_line(*, points: Sequence[CumulativeTwrPoint]) -> go.Figure:
         )
     )
     figure.update_layout(xaxis_title="時間", xaxis_type="category", yaxis_tickformat=".0%")
+    return figure
+
+
+def holding_value_lines(*, trend: HoldingValueTrend) -> go.Figure:
+    """以各資產項目跨月市值畫多條折線（每個項目一條，可點圖例隱藏/顯示）。
+
+    y 軸以萬元呈現，customdata 保留元供 hover；序列中的 None 畫成斷點（connectgaps
+    關閉，不補值不連線）。x 軸為 category 並以 categoryarray 固定月份時間順序，避免
+    較晚開始持有的項目讓月份順序依 trace 首次出現而錯亂。無序列時回傳無 trace 的 Figure。
+
+    Args:
+        trend: 各項目市值趨勢；即 AllocationService.holding_value_trend 輸出。
+
+    Returns:
+        Plotly 折線圖 Figure。
+    """
+    figure = go.Figure()
+    for series in trend.series:
+        figure.add_trace(
+            go.Scatter(
+                x=trend.year_months,
+                y=[
+                    None if value is None else value / _TWD_PER_WAN
+                    for value in series.market_values
+                ],
+                customdata=series.market_values,
+                mode="lines+markers",
+                connectgaps=False,
+                name=series.name,
+                hovertemplate=_NET_WORTH_HOVER_TEMPLATE,
+            )
+        )
+    figure.update_layout(
+        xaxis_title="時間",
+        xaxis_type="category",
+        xaxis_categoryorder="array",
+        xaxis_categoryarray=trend.year_months,
+        yaxis_tickformat=",.1f",
+        legend_title_text="項目",
+    )
     return figure

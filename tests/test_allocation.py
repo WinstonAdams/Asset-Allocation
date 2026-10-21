@@ -327,3 +327,162 @@ class TestZeroTotalAssetWeight:
         drift = AllocationService().drift_series(range_df=range_df, holdings=holdings)
         # 合計為 0 的 2026-03 不出現；2026-04 正常呈現
         assert sorted(drift["year_month"].unique()) == ["2026-04"]
+
+
+def _row(holding_id: int, year_month: str, market_value: float | None, net: float) -> dict:
+    """組一列區間紀錄。"""
+    return {
+        "holding_id": holding_id,
+        "year_month": year_month,
+        "market_value": market_value,
+        "net_investment": net,
+    }
+
+
+def _named_asset(holding_id: int, name: str, category: str = "台股/台股ETF") -> HoldingModel:
+    """建立指定名稱的資產項目主檔。"""
+    return HoldingModel(
+        holding_id=holding_id,
+        name=name,
+        kind="asset",
+        category=category,
+        initial_market_value=0.0,
+        initial_cost=0.0,
+    )
+
+
+class TestHoldingValueTrend:
+    """holding_value_trend：供各項目市值趨勢圖的逐項目市值序列（僅資產，缺月與空白為 None）。"""
+
+    @pytest.mark.scenario("SC-104")
+    def test_sc104_one_series_per_asset_excluding_liability(self):
+        range_df = _range_df(
+            [
+                _row(1, "2026-04", 500000.0, 0.0),
+                _row(1, "2026-05", 600000.0, 0.0),
+                _row(1, "2026-06", 580000.0, 0.0),
+                _row(2, "2026-04", 300000.0, 0.0),
+                _row(2, "2026-05", 420000.0, 0.0),
+                _row(2, "2026-06", 450000.0, 0.0),
+                _row(3, "2026-04", 30000.0, 0.0),
+                _row(3, "2026-05", 30000.0, 0.0),
+                _row(3, "2026-06", 30000.0, 0.0),
+            ]
+        )
+        holdings = [_named_asset(1, "活存"), _named_asset(2, "台積電"), _liability(3)]
+
+        trend = AllocationService().holding_value_trend(range_df=range_df, holdings=holdings)
+
+        assert trend.year_months == ["2026-04", "2026-05", "2026-06"]
+        assert [s.name for s in trend.series] == ["活存", "台積電"]
+        assert [s.holding_id for s in trend.series] == [1, 2]
+        assert trend.series[0].market_values == [500000.0, 600000.0, 580000.0]
+        assert trend.series[1].market_values == [300000.0, 420000.0, 450000.0]
+
+    @pytest.mark.scenario("SC-104")
+    def test_sc104_series_follow_holdings_order_and_use_current_name(self):
+        range_df = _range_df(
+            [
+                _row(1, "2026-04", 10.0, 0.0),
+                _row(2, "2026-04", 20.0, 0.0),
+            ]
+        )
+        # 傳入順序 2 在前；名稱取主檔現名；同名項目以 holding_id 區分
+        holdings = [_named_asset(2, "新名"), _named_asset(1, "新名")]
+
+        trend = AllocationService().holding_value_trend(range_df=range_df, holdings=holdings)
+
+        assert [s.holding_id for s in trend.series] == [2, 1]
+        assert [s.name for s in trend.series] == ["新名", "新名"]
+
+    @pytest.mark.scenario("SC-104")
+    def test_sc104_house_purpose_asset_is_still_plotted(self):
+        range_df = _range_df(
+            [_row(1, "2026-04", 100.0, 0.0)]
+        )
+        house = _named_asset(1, "購屋基金").model_copy(update={"purpose": "house"})
+
+        trend = AllocationService().holding_value_trend(range_df=range_df, holdings=[house])
+
+        assert [s.name for s in trend.series] == ["購屋基金"]
+
+    @pytest.mark.scenario("SC-104")
+    def test_sc104_asset_without_records_in_range_has_no_series(self):
+        range_df = _range_df(
+            [_row(1, "2026-04", 100.0, 0.0)]
+        )
+        holdings = [_named_asset(1, "活存"), _named_asset(2, "從未記錄")]
+
+        trend = AllocationService().holding_value_trend(range_df=range_df, holdings=holdings)
+
+        assert [s.name for s in trend.series] == ["活存"]
+
+    @pytest.mark.scenario("SC-105")
+    def test_sc105_missing_month_and_blank_value_are_none(self):
+        range_df = _range_df(
+            [
+                _row(1, "2026-04", 1000000.0, 0.0),
+                _row(1, "2026-06", 1000000.0, 0.0),
+                _row(2, "2026-04", 50.0, 0.0),
+                _row(2, "2026-05", None, 5.0),
+                _row(2, "2026-06", 60.0, 0.0),
+            ]
+        )
+        holdings = [_named_asset(1, "定存"), _named_asset(2, "聯發科")]
+
+        trend = AllocationService().holding_value_trend(range_df=range_df, holdings=holdings)
+
+        assert trend.year_months == ["2026-04", "2026-05", "2026-06"]
+        assert trend.series[0].market_values == [1000000.0, None, 1000000.0]
+        assert trend.series[1].market_values == [50.0, None, 60.0]
+
+    @pytest.mark.scenario("SC-105")
+    def test_sc105_late_starting_holding_keeps_chronological_months(self):
+        range_df = _range_df(
+            [
+                _row(1, "2026-04", 1.0, 0.0),
+                _row(1, "2026-05", 2.0, 0.0),
+                _row(2, "2026-05", 9.0, 0.0),
+            ]
+        )
+        holdings = [_named_asset(2, "晚開始"), _named_asset(1, "早開始")]
+
+        trend = AllocationService().holding_value_trend(range_df=range_df, holdings=holdings)
+
+        assert trend.year_months == ["2026-04", "2026-05"]
+        assert trend.series[0].market_values == [None, 9.0]
+
+    @pytest.mark.scenario("SC-105")
+    def test_sc105_liquidated_holding_line_ends_after_zero_month(self):
+        range_df = _range_df(
+            [
+                _row(1, "2026-04", 100.0, 0.0),
+                _row(1, "2026-05", 0.0, -100.0),
+                _row(2, "2026-06", 5.0, 0.0),
+            ]
+        )
+        holdings = [_named_asset(1, "出清"), _named_asset(2, "其他")]
+
+        trend = AllocationService().holding_value_trend(range_df=range_df, holdings=holdings)
+
+        assert trend.series[0].market_values == [100.0, 0.0, None]
+
+    @pytest.mark.scenario("SC-105")
+    def test_sc105_empty_range_returns_empty_trend(self):
+        trend = AllocationService().holding_value_trend(
+            range_df=_range_df([]), holdings=[_named_asset(1, "活存")]
+        )
+
+        assert trend.year_months == []
+        assert trend.series == []
+
+    @pytest.mark.scenario("SC-105")
+    def test_sc105_only_liability_records_returns_empty_trend(self):
+        range_df = _range_df(
+            [_row(3, "2026-04", 30000.0, 0.0)]
+        )
+
+        trend = AllocationService().holding_value_trend(range_df=range_df, holdings=[_liability(3)])
+
+        assert trend.year_months == []
+        assert trend.series == []
