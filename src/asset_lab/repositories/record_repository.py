@@ -9,13 +9,11 @@
 特定的唯一鍵衝突轉譯為領域例外 DataValidationError，讓上層能與其他 I/O 錯誤區分，其餘
 錯誤原樣往上拋。
 
-三個 compound method（upsert_records / delete_record_and_upsert /
-accumulate_net_investments）用於一次寫入多列：股票/
+compound method（upsert_records / delete_record_and_upsert）用於一次寫入多列：股票/
 ETF 存檔或刪除時，可能同時牽動存檔列本身與其後受影響的多筆重算列，寫了一半會讓推算鏈不
-一致，故收斂在單一交易內完成——多個 statement 執行完才 commit 一次；upsert_records /
-delete_record_and_upsert 任一步失敗（含 commit）就先 rollback 再轉成 PersistenceError
-（見 transaction_repository.write_transaction），accumulate_net_investments 仍原樣往上拋；
-本層不記錄錯誤。
+一致，故收斂在單一交易內完成——多個 statement 執行完才 commit 一次；
+任一步失敗（含 commit）就先 rollback 再轉成 PersistenceError（見
+transaction_repository.write_transaction）；本層不記錄錯誤。
 
 報酬率/趨勢/匯出用的區間與全量讀取以 DataFrame 回傳，方便 Service 端做連乘與彙總。
 """
@@ -86,14 +84,6 @@ _UPSERT = (
     f"{_TOTAL_COST} = excluded.{_TOTAL_COST}, "
     f"{_REALIZED_INCOME} = excluded.{_REALIZED_INCOME}, "
     f"{_CASH_DIVIDEND} = excluded.{_CASH_DIVIDEND}"
-)
-# 只遞增 net_investment：同月多次轉移逐次相加，且保留既有市值等其餘欄位；
-# 沒有既有列時新建只有淨投入的列（其餘欄位 NULL）。
-_ACCUMULATE = (
-    f"INSERT INTO {_TABLE} ({_HOLDING_ID}, {_YEAR_MONTH}, {_NET_INVESTMENT}) "
-    f"VALUES (?, ?, ?) "
-    f"ON CONFLICT({_HOLDING_ID}, {_YEAR_MONTH}) DO UPDATE SET "
-    f"{_NET_INVESTMENT} = {_NET_INVESTMENT} + excluded.{_NET_INVESTMENT}"
 )
 _DELETE_ONE = f"DELETE FROM {_TABLE} WHERE {_HOLDING_ID} = ? AND {_YEAR_MONTH} = ?"
 _DELETE_ALL = f"DELETE FROM {_TABLE}"
@@ -217,25 +207,6 @@ class RecordRepository:
         with write_transaction(self._conn) as cursor:
             for record in records:
                 cursor.execute(_UPSERT, _values(record))
-
-    def accumulate_net_investments(self, *, records: list[MonthlyRecordModel]) -> None:
-        """把每筆紀錄的 net_investment 視為增量，累加到同 (holding_id, year_month) 的既有列。
-
-        既有列只動淨投入、其餘欄位（含市值）不變；沒有既有列時新建只有淨投入的列。
-        單一交易，任一步失敗則 rollback 後原樣往上拋；空清單為無操作。
-        """
-        if not records:
-            return
-        cursor = self._conn.cursor()
-        try:
-            for record in records:
-                cursor.execute(
-                    _ACCUMULATE, (record.holding_id, record.year_month, record.net_investment)
-                )
-        except Exception:
-            self._conn.rollback()
-            raise
-        self._conn.commit()
 
     def delete_record_and_upsert(
         self, *, holding_id: int, year_month: str, records: list[MonthlyRecordModel]

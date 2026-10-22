@@ -153,43 +153,6 @@ class MonthlyInputService:
             if self._still_held(record)
         ]
 
-    def build_transfer_pair(
-        self, *, source_id: int, dest_id: int, amount: float, year_month: str
-    ) -> tuple[MonthlyRecordModel, MonthlyRecordModel]:
-        """產生項目間轉移的成對紀錄：來源記 −amount、目標記 +amount。
-
-        兩筆掛在同一月份、金額相等方向相反，淨投入合計為 0，故整體總資產與報酬率
-        不因轉移而變動。僅產生紀錄物件，實際寫入由 Page 委派 Repository 執行。
-
-        轉移輸入須通過防呆：金額必須為正數，且來源與目標必須是不同項目；違反任一
-        條件即拒絕並拋例外，不產生任何紀錄。金額非正代表無資金移動或方向不明，
-        來源等於目標代表自己轉給自己（淨效果為 0、形同未轉移），皆視為無效輸入。
-
-        Args:
-            source_id: 轉出來源項目的 holding_id。
-            dest_id: 轉入目標項目的 holding_id。
-            amount: 轉移金額，須為正數。
-            year_month: 轉移發生的月份，'YYYY-MM' 格式。
-
-        Returns:
-            (來源紀錄, 目標紀錄) 二元組；來源淨投入為 −amount、目標為 +amount，
-            兩筆市值皆留空（市值更新另行輸入）。
-
-        Raises:
-            DataValidationError: 金額非正（≤ 0），或來源與目標為同一項目。
-        """
-        if amount <= 0:
-            raise DataValidationError(f"轉移金額須為正數，收到：{amount!r}")
-        if source_id == dest_id:
-            raise DataValidationError(f"轉移的來源與目標不可為同一項目：{source_id!r}")
-        source = MonthlyRecordModel(
-            holding_id=source_id, year_month=year_month, net_investment=-amount
-        )
-        dest = MonthlyRecordModel(
-            holding_id=dest_id, year_month=year_month, net_investment=amount
-        )
-        return source, dest
-
     def build_record_prefill(
         self, *, records: list[MonthlyRecordModel], holding_id: int, year_month: str
     ) -> RecordEditorPrefill:

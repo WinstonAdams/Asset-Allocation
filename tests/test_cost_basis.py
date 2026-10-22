@@ -487,67 +487,6 @@ class TestPlanSaveDeletePlanValidation:
             service.plan_delete(holding=holding, records=[], year_month="2026-05")
 
 
-class TestTransferRecordsToWrite:
-    """transfer_records_to_write：轉移成對紀錄中濾掉走總成本推算的股票/ETF 端（SC-079/080）。"""
-
-    @pytest.mark.scenario("SC-079")
-    def test_sc079_source_non_stock_dest_stock_only_source_written(self, service: CostBasisService):
-        demand_deposit = _holding(
-            holding_id=1, name="活存", category=ASSET_CATEGORIES.DEMAND_DEPOSIT
-        )
-        tsmc = _holding(holding_id=2, name="台積電", category=ASSET_CATEGORIES.TW_STOCK)
-        source = _record(holding_id=1, year_month="2026-05", net_investment=-80_000)
-        dest = _record(holding_id=2, year_month="2026-05", net_investment=80_000)
-
-        result = service.transfer_records_to_write(
-            pair=(source, dest), holdings=[demand_deposit, tsmc]
-        )
-
-        assert result == [source]
-
-    @pytest.mark.scenario("SC-079")
-    def test_sc079_source_stock_dest_non_stock_only_dest_written(self, service: CostBasisService):
-        tsmc = _holding(holding_id=2, name="台積電", category=ASSET_CATEGORIES.TW_STOCK)
-        demand_deposit = _holding(
-            holding_id=1, name="活存", category=ASSET_CATEGORIES.DEMAND_DEPOSIT
-        )
-        source = _record(holding_id=2, year_month="2026-05", net_investment=-50_000)
-        dest = _record(holding_id=1, year_month="2026-05", net_investment=50_000)
-
-        result = service.transfer_records_to_write(
-            pair=(source, dest), holdings=[tsmc, demand_deposit]
-        )
-
-        assert result == [dest]
-
-    @pytest.mark.scenario("SC-079")
-    def test_sc079_neither_end_stock_both_written_unchanged(self, service: CostBasisService):
-        """邊界自審：兩端皆非股票/ETF 時不觸發任何過濾，成對紀錄原樣寫入。"""
-        demand_deposit = _holding(
-            holding_id=1, name="活存", category=ASSET_CATEGORIES.DEMAND_DEPOSIT
-        )
-        time_deposit = _holding(holding_id=4, name="定存", category=ASSET_CATEGORIES.TIME_DEPOSIT)
-        source = _record(holding_id=1, year_month="2026-05", net_investment=-30_000)
-        dest = _record(holding_id=4, year_month="2026-05", net_investment=30_000)
-
-        result = service.transfer_records_to_write(
-            pair=(source, dest), holdings=[demand_deposit, time_deposit]
-        )
-
-        assert result == [source, dest]
-
-    @pytest.mark.scenario("SC-080")
-    def test_sc080_both_ends_stock_neither_written(self, service: CostBasisService):
-        tsmc = _holding(holding_id=2, name="台積電", category=ASSET_CATEGORIES.TW_STOCK)
-        mediatek = _holding(holding_id=3, name="聯發科", category=ASSET_CATEGORIES.TW_STOCK)
-        source = _record(holding_id=2, year_month="2026-05", net_investment=-60_000)
-        dest = _record(holding_id=3, year_month="2026-05", net_investment=60_000)
-
-        result = service.transfer_records_to_write(pair=(source, dest), holdings=[tsmc, mediatek])
-
-        assert result == []
-
-
 class TestRealizedPnlAndCashDividendSplit:
     """derive／plan_save：已實現損益與現金股利相加計入推算（SC-090）、現金股利非負（SC-091）。"""
 
