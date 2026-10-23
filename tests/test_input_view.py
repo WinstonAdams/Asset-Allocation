@@ -432,8 +432,7 @@ class TestBalanceEditor:
         _click(at, "儲存此列")
 
         assert record_repo.batch_upserted == []
-        # 實作目前提示「<欄位>輸入無效…」而非「必填」，SC-087 要求的「必填」文案另案回報
-        assert any("餘額" in e.value for e in at.error)
+        assert any("餘額為必填" in e.value for e in at.error)
 
     @pytest.mark.scenario("SC-087")
     def test_blank_balance_on_existing_record_prefills_blank_not_zero(self, record_repo):

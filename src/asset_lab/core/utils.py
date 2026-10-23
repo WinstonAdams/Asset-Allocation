@@ -158,12 +158,15 @@ def parse_amount(text: str | None, *, field_label: str) -> float:
         解析後的金額數值（整數值，以 float 回傳）。
 
     Raises:
-        DataValidationError: 輸入為 None、空字串，或格式不符千分位規則。訊息只帶欄位
+        DataValidationError: 輸入為 None、空字串或僅空白時提示「<欄位>為必填」；格式不符
+            千分位規則時提示「<欄位>輸入無效…」。訊息只帶欄位
             名稱、不帶輸入原文：例外會被頁面寫進 log，原文可能就是金額；使用者在輸入框
             仍看得到自己打的內容。
     """
     normalized = unicodedata.normalize("NFKC", text).strip() if text is not None else ""
-    if not normalized or _AMOUNT_PATTERN.match(normalized) is None:
+    if not normalized:
+        raise DataValidationError(f"{field_label}為必填")
+    if _AMOUNT_PATTERN.match(normalized) is None:
         raise DataValidationError(f"{field_label}輸入無效，請輸入正確的金額格式")
     rounded = int(
         Decimal(normalized.replace(",", "")).quantize(_INTEGER_QUANTUM, rounding=ROUND_HALF_UP)
