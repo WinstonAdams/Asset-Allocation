@@ -23,6 +23,7 @@
 | t06 各項目市值趨勢圖 | 完成 | SC-104/105；RED 先跑，666 passed |
 | t07 錄入頁編輯器分派與移除轉移 UI | 完成 | SC-083/085/087/089/090/096(View 層)/099/100/101/102/103；RED 先跑，705 passed |
 | t08 移除轉移 dead code | 完成 | 刪除 SC-008/037/079/080/086 測試與 accumulate；無殘留引用，685 passed |
+| t09 留空金額提示「為必填」（3-4 回繞） | 未開始 | SC-087/096/099/100：留空時提示「<欄位>為必填」，格式錯誤才提示「輸入無效」 |
 | 2-Z 整合驗證 | 完成 | scenario-lint 無新增 FAIL（38 筆既有未掛 marker，使用者決定另開 Change 清；5 筆 REMOVED 卡 WARN 屬預期）；pytest 685 passed；啟動 health 200 |
 
 ## Phase 3：審查
@@ -32,7 +33,7 @@
 | 3-1 程式碼清理 | 完成 | 只修 6 行測試註解 SC 編號；風格題不動；design 補記 write_import 與 uses_premium 實作調整 |
 | 3-2 安全審查 | 完成 | 有條件通過：log 不帶金額原文、誤報 noqa；依賴升級 streamlit 1.66.1/pillow 13/pyarrow 26/uvicorn 0.54 等，pip-audit 0；A05 全站錯誤兜底另案；合併前需目視 pyarrow 26 不崩潰與存檔 rerun 帶入值 |
 | 3-3 規則符合度審查 | 完成 | 有條件通過：write_import 判定合規；修 M-2/M-3/L-4(b)(c)；L-4(a) 保留匯入專屬文案；M-1 AllocationService 注入 constants 另案 |
-| 3-4 行為對映審查 | 未開始 | AI 比對 SC 描述 vs test 內容 |
+| 3-4 行為對映審查 | 進行中 | 第一段報告已寫入 review.md §3-4，待第二段 |
 | 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
 
 ## Phase 4：收尾

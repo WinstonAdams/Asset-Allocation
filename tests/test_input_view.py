@@ -12,6 +12,7 @@ test_monthly_input.py）覆蓋，這裡用真正的純運算 Service 搭配 Repo
 """
 
 # ==== 原生（標準庫） ====
+import logging
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -431,7 +432,8 @@ class TestBalanceEditor:
         _click(at, "儲存此列")
 
         assert record_repo.batch_upserted == []
-        assert at.error
+        # 實作目前提示「<欄位>輸入無效…」而非「必填」，SC-087 要求的「必填」文案另案回報
+        assert any("餘額" in e.value for e in at.error)
 
     @pytest.mark.scenario("SC-087")
     def test_blank_balance_on_existing_record_prefills_blank_not_zero(self, record_repo):
@@ -648,10 +650,11 @@ class TestCostBasisPreviewAndDelegation:
     @pytest.mark.scenario("SC-074")
     def test_preview_shows_previous_total_cost_and_derived_investment(self):
         at = _run_app(holding_id=_STOCK_ID)
-        at.text_input(key="cost_basis_total_cost").set_value("0").run()
+        at.text_input(key="cost_basis_total_cost").set_value("350000").run()
+        at.text_input(key="cost_basis_market_value").set_value("400000").run()
         written = _all_written_text(at)
         assert "前期總成本：300,000" in written
-        assert "推算本月淨投入：-300,000" in written
+        assert "推算本月淨投入：50,000" in written
 
     @pytest.mark.scenario("SC-074")
     def test_incomplete_input_shows_placeholder_instead_of_crashing(self):
@@ -760,19 +763,24 @@ class TestCostBasisPrefillAndDividendFields:
 
     @pytest.mark.scenario("SC-090")
     def test_two_fields_sum_into_preview_and_saved_record(self, record_repo):
+        # 2026-05 總成本 200000，2026-06 全數賣出
+        record_repo.holding_records[_STOCK_ID] = [
+            _rec(_STOCK_ID, "2026-05", market_value=210000.0, net_investment=0.0,
+                 total_cost=200000.0, realized_income=0.0)
+        ]
         at = _run_app(today=date(2026, 6, 15), record_repo=record_repo, holding_id=_STOCK_ID)
         at.text_input(key="cost_basis_total_cost").set_value("0").run()
         at.text_input(key="cost_basis_market_value").set_value("0").run()
         at.text_input(key="cost_basis_realized_pnl").set_value("100000").run()
         at.text_input(key="cost_basis_cash_dividend").set_value("2000").run()
-        # 前期總成本＝初始成本 300000；(0−300000)−(100000+2000)＝−402000
-        assert "推算本月淨投入：-402,000" in _all_written_text(at)
+        # 前期總成本 200000；(0−200000)−(100000+2000)＝−302000
+        assert "推算本月淨投入：-302,000" in _all_written_text(at)
 
         _click(at, "儲存此列")
         saved = record_repo.batch_upserted[0]
         assert saved.realized_income == 102000.0
         assert saved.cash_dividend == 2000.0
-        assert saved.net_investment == -402000.0
+        assert saved.net_investment == -302000.0
 
     @pytest.mark.scenario("SC-091")
     def test_negative_dividend_rejected_in_preview_and_on_save(self, record_repo):
@@ -815,7 +823,7 @@ class TestAmountDueEditor:
         _click(at, "儲存此列")
 
         assert record_repo.batch_upserted == []
-        assert at.error
+        assert any("應繳金額" in e.value for e in at.error)
 
     @pytest.mark.scenario("SC-100")
     def test_save_writes_amount_due_with_zero_net_investment_via_batch(self, record_repo):
@@ -873,14 +881,17 @@ class TestWriteFailureShowsFriendlyMessage:
         ids=["balance", "premium", "cost_basis", "amount_due"],
     )
     def test_save_failure_shows_only_friendly_message_and_keeps_input(
-        self, holding_id, values
+        self, holding_id, values, caplog
     ):
         record_repo = self._failing_repo()
         at = _run_app(record_repo=record_repo, holding_id=holding_id)
         for key, value in values.items():
             at.text_input(key=key).set_value(value).run()
-        _click(at, "儲存此列")
+        with caplog.at_level(logging.ERROR):
+            _click(at, "儲存此列")
 
+        # 原始錯誤細節進 log；畫面不顯示
+        assert "secret SQL detail" in caplog.text
         assert not at.exception
         assert [e.value for e in at.error] == [_FRIENDLY_WRITE_FAILURE]
         assert "secret SQL" not in _page_text(at)
@@ -894,11 +905,13 @@ class TestWriteFailureShowsFriendlyMessage:
         [_DEMAND_ID, _INSURANCE_ID, _STOCK_ID, _CARD_ID],
         ids=["balance", "premium", "cost_basis", "amount_due"],
     )
-    def test_delete_failure_shows_only_friendly_message(self, holding_id):
+    def test_delete_failure_shows_only_friendly_message(self, holding_id, caplog):
         record_repo = self._failing_repo()
         at = _run_app(record_repo=record_repo, holding_id=holding_id)
-        _click(at, "刪除此列")
+        with caplog.at_level(logging.ERROR):
+            _click(at, "刪除此列")
 
+        assert "secret SQL detail" in caplog.text
         assert not at.exception
         assert [e.value for e in at.error] == [_FRIENDLY_WRITE_FAILURE]
         assert "secret SQL" not in _page_text(at)

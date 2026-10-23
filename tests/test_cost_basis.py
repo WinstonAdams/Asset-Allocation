@@ -508,6 +508,33 @@ class TestRealizedPnlAndCashDividendSplit:
 
         assert _approx(result.net_investment, -302_000)
 
+    @pytest.mark.scenario("SC-103")
+    def test_sc103_stock_side_net_investment_for_buy_and_sell(self, service: CostBasisService):
+        holding = _holding(name="台積電")
+        # 情境一：2026-04 總成本 300000 → 2026-05 填 400000（活存拿 100000 買入）
+        records = [_record(year_month="2026-04", net_investment=0, total_cost=300_000)]
+        buy = service.derive(
+            holding=holding,
+            records=records,
+            year_month="2026-05",
+            total_cost=400_000,
+            realized_pnl=0,
+            cash_dividend=0.0,
+        )
+        assert _approx(buy.net_investment, 100_000)
+        # 情境二：2026-05 總成本 400000 → 2026-06 賣出剩 250000，已實現損益 0
+        records.append(_record(year_month="2026-05", net_investment=100_000, total_cost=400_000))
+        sell = service.derive(
+            holding=holding,
+            records=records,
+            year_month="2026-06",
+            total_cost=250_000,
+            realized_pnl=0,
+            cash_dividend=0.0,
+        )
+        assert _approx(sell.previous_total_cost, 400_000)
+        assert _approx(sell.net_investment, -150_000)
+
     @pytest.mark.scenario("SC-090")
     def test_sc090_plan_save_persists_split_and_sum(self, service: CostBasisService):
         holding = _holding(name="日月光")

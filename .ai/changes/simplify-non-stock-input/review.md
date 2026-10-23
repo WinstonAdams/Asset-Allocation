@@ -394,4 +394,105 @@ Baseline 命中：0 條
 
 ## 3-4 行為對映審查
 
-<!-- scenario-mapper subagent 產出（AI 比對 SC 描述 vs test 內容，分「不對齊」「對齊」兩類）-->
+審查範圍：25 個有效 SC（SC-005/006/009/074/083/085/087/089/090/092~107；SC-008/037/079/080/086 為 delta: REMOVED，已確認 tests/ 內無殘留 marker）× 203 組 (SC, test) 對映（AST 解析 `@pytest.mark.scenario`，涵蓋 test_balance_input / test_cost_basis / test_input_view / test_monthly_input / test_amount_widget / test_allocation / test_charts / test_data_io / test_bootstrap）
+核准判定：有條件通過（不對齊 4 項，皆可在第二段改 test 修正；其中 2 項需使用者先確認方向）
+範圍外（不處理）：38 筆 Change 之前就存在的未掛 marker 測試（使用者已決定另案）
+
+### 不對齊
+
+- SC-090 ↔ tests/test_input_view.py（`test_two_fields_sum_into_preview_and_saved_record`，掛 SC-090）
+  SC 描述：2026-05 總成本 200000，2026-06 輸入總成本 0、現值 0、已實現損益 100000、現金股利 2000 → 淨投入 = (0−200000) − 102000 = −302000
+  test 內容：沒有 2026-05 紀錄，前期總成本取初始成本 300000，預覽與存檔斷言 −402000
+  判斷：GIVEN 的前期總成本（200000 vs 300000）與結果值（−302000 vs −402000）都不對齊。實際驗到「兩欄相加進公式」沒錯，且 service 層 `test_sc090_realized_pnl_and_cash_dividend_summed_into_formula` 已用 −302000 對齊 SC。
+  修正方向：改 test——View 層 record_repo 先放 2026-05 總成本 200000 的紀錄，斷言改為 −302000。（可直接修）
+
+- SC-103 ↔ tests/test_balance_input.py::test_sc103_balance_side_net_investment_offsets_transfer
+  SC 描述：情境一活存 500000→400000 淨投入 −100000（test 對齊）；情境二「賣出台積電實收 150000 存入活存，活存餘額填 550000」→ 活存端 +150000，台積電端 −150000（總成本 400000→250000）
+  test 內容：inflow 仍以前期 500000 為基準，填 550000，斷言 +50000；沒有台積電端斷言（400000−300000=+100000、250000−400000=−150000 皆無）；活存→定存（−50000／+50000）也沒測
+  判斷：數值不對齊，且 SC 一半的斷言沒被任何 SC-103 test 驗到（View 層 SC-103 test 只驗無轉移 UI、單端預覽/存檔）。
+  SC 本身的疑點（需使用者確認）：情境二 GIVEN 沒說明前期活存餘額，若沿用 GIVEN 的 500000，填 550000 只會是 +50000，與 THEN 的 +150000 不符；+150000 隱含前期為 400000（承接情境一）。建議把情境二寫成明確 GIVEN（例如「活存 2026-05 餘額 400000」），或把 THEN 改成 +50000。
+  修正方向：待使用者確認 SC 後，改 test（前期 400000 → 550000 得 +150000；補台積電兩端推算；補活存/定存互轉）。
+
+- SC-006 ↔ tests/test_monthly_input.py（18 個）＋ tests/test_bootstrap.py（10 個）
+  SC 描述：使用者在月度表單對「活存」只填餘額 520000 → 儲存、淨投入由系統依前期餘額推算；改 530000 → 同列更新不重複；刪除 → 移除
+  test 內容：真正驗到 SC 行為的只有 5 個——`test_sc006_balance_add_edit_delete_flow`、`test_sc006_insert_single_record`、`test_sc006_edit_updates_in_place_without_duplicate`、`test_sc006_delete_removes_the_record`、`test_sc006_edit_does_not_touch_other_month`。其餘 23 個是 Repository／schema 管線測試（空月回空清單、read_range 欄位、latest_year_month、ensure_schema 冪等、cost/cash_dividend 欄位升級、read_holding_records 排序、批次 upsert、delete_record_and_upsert 等），與 SC-006 描述的使用者行為無關。
+  判斷：marker 歸屬過寬（舊版 SC-006 的掛載沒隨 SC 修訂收斂）。不是 assertion 錯，而是這些 test 沒在驗 SC-006 寫的行為。
+  修正方向：需使用者確認。直接拔 marker 會讓 scenario-lint 的「未掛 marker 測試」從 38 增為 61，與「該批另案處理」的決定衝突；建議併入另案，本 Change 不動。
+
+- SC-074 ↔ tests/test_input_view.py::test_preview_shows_previous_total_cost_and_derived_investment
+  SC 描述：輸入總成本 350000、現值 400000 → 存檔前畫面顯示前期總成本 300000 與推算淨投入 50000
+  test 內容：只輸入總成本 0 → 斷言「前期總成本：300,000」「推算本月淨投入：-300,000」
+  判斷：前期值對齊，推算值不是 SC 的 50000（存檔 test 有驗 350000/400000 → 50000，但沒驗預覽字串）。輕微。
+  修正方向：改 test——輸入改 350000／400000，斷言「推算本月淨投入：50,000」。（可直接修）
+
+### 對齊
+
+| SC | test 函式 | 判斷依據 |
+|----|----------|---------|
+| SC-005 | test_sc005_* 共 8 個（test_monthly_input） | 上月三項帶入、已賣出（市值 0）不帶、金額留空、淨投入不沿用、首月改由主檔、負債同樣帶入 |
+| SC-009 | test_sc009_insurance_surrender_month_...、test_sc009_no_carry_after_sale_month、test_sc009_deposit_cleared_... 等 6 個 | 保費 560000、解約金 0、領回 530000 → 市值 0、淨投入 −530000；2026-06 無列；之後不再帶入；活存清空 −500000 |
+| SC-074 | test_cost_basis 10 個（其餘見不對齊） | 初始成本當前期 300000→50000、前一筆 350000→50000、15000→−35000、−5000→−15000 數值吻合 |
+| SC-083 | test_every_amount_field_is_wrapped_by_prefixed_container、test_sc083_* 3 個 | 4 種編輯器金額欄皆在放大樣式 container、font-size/height > 1rem、非金額欄不被命中 |
+| SC-085 | test_monthly_input 5 個 + test_input_view 失敗路徑 2 個 | 中途失敗整批不留存、commit 失敗、復原失敗仍同一則友善訊息、紅字、畫面不含原始錯誤；涵蓋活存/保險/股票/負債存檔與刪除 |
+| SC-087 | test_input_view 11 個、test_monthly_input 6 個、test_amount_widget 3 個 | 只有餘額欄、帶入 350000、不改直接存檔維持 −150000、定存空白必填被拒、NULL 帶空白非 0、負債只有應繳金額帶 30000 |
+| SC-089 | test_input_view 5 個、test_monthly_input 5 個 | 逐列顯示、資產/負債欄分流、房貸提醒、已填不提醒、空月空狀態、存檔後表格即時更新（以台積電代表股票列，數值 0／50000 同 SC，不影響語義） |
+| SC-092 | test_balance_input 8 個 | 300000→+200000、500000→600000→450000、定存 0、清空 −600000、初始市值空白前期 0 |
+| SC-093 | test_balance_input 3 個 | 跳過空白取 400000→−20000；全空取初始市值→+80000 |
+| SC-094 | test_balance_input 9 個 | 改 520000→220000／下一筆 80000／再下一筆不動；刪中間 80000；重存同值不改寫；舊手填被覆蓋；刪最早 300000；空白下一筆改重算其後第一筆；末筆只更新自己 |
+| SC-095 | test_cost_basis 5 個 | +20000、領回 −30000、初始成本 500000→+20000、解約月 −560000、市值=解約金 |
+| SC-096 | test_cost_basis 6 個 + test_input_view 3 個 | 領回 −1000 預覽即顯示原因且不同於佔位、存檔被拒、0 合法、必填空白被拒 |
+| SC-097 | test_cost_basis 2 個 | 540000 估算、淨投入 20000、標示估算；之後不再標示 |
+| SC-098 | test_cost_basis 4 個 | 05=30000、06=10000、07 不動；刪 06 後 07=40000；舊紀錄不動、新制列以估算涵蓋 |
+| SC-099 | test_cost_basis 4 個 + test_input_view 8 個 | 三欄帶入、不改存檔不變、新月份兩欄空白領回 0、必填空白被拒、空白帶空白 |
+| SC-100 | test_input_view 3 個 + test_monthly_input 8 個 | 只有應繳金額欄、30000／淨投入 0、改 28000 不重複、刪除只移除該月、舊非 0 重存歸 0、失敗同友善訊息 |
+| SC-101 | test_input_view 5 個 + test_monthly_input 1 個 | 標籤「應繳金額」、欄位分流、提醒文字分資產/負債 |
+| SC-102 | test_input_view 2 個 + test_monthly_input 4 個 | 空分類顯示「請先到設定頁指定分類」、無欄位無存檔、指定分類後恢復、空字串與未知分類亦拒 |
+| SC-103 | test_input_view 5 個 + test_balance_input 活存端 −100000 | 情境一與「無轉移功能」對齊（情境二見不對齊） |
+| SC-104 | test_allocation 4 個 + test_charts 1 個 | 2 條線、信用卡不畫、萬元 50/60/58 與 30/42/45、現名、購屋資產照畫、無紀錄不畫 |
+| SC-105 | test_allocation 5 個 + test_charts 3 個 | 缺月與空白為 None 不補 0 不連線、月份聯集依序、出清後中斷、空區間不報錯 |
+| SC-106 | test_sc106_new_save_leaves_legacy_records_untouched | 舊 30000／20000 不動、2026-04 填 520000 → +20000 |
+| SC-107 | test_data_io 7 個 | 中途失敗三表皆空、目標表階段失敗亦復原、commit/rollback 失敗同一則友善訊息、同一 CSV 可重匯 |
+
+### 覆蓋缺口（非不對齊，第二段預設不補）
+
+- SC-085／SC-107「錯誤細節寫入 log」：全專案 tests 無 caplog 斷言，只驗畫面不含原始錯誤與 `__cause__` 保留。
+- SC-104「開啟資產配置頁出現趨勢圖」：`views/allocation.py` L192~194 接線無 AppTest；圖例切換為 Plotly 內建行為。
+- SC-083 設定頁／買房參數金額欄放大：測試只涵蓋錄入頁 4 種編輯器。
+- SC-092「當月報酬為 0」、SC-100「淨值 = 總資產 − 30000」：無對應斷言。
+- SC-087「餘額必填」提示文案：test 只斷言有 error，未斷言含「必填」。
+
+### 業務語言檢查
+
+25 張 SC 的 `## 行為` / `## 邊界` 皆為業務語言，未發現 class 名、函式名、SQL、exception 類別，不退回。
+
+### 建議第二段修正範圍
+
+1. 可直接修（改 test，2 項）：SC-090 View 層 test；SC-074 預覽 test。
+2. 需使用者先確認再修（2 項）：SC-103 情境二 GIVEN／THEN 不一致（確認後改 test 並補台積電端與活存→定存）；SC-006 marker 歸屬建議併入另案、本 Change 不動。
+3. 覆蓋缺口不補，除非使用者要求。
+
+### 修正結果（第二段）
+
+使用者決定範圍：修 SC-090／SC-074 View test；SC-103 依新卡片（scenario-author 已補 GIVEN）改 test 並補斷言；SC-006 marker 不動（併入標記清理另案）；補覆蓋缺口（SC-083 設定頁不補）。只改 tests，未改任何 src／views（`git status` 確認 src、views 無差異）。
+
+| SC | 動作 | 檔案 |
+|----|------|------|
+| SC-090 | View test 先放 2026-05 總成本 200000 的紀錄，預覽與存檔斷言改 −302000 | tests/test_input_view.py |
+| SC-074 | 預覽 test 輸入改 350000／400000，斷言「推算本月淨投入：50,000」 | tests/test_input_view.py |
+| SC-103 | 活存端改兩情境（500000→400000＝−100000；400000→550000＝+150000，驗前期餘額 400000）；新增活存→定存互轉（−50000／+50000，合計 0）；新增股票端（300000→400000＝+100000；400000→250000＝−150000） | tests/test_balance_input.py、tests/test_cost_basis.py |
+| SC-092 | 新增：推算淨投入 +100000 餵進 compute_twr，2026-05 當月報酬為 0 | tests/test_balance_input.py |
+| SC-100 | 新增：活存 370000＋信用卡應繳 30000，淨值 340000＝總資產−30000 | tests/test_net_worth.py |
+| SC-085 | 存檔／刪除失敗 test 加 caplog：原始錯誤進 log、畫面仍只有友善訊息 | tests/test_input_view.py |
+| SC-107 | 匯入失敗 AppTest 加 caplog：原始錯誤進 log、畫面不含 | tests/test_data_io.py |
+| SC-104 | 新增資產配置頁 AppTest：趨勢圖存在，折線恰為活存／台積電、單位萬元（50/60/58、30/42/45）、信用卡不畫 | tests/test_allocation_view.py（新檔） |
+| SC-087 | 必填留空 test 補斷言錯誤訊息含欄位名（餘額／應繳金額）；「必填」文案見下方實作不符 | tests/test_input_view.py |
+
+RED 確認（暫時改源碼，驗完還原）：
+- 拿掉 views/input.py、views/data_io.py 的 `logger.exception`、並讓資產配置頁略過趨勢圖渲染 → 10 個 test 失敗（SC-085 save/delete 各 4、SC-107 1、SC-104 1），還原後全過。
+- 讓 balance／cost_basis 推算多加 1、淨值改成資產＋負債 → SC-103 三個、SC-092 報酬、SC-100 淨值、SC-090／SC-074 View test 全部失敗，還原後全過。
+
+驗證：`pytest tests` 690 passed（原 685，新增 5）；`ruff check .` All checks passed。
+
+### 實作不符 SC（未改源碼，回報主 AI）
+
+- SC-087／SC-096／SC-099／SC-100 都寫「留空拒絕存檔並提示必填」，但實作對留空的提示是 `parse_amount` 的「<欄位>輸入無效，請輸入正確的金額格式」，文案不含「必填」（src/asset_lab/core/utils.py L167）。行為（拒存）正確、文案與 SC 不符。目前 test 只能斷言訊息含欄位名。需使用者決定：改實作（空白給「<欄位>為必填」）或改 SC 文案。

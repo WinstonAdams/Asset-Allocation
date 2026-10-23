@@ -8,6 +8,7 @@ HoldingModel/MonthlyRecordModel 驗證，不連任何 DB。所有金額皆為虛
 # 無
 
 # ==== 第三方套件 ====
+import pandas as pd
 import pytest
 
 # ==== 專案內部 ====
@@ -23,6 +24,7 @@ from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.results import BalanceDerivation
 from asset_lab.services.balance_input_service import BalanceInputService
+from asset_lab.services.return_service import ReturnService
 
 
 def _service() -> BalanceInputService:
@@ -368,14 +370,52 @@ def test_sc106_new_save_leaves_legacy_records_untouched() -> None:
 
 @pytest.mark.scenario("SC-103")
 def test_sc103_balance_side_net_investment_offsets_transfer() -> None:
+    # 情境一：2026-04 餘額 500000 → 2026-05 填 400000（把 100000 拿去買台積電）
     records = [_record(year_month="2026-04", market_value=500000.0)]
-
     outflow = _service().derive(
         holding=_holding(), records=records, year_month="2026-05", balance=400000.0
     )
-    inflow = _service().derive(
-        holding=_holding(), records=records, year_month="2026-05", balance=550000.0
-    )
-
     assert outflow.net_investment == -100000.0
-    assert inflow.net_investment == 50000.0
+
+    # 情境二：承接情境一，2026-05 餘額 400000 → 2026-06 賣股實收 150000 存入，填 550000
+    records.append(_record(year_month="2026-05", market_value=400000.0))
+    inflow = _service().derive(
+        holding=_holding(), records=records, year_month="2026-06", balance=550000.0
+    )
+    assert inflow.previous_balance == 400000.0
+    assert inflow.net_investment == 150000.0
+
+
+@pytest.mark.scenario("SC-103")
+def test_sc103_demand_to_time_deposit_offsets_each_other() -> None:
+    # 活存少 50000（−50000）、定存多 50000（+50000），一出一進相抵
+    demand = _service().derive(
+        holding=_holding(),
+        records=[_record(year_month="2026-04", market_value=500000.0)],
+        year_month="2026-05",
+        balance=450000.0,
+    )
+    time_deposit = _service().derive(
+        holding=_holding(category=ASSET_CATEGORIES.TIME_DEPOSIT),
+        records=[_record(year_month="2026-04", market_value=1000000.0)],
+        year_month="2026-05",
+        balance=1050000.0,
+    )
+    assert demand.net_investment == -50000.0
+    assert time_deposit.net_investment == 50000.0
+    assert demand.net_investment + time_deposit.net_investment == 0.0
+
+
+@pytest.mark.scenario("SC-092")
+def test_sc092_derived_net_investment_makes_monthly_return_zero() -> None:
+    # 2026-04 餘額 500000；2026-05 只填 600000 → 淨投入 +100000，當月報酬為 0
+    records = [_record(year_month="2026-04", market_value=500000.0, net_investment=200000.0)]
+    derived = _service().derive(
+        holding=_holding(), records=records, year_month="2026-05", balance=600000.0
+    )
+    monthly = pd.DataFrame(
+        [{"year_month": "2026-05", "market_value": 600000.0,
+          "net_investment": derived.net_investment}]
+    )
+    twr = ReturnService().compute_twr(monthly=monthly, initial_market_value=500000.0)
+    assert twr == pytest.approx(0.0)

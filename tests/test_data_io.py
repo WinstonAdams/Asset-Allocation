@@ -1,5 +1,6 @@
 # ==== 原生（標準庫） ====
 import io
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -798,7 +799,9 @@ class TestImportFailureMessage:
     """寫入失敗時頁面顯示友善紅字、不露出原始錯誤 —— SC-107。"""
 
     @pytest.mark.scenario("SC-107")
-    def test_sc107_failure_shows_friendly_error_without_raw_detail(self, service, real_conn):
+    def test_sc107_failure_shows_friendly_error_without_raw_detail(
+        self, service, real_conn, caplog
+    ):
         container = SimpleNamespace(
             data_io_service=service,
             holding_repo=HoldingRepository(conn=real_conn),
@@ -819,10 +822,13 @@ class TestImportFailureMessage:
             uploader = next(u for u in at.get("file_uploader") if u.key == key)
             uploader.set_value([("data.csv", content, "text/csv")])
         at.button[0].click()
-        at.run()
+        with caplog.at_level(logging.ERROR):
+            at.run()
 
         errors = [e.value for e in at.error]
         assert errors == ["匯入失敗，資料未變更，請重試"]
         assert not at.exception
+        # 原始錯誤寫進 log，畫面不顯示
+        assert "模擬匯入寫入中途失敗" in caplog.text
         assert "模擬匯入寫入中途失敗" not in str(errors)
         assert _db_counts(real_conn) == (0, 0, 0)
