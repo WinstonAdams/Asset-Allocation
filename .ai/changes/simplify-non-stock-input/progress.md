@@ -23,7 +23,7 @@
 | t06 各項目市值趨勢圖 | 完成 | SC-104/105；RED 先跑，666 passed |
 | t07 錄入頁編輯器分派與移除轉移 UI | 完成 | SC-083/085/087/089/090/096(View 層)/099/100/101/102/103；RED 先跑，705 passed |
 | t08 移除轉移 dead code | 完成 | 刪除 SC-008/037/079/080/086 測試與 accumulate；無殘留引用，685 passed |
-| 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
+| 2-Z 整合驗證 | 完成 | scenario-lint 無新增 FAIL（38 筆既有未掛 marker，使用者決定另開 Change 清；5 筆 REMOVED 卡 WARN 屬預期）；pytest 685 passed；啟動 health 200 |
 
 ## Phase 3：審查
 
