@@ -136,7 +136,11 @@ class BalanceInputService:
     def _previous_balance(
         *, holding: HoldingModel, records: list[MonthlyRecordModel], year_month: str
     ) -> float:
-        """年月早於 year_month、最近一筆有餘額的值；沒有則取初始市值（None 當 0）。"""
+        """年月早於 year_month、最近一筆有餘額的值；沒有則取初始市值（None 當 0）。
+
+        Returns:
+            前期餘額。
+        """
         earlier = [r for r in records if r.year_month < year_month and r.market_value is not None]
         if earlier:
             latest = max(earlier, key=lambda r: r.year_month)
@@ -151,7 +155,11 @@ class BalanceInputService:
         after: list[MonthlyRecordModel],
         year_month: str,
     ) -> list[MonthlyRecordModel]:
-        """異動後，晚於 year_month 第一筆有餘額列的前期餘額若改變就重算它。"""
+        """異動後，晚於 year_month 第一筆有餘額列的前期餘額若改變就重算它。
+
+        Returns:
+            需重寫的下一筆列；無需重算時為空清單。
+        """
         following = sorted(
             (r for r in after if r.year_month > year_month and r.market_value is not None),
             key=lambda r: r.year_month,

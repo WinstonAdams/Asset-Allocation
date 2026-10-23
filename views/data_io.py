@@ -58,7 +58,8 @@ def _render_export(*, container: Container) -> None:
 def _render_import(*, container: Container) -> None:
     """上傳三份 CSV，驗證後還原到空庫（驗證失敗的 catch 在 render 統一處理）。
 
-    三張表整批寫入在單一交易內完成；寫入失敗整批復原並顯示友善訊息。"""
+    三張表整批寫入在單一交易內完成；寫入失敗整批復原並顯示友善訊息。
+    """
     st.subheader("匯入（還原到空庫）")
     st.warning("匯入僅支援還原到空的資料庫；若庫內已有資料，匯入會被拒絕以免污染。")
 

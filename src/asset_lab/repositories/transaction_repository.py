@@ -8,10 +8,12 @@ AssetLabError 捕捉即可顯示友善訊息。本層不記錄錯誤，細節交
 
 # ==== 原生（標準庫） ====
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from typing import TYPE_CHECKING, Any
 
-# ==== 專案內部 ====
+# ==== 第三方套件 ====
+# 無
+# ==== AsiaYo 專案內部 ====
 from asset_lab.core.exceptions import AssetLabError, PersistenceError
 
 if TYPE_CHECKING:
@@ -65,6 +67,10 @@ class TransactionRepository:
     def __init__(self, *, conn: "Connection") -> None:
         self._conn = conn
 
-    def transaction(self):
-        """開啟寫入交易 context，yield cursor 供各 Repository 的 *_with_context 方法使用。"""
+    def transaction(self) -> AbstractContextManager[Any]:
+        """開啟寫入交易 context，yield cursor 供各 Repository 的 *_with_context 方法使用。
+
+        Returns:
+            交易 context manager；進入時給 cursor，離開時 commit 或 rollback。
+        """
         return write_transaction(self._conn)

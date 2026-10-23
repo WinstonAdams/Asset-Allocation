@@ -284,7 +284,113 @@ Community Cloud 用哪個檔案解析依賴：
 
 ## 3-3 規則符合度審查
 
-<!-- rules-reviewer subagent 產出（工程準則全面符合度檢查）-->
+審查範圍：37 個檔案（src 16、views 3、tests 17、uv.lock 1），68ed557..4138bbf
+核准判定：有條件通過（無 CRITICAL / HIGH，MEDIUM 與 LOW 見下）
+
+### 自動掃描
+
+Checker 命令：`python .claude/skills/spec-driven-flow/scripts/checkers/runner.py --phase 3-3 --project-dir . --diff-base 68ed557 --json`（退出碼 0）
+總違規：453 條（CRITICAL: 0 / HIGH: 101 / MEDIUM: 12 / LOW: 340）
+Baseline 命中：0 條
+完整報告：`.ai/changes/simplify-non-stock-input/.cache/checker_3_3.json`
+
+逐條復核結論（HIGH 101 條全部降級或判為不適用）：
+
+| Checker 規則 | 條數 | 結論 | 依據 |
+|---|---|---|---|
+| `no_runtime_constants_access`：tests/* | 約 85 | 偽陽性 | 測試以 constants 組 fixture，並非模組內部取 runtime 值 |
+| `no_runtime_constants_access`：bootstrap.py 171-179 | 6 | 偽陽性 | bootstrap 是本專案的組裝根（等同 main.py），04 §3.1 就是要求由這裡讀 constants 後注入 |
+| `no_runtime_constants_access` / `service_no_runtime_constants`：allocation_service.py 224-244 | 4 | 真違規，降為 MEDIUM | 見 M-1 |
+| `no_runtime_constants_access`：views/input.py 244/251/258 | 3 | 降為 LOW | 見 L-2 |
+| `root_main_exists` / `src_project_layout_missing` | 2 | 不適用 | 本 Change 沒動；專案是 Streamlit 多頁，沒有 main.py 與 controllers/（`views/` 擔任 Controller 角色），是專案整體既有結構 |
+| `import_block_format` | 10 | 部分成立 | 見 M-3 / L-1 |
+| `event_name_format` / `no_logger_exception` / `note_required`（views/data_io.py:100） | 3 | 真違規但為專案既有慣例，降為 LOW | 見 L-3 |
+| `docstring_returns_section` | 12 | src 內 3 條成立（M-2、L-4c）；tests 的 helper 與 fixture 不強求 | 01 §3 |
+| `docstring_required` / ANN* / `model_naming_convention` | 約 340 | LOW，多為 tests、私有函式與既有命名；`Any` 見 L-5 | 不逐條列 |
+
+### 3-1 留下的判定：`csv_import_writer.write_import` 放在 repositories/ 並以模組函式實作
+
+**判定：符合規則，不需要修；另有一項選擇性改進建議（L-6）。**
+
+- 維度 A（02 §2）：`write_import` 在同一交易內依序呼叫三個 Repository 的寫入方法。每一步都是 I/O，步驟之間沒有運算、轉換、篩選或業務判斷，符合「多步 I/O 序列，步驟間無業務邏輯介入 → Repository（compound method）」。它不屬於 Service（無業務運算），也不屬於 Controller（無失敗決策，PersistenceError 往上拋，由 `views/data_io.py` 決定顯示什麼）。
+- 維度 B：CSV 匯入的失敗策略是整批成敗一致，由 Service 或 Repository 持有都可以，不與歸屬 Repository 衝突。
+- §4（Controller 合約）：把三表寫入收進 `write_import` 後，View 只剩「呼叫、catch、顯示」，比把 `with` 區塊攤在 View 內更符合 Controller 只協調的要求。
+- §6（Repository 合約）：「必須有建構子」與「無建構子的 Repository 類別」禁的是 Repository 類別；`write_import` 是模組函式，不是類別，字面上不違規。四個 repo 在呼叫時以 keyword args 傳入，沒有流程資料存放，也沒有從 constants 取值。Repository 呼叫 Repository 不在 §1 禁止項（禁的是 Repository 呼叫 Service）。它不 log、不 catch，符合 04 §2.1。
+- §5「必須以類別實作」只約束 Service，不適用。
+- §9：三個 `*_with_context` 方法都接受已開啟的 cursor、不自己建立 `with` 區塊，符合。`with` 區塊由 `write_import` 持有而非 Controller，與 §9 字面「由 Controller 建立 with 區塊」有偏離；但 §9 針對的是多人/多系統併發的鎖定與讀→處理→寫原子性，這裡是單一 DB 交易且步驟間無處理，§2 compound method 已明文允許，屬可接受的合理偏離，design AD-10 已記錄。
+- 唯一代價：Repository 層出現「類別」與「模組函式」兩種形態，故給 L-6 作選擇性建議。
+
+### 規則審查發現
+
+- [MEDIUM] M-1 `src/asset_lab/services/allocation_service.py` 224-244 `holding_value_trend` — 方法 body 直接存取 `MONTHLY_RECORDS_TABLE`、`HOLDING_KIND`，違反 DI。
+  說明：這 4 行在本次 diff 內，但同檔既有方法（base 版本約 80、126、131、171-181、247 行）都是同一寫法，`AllocationService()` 也沒有建構子參數，新方法是沿用該檔慣例；只讓新方法合規會讓同一個類別內兩種寫法並存。
+  建議：本 Change 不處理；合併後另開 Change，把 `AllocationService` 連既有方法一次改成注入。
+  依據：04-cross-cutting §3.2；審查焦點原則
+  Checker 對應：`no_runtime_constants_access`、`service_no_runtime_constants`（checker 已標，嚴重度由 HIGH 降為 MEDIUM）
+
+- [MEDIUM] M-2 `src/asset_lab/repositories/transaction_repository.py` `TransactionRepository.transaction` — 缺回傳型別提示與 docstring 的 `Returns:` 區塊。
+  建議：補回傳型別（context manager）並在 docstring 補 `Returns:`。
+  依據：01-coding-style §1 型別提示必填、§3 docstring 含 Returns
+  Checker 對應：`docstring_returns_section`、ANN201（checker 已標）
+
+- [MEDIUM] M-3 `src/asset_lab/repositories/csv_import_writer.py` 檔頭 import — 只有一個「專案內部」區塊，缺原生（標準庫）與第三方套件區塊（無導入也要寫 `# 無` 並保留順序）；`transaction_repository.py` 同樣缺第三方套件與專案內部標頭。
+  建議：補齊三個區塊標頭。
+  依據：01-coding-style §2
+  Checker 對應：`import_block_format`（checker 已標）
+
+- [LOW] L-1 `balance_input_service.py`、`cost_basis_service.py`、`monthly_input_service.py`、`tests/test_balance_input.py`、`tests/test_input_view.py` — 區塊標頭寫「# ==== 專案內部 ====」，規則用語為「# ==== AsiaYo 專案內部 ====」。
+  說明：整個專案（含 bootstrap、views 與 base 所有檔案）一律用「專案內部」，是專案既有約定，不是本次引入；`balance_input_service.py` 另在「第三方套件 / # 無」後少一個空行。
+  建議：不批次改；新檔 `balance_input_service.py` 順手補空行即可。
+  依據：01-coding-style §2
+  Checker 對應：`import_block_format`（checker 已標，判定為專案既有約定）
+
+- [LOW] L-2 `views/input.py` 244/251/258 — `_render_record_editor` 以 `INPUT_MODE.*` 常數分派編輯器。
+  說明：View 是本專案的 Controller 角色，design AD-1 明訂「Page 只依回傳的錄入方式代碼分派」，業務判斷仍在 `resolve_input_mode`；同檔早已使用 `TIMEZONE` 常數。可接受。
+  Checker 對應：`no_runtime_constants_access`（checker 已標，降級）
+
+- [LOW] L-3 `views/data_io.py` 100 — `logger.exception("CSV 匯入寫入失敗")` 使用標準庫 logging、`logger.exception`、無 `note=`，與 04 §1.2 的 structlog 規範不符。
+  說明：專案全部 9 處 Page 層 log 都是此寫法（views/input.py:134、views/data_io.py:40 等），本次新增的一行只是跟隨既有慣例，專案尚未導入 structlog。依 SSoT 屬違規，但只改一處會與其餘不一致。
+  建議：不改；專案若決定導入 structlog，應整批處理。
+  依據：04-cross-cutting §1.1、§1.2
+  Checker 對應：`event_name_format`、`no_logger_exception`、`note_required`（checker 已標）
+
+- [LOW] L-4 (a) `views/data_io.py` `_render_import` 新增的 `except PersistenceError` 與 `render` 既有統一 `except AssetLabError` 重複：PersistenceError 預設訊息「存檔失敗，資料未變更，請重試」本來就會被統一 catch 顯示並記 log，內層只是改措辭；04 §2 與該檔 docstring 都強調 Page 為唯一 catch 點。(b) 同函式 docstring 結尾引號與文字同行，與其他 docstring 不一致。(c) `balance_input_service._previous_balance`、`_recalculate_next` 為私有函式有回傳值但無 `Returns:`（私有不強制）。
+  建議：(a) 若 SC-107 沒有要求匯入專屬文案可刪內層 try/except；若 SC 要求則保留，請 3-4 對照確認。(b)(c) 順手整理。
+  Checker 對應：(c) `docstring_returns_section`（checker 已標）；(a)(b) checker 未報出
+
+- [LOW] L-5 `holding_repository.replace_all_with_context`、`record_repository.replace_all_with_context`、`target_repository.upsert_targets_with_context` — `cursor: Any`。
+  說明：libsql 沒有公開型別，以 `Any` 合理；要更明確可定義只有 `execute` 的 Protocol。不要求修。
+  Checker 對應：`ANN401`（checker 已標）
+
+- [LOW] L-6（選擇性）`csv_import_writer.write_import` 是 Repository 層唯一的模組函式，其他 Repository 都是類別。
+  建議：日後若要統一為類別，可改為 `TransactionRepository` 的 compound method；現況功能與規則皆無問題。
+  Checker 對應：checker 未報出
+
+### 已檢視、無發現
+
+- Service（BalanceInputService、CostBasisService 新增方法、MonthlyInputService）皆純運算、無 I/O、無 log；依賴與分類集合都由 bootstrap 以 keyword args 建構子注入。
+- Repository：新增 `*_with_context` 方法不自行 commit、不 catch、不 log；`write_transaction` 在交易邊界把失敗轉成領域例外並保留 `__cause__`，符合 AD-10 的偏離說明；`record_repository` 兩個 compound method 改用共用 helper，錯誤處理一致。
+- Model：`BalanceDerivation`、`HoldingValueSeries/Trend`、`PremiumEditorPrefill` 為純資料結構，無業務邏輯。
+- constants：`PREMIUM_INPUT` / `BALANCE_INPUT` / `INPUT_MODE` 為嵌套 class 且有 docstring，SSoT 由三個集合組出。
+- 敏感資料：`parse_amount` 錯誤訊息不再內插原文；log 無金額與密鑰；無寫死密鑰。
+- 已移除的轉移功能無殘留引用；`ruff check .` 全數通過。
+
+### 建議第二段修正範圍
+
+無 CRITICAL / HIGH。建議修：M-2、M-3（機械式，不改行為）、L-1 中 `balance_input_service.py` 的空行、L-4(b)(c)；L-4(a) 先確認 SC-107 是否要求匯入專屬文案再決定。M-1、L-2、L-3、L-5、L-6 建議不動，理由如上。
+
+### 修正結果
+
+使用者決定的第二段範圍已完成，驗證：`ruff check .` 通過、`pytest tests` 685 passed。
+
+- M-2：`TransactionRepository.transaction` 補回傳型別 `AbstractContextManager[Any]` 與 docstring `Returns:`。
+- M-3：`csv_import_writer.py` 補原生、第三方兩個「# 無」區塊；`transaction_repository.py` 補第三方區塊；專案內部區塊標頭改為規則用語「AsiaYo 專案內部」。
+- L-1（`balance_input_service.py` 少的空行）：未能照加。ruff isort 設定會把「# 無」與下一個區塊標頭之間的空行收掉（專案所有檔案皆如此），加了就讓 `ruff check` 失敗，故維持專案現行格式；此項視為專案約定，不修。
+- L-4(b)：`views/data_io.py::_render_import` docstring 結尾引號獨立成行。
+- L-4(c)：`balance_input_service._previous_balance`、`_recalculate_next` 補 `Returns:`。
+- L-4(a)：使用者已在 t02 明確選擇保留匯入專屬文案，SC-107 卡片訊息即「匯入失敗，資料未變更，請重試」，故保留 `views/data_io.py` 的 `except PersistenceError`，不屬違規。
+- M-1：`AllocationService` 直接讀 constants，使用者決定另開 Change，整檔（含既有方法）改為建構子注入，本 Change 不處理。
+- L-2、L-3、L-5、L-6：依建議不動。
 
 ## 3-4 行為對映審查
 

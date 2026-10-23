@@ -4,7 +4,13 @@
 往上拋（見 transaction_repository.write_transaction）。
 """
 
-# ==== 專案內部 ====
+# ==== 原生（標準庫） ====
+# 無
+
+# ==== 第三方套件 ====
+# 無
+
+# ==== AsiaYo 專案內部 ====
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.target import TargetAllocationModel
