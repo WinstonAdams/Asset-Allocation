@@ -34,14 +34,14 @@
 | 3-2 安全審查 | 完成 | 有條件通過：log 不帶金額原文、誤報 noqa；依賴升級 streamlit 1.66.1/pillow 13/pyarrow 26/uvicorn 0.54 等，pip-audit 0；A05 全站錯誤兜底另案；合併前需目視 pyarrow 26 不崩潰與存檔 rerun 帶入值 |
 | 3-3 規則符合度審查 | 完成 | 有條件通過：write_import 判定合規；修 M-2/M-3/L-4(b)(c)；L-4(a) 保留匯入專屬文案；M-1 AllocationService 注入 constants 另案 |
 | 3-4 行為對映審查 | 完成 | 通過：SC-090/074/103 對齊、補 log／趨勢圖接線／必填等斷言；必填提示經 t09 回繞修正；SC-006 marker 過廣併入標記清理另案；695 passed |
-| 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
+| 3-Z 最終驗證 | 完成 | scenario-lint 與 68ed557 基準相同（38 筆既有 FAIL，無新增）；pytest 695 passed；health 200 |
 
 ## Phase 4：收尾
 
 | 步驟 | 狀態 | 備註 |
 |------|------|------|
 | 4-1 README 同步 | 未開始 | — |
-| 4-2 Windows 啟動器 | 未開始 | 新專案且需啟動器時 |
+| 4-2 Windows 啟動器 | 跳過 | 非新專案 |
 | 4-3 歸檔 | 未開始 | — |
 
 **狀態值**：未開始 / 進行中 / 完成 / 跳過
