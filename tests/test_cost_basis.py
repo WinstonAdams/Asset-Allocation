@@ -695,7 +695,7 @@ class TestBuildCostBasisPrefill:
         assert prefill.cash_dividend == 0
 
 
-# ==== 保險：累計已繳保費＋解約金＋本月領回（SC-095~099） ====
+# ==== 保險：累計已繳保費＋解約金＋本月領回 ====
 
 
 def _insurance(*, holding_id: int = 1, initial_cost: float | None = 0.0) -> HoldingModel:

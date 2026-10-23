@@ -82,7 +82,7 @@ def test_sc092_input_mode_maps_every_category_to_exactly_one_mode() -> None:
     assert INPUT_MODE.BY_ASSET_CATEGORY[ASSET_CATEGORIES.TIME_DEPOSIT] == INPUT_MODE.BALANCE
 
 
-# === SC-092：餘額推算 ===
+# === 餘額推算 ===
 
 
 @pytest.mark.scenario("SC-092")
@@ -175,7 +175,7 @@ def test_sc092_non_balance_category_rejected() -> None:
         service.plan_delete(holding=holding, records=[], year_month="2026-04")
 
 
-# === SC-093：前期餘額跳過空白列 ===
+# === 前期餘額跳過空白列 ===
 
 
 @pytest.mark.scenario("SC-093")
@@ -223,7 +223,7 @@ def test_sc093_ignores_records_at_or_after_target_month_and_unsorted_input() -> 
     assert result.previous_balance == 400000.0
 
 
-# === SC-094：連動重算 ===
+# === 連動重算 ===
 
 
 @pytest.mark.scenario("SC-094")
@@ -343,7 +343,7 @@ def test_sc094_delete_last_record_returns_empty_and_does_not_mutate_input() -> N
     assert records == snapshot
 
 
-# === SC-106：舊紀錄保留原值 ===
+# === 舊紀錄保留原值 ===
 
 
 @pytest.mark.scenario("SC-106")
@@ -363,7 +363,7 @@ def test_sc106_new_save_leaves_legacy_records_untouched() -> None:
     assert records[1].net_investment == 20000.0
 
 
-# === SC-103：資金在項目間移動，活存端自動一出一進 ===
+# === 資金在項目間移動，活存端自動一出一進 ===
 
 
 @pytest.mark.scenario("SC-103")
