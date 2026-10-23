@@ -33,7 +33,7 @@
 | 3-1 程式碼清理 | 完成 | 只修 6 行測試註解 SC 編號；風格題不動；design 補記 write_import 與 uses_premium 實作調整 |
 | 3-2 安全審查 | 完成 | 有條件通過：log 不帶金額原文、誤報 noqa；依賴升級 streamlit 1.66.1/pillow 13/pyarrow 26/uvicorn 0.54 等，pip-audit 0；A05 全站錯誤兜底另案；合併前需目視 pyarrow 26 不崩潰與存檔 rerun 帶入值 |
 | 3-3 規則符合度審查 | 完成 | 有條件通過：write_import 判定合規；修 M-2/M-3/L-4(b)(c)；L-4(a) 保留匯入專屬文案；M-1 AllocationService 注入 constants 另案 |
-| 3-4 行為對映審查 | 進行中 | 第一段報告已寫入 review.md §3-4，待第二段 |
+| 3-4 行為對映審查 | 完成 | 通過：SC-090/074/103 對齊、補 log／趨勢圖接線／必填等斷言；必填提示經 t09 回繞修正；SC-006 marker 過廣併入標記清理另案；695 passed |
 | 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
 
 ## Phase 4：收尾

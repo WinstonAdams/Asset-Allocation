@@ -564,12 +564,16 @@ class TestPremiumEditor:
     @pytest.mark.scenario("SC-096")
     @pytest.mark.scenario("SC-099")
     @pytest.mark.parametrize(
-        ("premium", "surrender"),
-        [("", ""), ("", "585000"), ("620000", "")],
+        ("premium", "surrender", "expected"),
+        [
+            ("", "", ("累計已繳保費為必填", "解約金為必填")),
+            ("", "585000", ("累計已繳保費為必填",)),
+            ("620000", "", ("解約金為必填",)),
+        ],
         ids=["both_blank", "only_premium_blank", "only_surrender_blank"],
     )
     def test_save_with_blank_required_field_is_rejected_without_planning(
-        self, record_repo, premium, surrender
+        self, record_repo, premium, surrender, expected
     ):
         service = _SpyCostBasisService()
         at = _run_app(record_repo=record_repo, cost_basis_service=service, holding_id=_INSURANCE_ID)
@@ -579,7 +583,8 @@ class TestPremiumEditor:
             at.text_input(key="premium_surrender_value").set_value(surrender).run()
         _click(at, "儲存此列")
 
-        assert at.error
+        # 兩欄皆空時只會提示先解析到的那一欄，故容許任一必填訊息
+        assert any(msg in e.value for e in at.error for msg in expected)
         assert service.plan_save_premium_calls == 0
         assert record_repo.batch_upserted == []
 
@@ -822,7 +827,7 @@ class TestAmountDueEditor:
         _click(at, "儲存此列")
 
         assert record_repo.batch_upserted == []
-        assert any("應繳金額" in e.value for e in at.error)
+        assert any("應繳金額為必填" in e.value for e in at.error)
 
     @pytest.mark.scenario("SC-100")
     def test_save_writes_amount_due_with_zero_net_investment_via_batch(self, record_repo):
