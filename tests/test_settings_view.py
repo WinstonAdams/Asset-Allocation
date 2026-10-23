@@ -25,6 +25,7 @@ HOUSE="house"；純附加標記不受性質（資產/負債）分支限制，兩
 """
 
 # ==== 原生（標準庫） ====
+from pathlib import Path
 from types import SimpleNamespace
 
 # ==== 第三方套件 ====
@@ -36,6 +37,8 @@ from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND, HOLDING_PUR
 from asset_lab.models.holding import HoldingModel
 from asset_lab.services.house_service import HouseService
 from asset_lab.services.protocol_service import ProtocolService
+
+APP_DIR = Path(__file__).resolve().parent.parent
 
 
 class _StubHoldingRepo:
@@ -90,7 +93,7 @@ def _run_app(*, holding_repo: _StubHoldingRepo | None = None) -> AppTest:
         house_param_repo=_StubHouseParamRepo(),
         house_service=HouseService(),
     )
-    at = AppTest.from_file("views/settings.py")
+    at = AppTest.from_file(APP_DIR / "views" / "settings.py")
     at.session_state["container"] = container
     at.run()
     return at

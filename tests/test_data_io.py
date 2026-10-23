@@ -1,5 +1,6 @@
 # ==== 原生（標準庫） ====
 import io
+from pathlib import Path
 from types import SimpleNamespace
 
 # ==== 第三方套件 ====
@@ -21,6 +22,8 @@ from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.repositories.transaction_repository import TransactionRepository
 from asset_lab.services.data_io_service import DataIoService
+
+APP_DIR = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -805,7 +808,7 @@ class TestImportFailureMessage:
                 conn=_FlakyConnection(real_conn, fail_at=6)
             ),
         )
-        at = AppTest.from_file("views/data_io.py")
+        at = AppTest.from_file(APP_DIR / "views" / "data_io.py")
         at.session_state["container"] = container
         at.run()
         for key, content in (

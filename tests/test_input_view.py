@@ -13,6 +13,7 @@ test_monthly_input.py）覆蓋，這裡用真正的純運算 Service 搭配 Repo
 
 # ==== 原生（標準庫） ====
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -35,6 +36,8 @@ from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.services.balance_input_service import BalanceInputService
 from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.monthly_input_service import MonthlyInputService
+
+APP_DIR = Path(__file__).resolve().parent.parent
 
 # 替身主檔的 holding_id：活存／定存走餘額、台積電走總成本、保單走累計保費、信用卡／房貸為負債、
 # 舊匯入項目分類留空。
@@ -198,7 +201,7 @@ def _run_app(
         balance_input_service=BalanceInputService(balance_categories=BALANCE_INPUT.CATEGORIES),
     )
     with mock.patch("asset_lab.services.period_service.today_in_timezone", return_value=today):
-        at = AppTest.from_file("views/input.py")
+        at = AppTest.from_file(APP_DIR / "views" / "input.py")
         at.session_state["container"] = container
         at.run()
         if holding_id is not None:

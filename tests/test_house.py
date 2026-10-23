@@ -13,6 +13,7 @@ HouseParams/SubjectiveTriggerModel/AffordabilityResult 驗證，不連任何 DB�
 """
 
 # ==== 原生（標準庫） ====
+from pathlib import Path
 from types import SimpleNamespace
 
 # ==== 第三方套件 ====
@@ -33,6 +34,8 @@ from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.results import AffordabilityResult
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.house_service import HouseService
+
+APP_DIR = Path(__file__).resolve().parent.parent
 
 
 def _holding(
@@ -921,7 +924,7 @@ def _run_house_page(
         affordability_service=AffordabilityService(),
         house_service=HouseService(),
     )
-    at = AppTest.from_file("views/house.py")
+    at = AppTest.from_file(APP_DIR / "views" / "house.py")
     at.session_state["container"] = container
     at.run()
     return at

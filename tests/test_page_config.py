@@ -72,7 +72,7 @@ def _latest_page_config_msg():
 def test_login_screen_has_fixed_page_config():
     # 未登入：顯示登入畫面，分頁標題與圖示仍應是固定值
     with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED):
-        app = _run_with_capture(AppTest.from_file("app.py", default_timeout=8))
+        app = _run_with_capture(AppTest.from_file(APP_DIR / "app.py", default_timeout=8))
     assert not app.exception
 
     cfg = _latest_page_config_msg()
@@ -90,7 +90,7 @@ def test_denied_screen_has_fixed_page_config():
         mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED),
         mock.patch.object(st, "user", stranger),
     ):
-        app = _run_with_capture(AppTest.from_file("app.py", default_timeout=8))
+        app = _run_with_capture(AppTest.from_file(APP_DIR / "app.py", default_timeout=8))
     assert not app.exception
 
     cfg = _latest_page_config_msg()
