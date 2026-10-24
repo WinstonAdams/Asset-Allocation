@@ -24,3 +24,16 @@ class ProtocolDocError(AssetLabError):
 
 class SchemaError(AssetLabError):
     """資料庫結構建立或對齊失敗時拋出。"""
+
+
+class PersistenceError(AssetLabError):
+    """資料庫寫入失敗且已復原（資料未變更）時拋出，預設訊息可直接顯示給使用者。
+
+    訊息刻意不內插原始錯誤（避免 SQL、表名等細節出現在畫面）；原始錯誤由 `__cause__`
+    保留，交由上層記錄到 log。
+    """
+
+    DEFAULT_MESSAGE = "存檔失敗，資料未變更，請重試"
+
+    def __init__(self, message: str = DEFAULT_MESSAGE) -> None:
+        super().__init__(message)

@@ -194,6 +194,27 @@ class TestParseAmount:
             parse_amount(None, field_label="已實現收益")
 
     @pytest.mark.scenario("SC-082")
+    @pytest.mark.parametrize("blank", [None, "", "   ", "\u3000"])
+    def test_blank_input_reports_required_without_invalid_wording(self, blank):
+        # 留空（None／空字串／只有空白）提示「為必填」，不可誤報成格式錯誤
+        with pytest.raises(DataValidationError) as exc_info:
+            parse_amount(blank, field_label="已實現收益")
+
+        message = str(exc_info.value)
+        assert "已實現收益為必填" in message
+        assert "輸入無效" not in message
+
+    @pytest.mark.scenario("SC-082")
+    def test_malformed_input_keeps_invalid_format_message_without_echoing_input(self):
+        with pytest.raises(DataValidationError) as exc_info:
+            parse_amount("abc123", field_label="現值")
+
+        message = str(exc_info.value)
+        assert message == "現值輸入無效，請輸入正確的金額格式"
+        assert "為必填" not in message
+        assert "abc123" not in message
+
+    @pytest.mark.scenario("SC-082")
     def test_sc082_error_message_includes_field_label(self):
         with pytest.raises(DataValidationError, match="已實現收益"):
             parse_amount("abc", field_label="已實現收益")

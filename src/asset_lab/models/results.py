@@ -15,10 +15,23 @@ class NetInvestmentDerivation(BaseModel):
     is_transition_estimate 為 True 表示前期總成本查無新制上一筆（上一筆是本功能
     上線前建立的舊制列），改以「初始成本＋該月以前所有淨投入」估算，可能與券商
     實際總成本有落差，呈現時應提醒使用者留意。
+
+    保險沿用同一結構：previous_total_cost 為前期累計已繳保費。
     """
 
     previous_total_cost: float
     is_transition_estimate: bool
+    net_investment: float
+
+
+class BalanceDerivation(BaseModel):
+    """活存/定存當月淨投入推算結果（存檔前預覽用）。
+
+    previous_balance 取年月早於推算月、最近一筆有餘額的紀錄；都沒有則為主檔初始市值
+    （None 當 0）。
+    """
+
+    previous_balance: float
     net_investment: float
 
 
@@ -69,6 +82,25 @@ class NetWorthPoint(BaseModel):
     total_assets: float
     total_liabilities: float
     net_worth: float
+
+
+class HoldingValueSeries(BaseModel):
+    """單一資產項目跨月市值序列。
+
+    market_values 與 HoldingValueTrend.year_months 一一對齊；該月沒有紀錄或市值空白時
+    為 None（圖上畫成斷點）。
+    """
+
+    holding_id: int
+    name: str
+    market_values: list[float | None]
+
+
+class HoldingValueTrend(BaseModel):
+    """各資產項目市值趨勢。year_months 為資產紀錄有資料月的聯集，依時間排序。"""
+
+    year_months: list[str]
+    series: list[HoldingValueSeries]
 
 
 class DriftRow(BaseModel):
@@ -212,11 +244,20 @@ class CostBasisEditorPrefill(BaseModel):
     cash_dividend: float
 
 
+class PremiumEditorPrefill(BaseModel):
+    """保險錄入框的帶入值。沒有紀錄時累計保費／解約金留空（None）、領回為 0。"""
+
+    cumulative_premium: float | None
+    surrender_value: float | None
+    withdrawal: float
+
+
 class MonthRecordRow(BaseModel):
     """「本月已存紀錄」唯讀表格的單列。
 
-    total_cost/realized_income 只有新制股票/ETF 列有值；
-    market_value_missing 為 True 時需提醒補填市值。
+    total_cost/realized_income 只有新制股票/ETF 與保險列有值（保險為累計已繳保費與領回）；
+    market_value_missing 為 True 時需提醒補填金額（資產為市值/餘額，負債為應繳金額）；
+    is_liability 為 True 時 market_value 是負債的應繳金額，畫面應放在「應繳金額」欄。
     """
 
     holding_id: int
@@ -226,3 +267,4 @@ class MonthRecordRow(BaseModel):
     total_cost: float | None
     realized_income: float | None
     market_value_missing: bool
+    is_liability: bool

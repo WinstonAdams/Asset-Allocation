@@ -34,11 +34,14 @@ from streamlit.errors import StreamlitSecretNotFoundError
 from asset_lab import bootstrap
 from asset_lab.core.constants import (
     ASSET_CATEGORIES,
+    BALANCE_INPUT,
     COST_BASIS_INPUT,
     HOLDING_KIND,
     HOLDING_PURPOSE,
     HOLDINGS_TABLE,
+    INPUT_MODE,
     MONTHLY_RECORDS_TABLE,
+    PREMIUM_INPUT,
 )
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
@@ -47,8 +50,10 @@ from asset_lab.repositories.protocol_threshold_repository import ProtocolThresho
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
+from asset_lab.repositories.transaction_repository import TransactionRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
+from asset_lab.services.balance_input_service import BalanceInputService
 from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.monthly_input_service import MonthlyInputService
@@ -145,12 +150,14 @@ def test_build_container_wires_repositories_to_connection() -> None:
     assert isinstance(container.target_repo, TargetRepository)
     assert isinstance(container.schema_repo, SchemaRepository)
     assert isinstance(container.protocol_threshold_repo, ProtocolThresholdRepository)
+    assert isinstance(container.transaction_repo, TransactionRepository)
     # 所有 Repository 接上同一連線
     assert container.holding_repo._conn is conn
     assert container.record_repo._conn is conn
     assert container.target_repo._conn is conn
     assert container.schema_repo._conn is conn
     assert container.protocol_threshold_repo._conn is conn
+    assert container.transaction_repo._conn is conn
 
 
 def test_build_container_wires_services() -> None:
@@ -170,8 +177,19 @@ def test_build_container_wires_services() -> None:
     # 月度錄入服務的 I/O 委派接上容器內的 Repository 實例
     assert container.monthly_input_service._record_repo is container.record_repo
     assert container.monthly_input_service._holding_repo is container.holding_repo
+    # 錄入方式解析的對照表、負債性質與負債錄入方式皆注入自常數
+    assert (
+        container.monthly_input_service._input_mode_by_category == INPUT_MODE.BY_ASSET_CATEGORY
+    )
+    assert container.monthly_input_service._liability_kind == HOLDING_KIND.LIABILITY
+    assert container.monthly_input_service._liability_input_mode == INPUT_MODE.AMOUNT_DUE
     # 總成本推算服務的分類集合注入自常數，不寫死在組裝邏輯裡
     assert container.cost_basis_service.cost_basis_categories == COST_BASIS_INPUT.CATEGORIES
+    # 保險累計保費推算的分類集合同樣注入自常數
+    assert container.cost_basis_service.premium_categories == PREMIUM_INPUT.CATEGORIES
+    # 活存/定存餘額推算服務的分類集合同樣注入自常數
+    assert isinstance(container.balance_input_service, BalanceInputService)
+    assert container.balance_input_service.balance_categories == BALANCE_INPUT.CATEGORIES
 
 
 # === holdings 用途欄位加欄遷移：舊庫升級 / 新庫直建 / 重複啟動三路徑 ===

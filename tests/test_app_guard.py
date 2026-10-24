@@ -13,6 +13,7 @@ evaluate_access 的「判定」邏輯已由 test_access_control.py 純函式完�
 """
 
 # ==== 原生（標準庫） ====
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -30,10 +31,12 @@ OWNER_EMAIL = "owner@example.test"
 STRANGER_EMAIL = "stranger@example.test"
 ALLOWED = frozenset({OWNER_EMAIL})
 
+APP_DIR = Path(__file__).resolve().parent.parent
+
 
 def _app() -> AppTest:
     """以受控的允許清單載入 app.py（避免依賴本機 secrets 檔）。"""
-    return AppTest.from_file("app.py", default_timeout=8)
+    return AppTest.from_file(APP_DIR / "app.py", default_timeout=8)
 
 
 class TestSc033NotLoggedInFailClosed:

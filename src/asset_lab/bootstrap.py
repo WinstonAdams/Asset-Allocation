@@ -28,7 +28,14 @@ import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import COST_BASIS_INPUT, PROTOCOL_DOC_RELATIVE_PATH
+from asset_lab.core.constants import (
+    BALANCE_INPUT,
+    COST_BASIS_INPUT,
+    HOLDING_KIND,
+    INPUT_MODE,
+    PREMIUM_INPUT,
+    PROTOCOL_DOC_RELATIVE_PATH,
+)
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.house_param_repository import HouseParamRepository
 from asset_lab.repositories.protocol_doc_repository import ProtocolDocRepository
@@ -37,8 +44,10 @@ from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
 from asset_lab.repositories.target_repository import TargetRepository
+from asset_lab.repositories.transaction_repository import TransactionRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
+from asset_lab.services.balance_input_service import BalanceInputService
 from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.house_service import HouseService
@@ -80,12 +89,14 @@ class Container:
     protocol_doc_repo: ProtocolDocRepository
     house_param_repo: HouseParamRepository
     subjective_trigger_repo: SubjectiveTriggerRepository
+    transaction_repo: TransactionRepository
     return_service: ReturnService
     allocation_service: AllocationService
     period_service: PeriodService
     data_io_service: DataIoService
     monthly_input_service: MonthlyInputService
     cost_basis_service: CostBasisService
+    balance_input_service: BalanceInputService
     protocol_service: ProtocolService
     affordability_service: AffordabilityService
     house_service: HouseService
@@ -138,6 +149,7 @@ def build_container(*, conn: "Connection") -> Container:
     protocol_doc_repo = ProtocolDocRepository(doc_path=_PROTOCOL_DOC_PATH)
     house_param_repo = HouseParamRepository(conn=conn)
     subjective_trigger_repo = SubjectiveTriggerRepository(conn=conn)
+    transaction_repo = TransactionRepository(conn=conn)
 
     return Container(
         holding_repo=holding_repo,
@@ -148,14 +160,23 @@ def build_container(*, conn: "Connection") -> Container:
         protocol_doc_repo=protocol_doc_repo,
         house_param_repo=house_param_repo,
         subjective_trigger_repo=subjective_trigger_repo,
+        transaction_repo=transaction_repo,
         return_service=ReturnService(),
         allocation_service=AllocationService(),
         period_service=PeriodService(),
         data_io_service=DataIoService(),
         monthly_input_service=MonthlyInputService(
-            holding_repo=holding_repo, record_repo=record_repo
+            holding_repo=holding_repo,
+            record_repo=record_repo,
+            input_mode_by_category=INPUT_MODE.BY_ASSET_CATEGORY,
+            liability_kind=HOLDING_KIND.LIABILITY,
+            liability_input_mode=INPUT_MODE.AMOUNT_DUE,
         ),
-        cost_basis_service=CostBasisService(cost_basis_categories=COST_BASIS_INPUT.CATEGORIES),
+        cost_basis_service=CostBasisService(
+            cost_basis_categories=COST_BASIS_INPUT.CATEGORIES,
+            premium_categories=PREMIUM_INPUT.CATEGORIES,
+        ),
+        balance_input_service=BalanceInputService(balance_categories=BALANCE_INPUT.CATEGORIES),
         protocol_service=ProtocolService(),
         affordability_service=AffordabilityService(),
         house_service=HouseService(),

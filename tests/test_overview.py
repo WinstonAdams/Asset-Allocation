@@ -477,7 +477,7 @@ def _run_overview_page(
     完整渲染買房摘要列，不必額外替身 return_service/protocol_service 等既有依賴
     （比照 tests/test_house.py 的 _run_house_page 慣例：僅替身用得到的 Repository 層）。
     """
-    at = AppTest.from_file("views/overview.py")
+    at = AppTest.from_file(APP_DIR / "views" / "overview.py")
     at.session_state["container"] = _house_summary_container(
         params=params, holdings=holdings, records_df=records_df, triggers=triggers
     )
@@ -541,7 +541,7 @@ class TestOverviewPageHouseSummaryMatchesHousePage:
         overview_at = _run_overview_page(
             params=params, holdings=holdings, records_df=records_df, triggers=triggers
         )
-        house_at = AppTest.from_file("views/house.py")
+        house_at = AppTest.from_file(APP_DIR / "views" / "house.py")
         house_at.session_state["container"] = _house_summary_container(
             params=params, holdings=holdings, records_df=records_df, triggers=triggers
         )

@@ -7,7 +7,7 @@
 """
 
 # ==== 原生（標準庫） ====
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # ==== 第三方套件 ====
 # 無
@@ -51,6 +51,13 @@ _UPDATE = (
     f"{HOLDINGS_TABLE.INITIAL_MARKET_VALUE} = ?, {HOLDINGS_TABLE.INITIAL_COST} = ?, "
     f"{HOLDINGS_TABLE.PURPOSE} = ? "
     f"WHERE {HOLDINGS_TABLE.HOLDING_ID} = ?"
+)
+_INSERT_WITH_ID = (
+    f"INSERT INTO {HOLDINGS_TABLE.TABLE_NAME} "  # checker:noqa sql_injection_risk
+    f"({HOLDINGS_TABLE.HOLDING_ID}, {HOLDINGS_TABLE.NAME}, {HOLDINGS_TABLE.KIND}, "
+    f"{HOLDINGS_TABLE.CATEGORY}, {HOLDINGS_TABLE.INITIAL_MARKET_VALUE}, "
+    f"{HOLDINGS_TABLE.INITIAL_COST}, {HOLDINGS_TABLE.PURPOSE}) "
+    f"VALUES (?, ?, ?, ?, ?, ?, ?)"
 )
 _DELETE_ALL = f"DELETE FROM {HOLDINGS_TABLE.TABLE_NAME}"
 
@@ -136,17 +143,15 @@ class HoldingRepository:
         )
         self._conn.commit()
 
-    def replace_all(self, *, holdings: list[HoldingModel]) -> None:
-        """清空主檔後批次寫入（CSV 匯入用）。保留來源 holding_id 以維持紀錄對映。"""
-        cursor = self._conn.cursor()
+    def replace_all_with_context(self, *, cursor: Any, holdings: list[HoldingModel]) -> None:
+        """在呼叫端的交易 context 內清空主檔後批次寫入（CSV 匯入用），不自行 commit。
+
+        保留來源 holding_id 以維持紀錄對映；commit / rollback 由開啟交易的呼叫端負責。
+        """
         cursor.execute(_DELETE_ALL)
         for holding in holdings:
             cursor.execute(
-                f"INSERT INTO {HOLDINGS_TABLE.TABLE_NAME} "
-                f"({HOLDINGS_TABLE.HOLDING_ID}, {HOLDINGS_TABLE.NAME}, {HOLDINGS_TABLE.KIND}, "
-                f"{HOLDINGS_TABLE.CATEGORY}, {HOLDINGS_TABLE.INITIAL_MARKET_VALUE}, "
-                f"{HOLDINGS_TABLE.INITIAL_COST}, {HOLDINGS_TABLE.PURPOSE}) "
-                f"VALUES (?, ?, ?, ?, ?, ?, ?)",
+                _INSERT_WITH_ID,
                 (
                     holding.holding_id,
                     holding.name,
@@ -157,4 +162,3 @@ class HoldingRepository:
                     holding.purpose,
                 ),
             )
-        self._conn.commit()

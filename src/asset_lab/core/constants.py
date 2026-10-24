@@ -106,11 +106,13 @@ class HOLDINGS_TABLE:
 class MONTHLY_RECORDS_TABLE:
     """項目 × 月份時間序列資料表結構。(holding_id, year_month) 為唯一鍵。
 
-    total_cost/realized_income 為股票/ETF 總成本推算功能附加欄位，可為 NULL：
-    total_cost 不為 NULL 即為新制股票/ETF 列，其 net_investment 為推算值；
-    NULL 代表非股票/ETF 分類，或本功能上線前建立的舊制列。
-    realized_income 為「已實現損益＋現金股利」的合計；cash_dividend 為其中的現金股利，
-    NULL（非股票/ETF 列、舊制列、或本功能上線前的新制列）視為 0，其合計全數視為已實現損益。
+    total_cost/realized_income 為成本鏈推算功能附加欄位，可為 NULL，語意依分類而定：
+    total_cost 股票/ETF＝目前總成本、保險＝累計已繳保費；不為 NULL 即為新制成本鏈列，
+    其 net_investment 為推算值；NULL 代表其他分類，或本功能上線前建立的舊制列。
+    realized_income 股票/ETF＝「已實現損益＋現金股利」的合計、保險＝本月領回金額；
+    cash_dividend 為其中的現金股利，NULL（非股票/ETF 列、舊制列、或本功能上線前的新制列）
+    視為 0，其合計全數視為已實現損益。
+    market_value 資產＝市值（活存/定存＝餘額、保險＝解約金、股票＝現值）；負債＝應繳金額。
     """
 
     TABLE_NAME = "monthly_records"
@@ -124,9 +126,39 @@ class MONTHLY_RECORDS_TABLE:
 
 
 class COST_BASIS_INPUT:
-    """依總成本＋已實現收益推算月淨投入的資產分類；其餘分類仍手填市值/餘額與淨投入。"""
+    """依總成本＋已實現收益推算月淨投入的資產分類（股票/ETF）。"""
 
     CATEGORIES = frozenset({ASSET_CATEGORIES.TW_STOCK, ASSET_CATEGORIES.US_STOCK})
+
+
+class PREMIUM_INPUT:
+    """以「累計已繳保費＋本月領回」推算月淨投入的資產分類。由 bootstrap 注入 CostBasisService。"""
+
+    CATEGORIES = frozenset({ASSET_CATEGORIES.INSURANCE})
+
+
+class BALANCE_INPUT:
+    """以「本月餘額 − 前期餘額」推算月淨投入的資產分類。由 bootstrap 注入 BalanceInputService。"""
+
+    CATEGORIES = frozenset({ASSET_CATEGORIES.DEMAND_DEPOSIT, ASSET_CATEGORIES.TIME_DEPOSIT})
+
+
+class INPUT_MODE:
+    """月度錄入方式代碼：決定錄入欄位與當月淨投入的來源。
+
+    BY_ASSET_CATEGORY 由三個 *_INPUT.CATEGORIES 組出（三個集合是唯一資料來源）；
+    負債不查表，一律為 AMOUNT_DUE。本類別須定義在三個 *_INPUT 類別之後。
+    """
+
+    COST_BASIS = "cost_basis"  # 股票/ETF：總成本＋現值＋已實現損益＋現金股利
+    PREMIUM = "premium"  # 保險：累計已繳保費＋解約金＋本月領回金額
+    BALANCE = "balance"  # 活存/定存：只填餘額
+    AMOUNT_DUE = "amount_due"  # 負債：只填應繳金額，淨投入固定 0
+    BY_ASSET_CATEGORY = {
+        **dict.fromkeys(COST_BASIS_INPUT.CATEGORIES, COST_BASIS),
+        **dict.fromkeys(PREMIUM_INPUT.CATEGORIES, PREMIUM),
+        **dict.fromkeys(BALANCE_INPUT.CATEGORIES, BALANCE),
+    }
 
 
 class TARGET_ALLOCATIONS_TABLE:
@@ -279,6 +311,8 @@ class CSV_EXPORT:
     缺欄視為未填、補一般（向後相容）。RECORDS_COLUMNS 同理末端附加 total_cost、
     realized_income、cash_dividend；RECORDS_REQUIRED_COLUMNS 固定為前 4 欄，不含這三欄，
     舊版 CSV（4 欄或僅 6 欄）缺欄仍可匯入，缺欄視為未填（還原為 None）。
+    total_cost、realized_income 的語意依分類而定：股票/ETF 為總成本與已實現收益合計，
+    保險為累計已繳保費與本月領回金額（欄位本身不變，語意見 MONTHLY_RECORDS_TABLE）。
     """
 
     HOLDINGS_COLUMNS = (

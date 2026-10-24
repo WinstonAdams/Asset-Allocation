@@ -80,6 +80,23 @@ class TestNetWorthSeries:
         # 淨值 = 總資產 1000000 − 總負債 200000
         assert point.net_worth == 800000.0
 
+    @pytest.mark.scenario("SC-100")
+    def test_sc100_amount_due_is_subtracted_from_net_worth(self):
+        # 活存 370000；信用卡應繳金額 30000（淨投入固定 0）→ 淨值 = 總資產 − 30000
+        holdings = [_asset(1, "活存"), _liability(2)]
+        range_df = _range_df(
+            [
+                {"holding_id": 1, "year_month": "2026-05", "market_value": 370000.0,
+                 "net_investment": 0.0},
+                {"holding_id": 2, "year_month": "2026-05", "market_value": 30000.0,
+                 "net_investment": 0.0},
+            ]
+        )
+        point = AllocationService().net_worth_series(range_df=range_df, holdings=holdings)[0]
+        assert point.total_assets == 370000.0
+        assert point.total_liabilities == 30000.0
+        assert point.net_worth == 340000.0
+
     @pytest.mark.scenario("SC-010")
     def test_sc010_no_liability_means_net_worth_equals_assets(self):
         # 無任何負債項目時，淨值等於總資產（總負債為 0）

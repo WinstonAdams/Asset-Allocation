@@ -6,13 +6,22 @@ import libsql
 import pytest
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND
-from asset_lab.core.exceptions import DataValidationError
+from asset_lab.core.constants import (
+    ASSET_CATEGORIES,
+    BALANCE_INPUT,
+    COST_BASIS_INPUT,
+    HOLDING_KIND,
+    INPUT_MODE,
+    PREMIUM_INPUT,
+)
+from asset_lab.core.exceptions import DataValidationError, PersistenceError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
+from asset_lab.services.balance_input_service import BalanceInputService
+from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 
 
@@ -82,10 +91,25 @@ def _prev_record(
 
 
 def _service(record_repo, holding_repo=None) -> MonthlyInputService:
-    """以替身組裝 MonthlyInputService（建構子依 keyword args 注入兩個 repo）。"""
+    """以替身組裝 MonthlyInputService（建構子依 keyword args 注入兩個 repo 與錄入方式對照）。"""
     return MonthlyInputService(
         holding_repo=holding_repo or _StubHoldingRepo(),
         record_repo=record_repo,
+        input_mode_by_category=INPUT_MODE.BY_ASSET_CATEGORY,
+        liability_kind=HOLDING_KIND.LIABILITY,
+        liability_input_mode=INPUT_MODE.AMOUNT_DUE,
+    )
+
+
+def _asset_in(holding_id: int, name: str, category: str | None) -> HoldingModel:
+    """建立指定分類的資產項目主檔（分類為 None 代表匯入帶入的未分類資產）。"""
+    return HoldingModel(
+        holding_id=holding_id,
+        name=name,
+        kind=HOLDING_KIND.ASSET,
+        category=category,
+        initial_market_value=0.0,
+        initial_cost=0.0,
     )
 
 
@@ -169,6 +193,25 @@ class TestPrefillFromPrevious:
         assert {record.holding_id for record in prefilled} == {1}
 
 
+class TestPrefillNoNetInvestmentInput:
+    """帶入的待輸入清單不帶任何手填淨投入 —— SC-005。"""
+
+    @pytest.mark.scenario("SC-005")
+    def test_sc005_prefill_never_carries_previous_net_investment(self):
+        # 上月各種錄入方式的項目都有非 0 淨投入，帶入後一律從 0 起算、金額留空
+        prev = [
+            _prev_record(1, "2026-04", 520000.0, 20000.0),
+            _prev_record(2, "2026-04", 30000.0, 0.0),
+            _prev_record(3, "2026-04", 800000.0, 12345.0),
+        ]
+        service = _service(_StubRecordRepo(latest_ym="2026-04", records_by_month={"2026-04": prev}))
+        result = service.prefill_from_previous(target_ym="2026-05")
+        assert [r.holding_id for r in result] == [1, 2, 3]
+        assert all(r.market_value is None for r in result)
+        assert all(r.net_investment == 0.0 for r in result)
+        assert all(r.total_cost is None and r.realized_income is None for r in result)
+
+
 class TestPrefillSoldExclusion:
     """SC-009：賣出當月記市值 0、之後缺列，後續月份不再帶入該項目。"""
 
@@ -180,92 +223,6 @@ class TestPrefillSoldExclusion:
         prefilled = _service(repo).prefill_from_previous(target_ym="2026-06")
         # 整個清單為空：唯一項目已出清，不續記市值 0 的空列
         assert prefilled == []
-
-
-class TestBuildTransferPair:
-    """build_transfer_pair：項目間轉移成對記錄淨投入 —— SC-008。"""
-
-    @pytest.mark.scenario("SC-008")
-    def test_sc008_pair_records_opposite_net_investments(self):
-        # 2026-05 把 50000 從現金（id=2）轉到台積電（id=1）
-        source, dest = _service(_StubRecordRepo(latest_ym="2026-05")).build_transfer_pair(
-            source_id=2, dest_id=1, amount=50000.0, year_month="2026-05"
-        )
-        # 來源記 −50000、目標記 +50000
-        assert source.holding_id == 2
-        assert source.net_investment == -50000.0
-        assert dest.holding_id == 1
-        assert dest.net_investment == 50000.0
-
-    @pytest.mark.scenario("SC-008")
-    def test_sc008_pair_same_month_and_equal_opposite_amounts(self):
-        # 兩筆同月份、金額相等、方向相反
-        source, dest = _service(_StubRecordRepo(latest_ym="2026-05")).build_transfer_pair(
-            source_id=2, dest_id=1, amount=50000.0, year_month="2026-05"
-        )
-        assert source.year_month == dest.year_month == "2026-05"
-        assert source.net_investment == -dest.net_investment
-
-    @pytest.mark.scenario("SC-008")
-    def test_sc008_transfer_keeps_total_net_investment_zero(self):
-        # 轉移本身不改變整體：成對淨投入合計為 0（資金只是在資產間移動）
-        source, dest = _service(_StubRecordRepo(latest_ym="2026-05")).build_transfer_pair(
-            source_id=2, dest_id=1, amount=50000.0, year_month="2026-05"
-        )
-        assert source.net_investment + dest.net_investment == 0.0
-
-    @pytest.mark.scenario("SC-008")
-    def test_sc008_transfer_pair_market_value_left_blank(self):
-        # 轉移只記淨投入流動，不直接設定市值（市值由當月市值更新另行輸入）
-        source, dest = _service(_StubRecordRepo(latest_ym="2026-05")).build_transfer_pair(
-            source_id=2, dest_id=1, amount=50000.0, year_month="2026-05"
-        )
-        assert source.market_value is None
-        assert dest.market_value is None
-
-
-class TestTransferInputGuard:
-    """SC-037：項目間轉移的輸入防呆。
-
-    轉移金額須為正數、來源與目標須為不同項目；違反任一條件即拒絕並拋
-    DataValidationError，不產生任何紀錄。
-    """
-
-    @pytest.mark.scenario("SC-037")
-    def test_sc037_zero_amount_rejected(self):
-        # 金額為 0（無資金移動）：拒絕並拋錯，不產生紀錄
-        service = _service(_StubRecordRepo(latest_ym="2026-05"))
-        with pytest.raises(DataValidationError):
-            service.build_transfer_pair(
-                source_id=2, dest_id=1, amount=0.0, year_month="2026-05"
-            )
-
-    @pytest.mark.scenario("SC-037")
-    def test_sc037_negative_amount_rejected(self):
-        # 金額為負（方向不明）：拒絕並拋錯，不產生紀錄
-        service = _service(_StubRecordRepo(latest_ym="2026-05"))
-        with pytest.raises(DataValidationError):
-            service.build_transfer_pair(
-                source_id=2, dest_id=1, amount=-50000.0, year_month="2026-05"
-            )
-
-    @pytest.mark.scenario("SC-037")
-    def test_sc037_same_source_and_dest_rejected(self):
-        # 來源等於目標（自己轉自己，淨效果為 0）：拒絕並拋錯，不產生紀錄
-        service = _service(_StubRecordRepo(latest_ym="2026-05"))
-        with pytest.raises(DataValidationError):
-            service.build_transfer_pair(
-                source_id=1, dest_id=1, amount=50000.0, year_month="2026-05"
-            )
-
-    @pytest.mark.scenario("SC-037")
-    def test_sc037_positive_amount_distinct_items_allowed(self):
-        # 金額為正且來源≠目標：通過防呆，照常產生成對紀錄
-        source, dest = _service(_StubRecordRepo(latest_ym="2026-05")).build_transfer_pair(
-            source_id=2, dest_id=1, amount=50000.0, year_month="2026-05"
-        )
-        assert source.net_investment == -50000.0
-        assert dest.net_investment == 50000.0
 
 
 # === Repository 層月度紀錄單列 CRUD I/O（記憶體 DB，不連遠端 Turso）===
@@ -316,6 +273,44 @@ def _record(
         total_cost=total_cost,
         realized_income=realized_income,
     )
+
+
+class TestInsuranceSurrenderClearout:
+    """保險解約：累計保費不變、解約金 0、領回全額 —— SC-009。"""
+
+    @pytest.mark.scenario("SC-009")
+    def test_sc009_insurance_surrender_month_records_zero_value_and_negative_withdrawal(
+        self, record_repo, conn
+    ):
+        holding = HoldingModel(
+            holding_id=None, name="海外年金保單", kind=HOLDING_KIND.ASSET,
+            category=ASSET_CATEGORIES.INSURANCE,
+            initial_market_value=0.0, initial_cost=0.0,
+        )
+        holding = holding.model_copy(
+            update={"holding_id": HoldingRepository(conn=conn).add_holding(holding=holding)}
+        )
+        planner = CostBasisService(
+            cost_basis_categories=COST_BASIS_INPUT.CATEGORIES,
+            premium_categories=PREMIUM_INPUT.CATEGORIES,
+        )
+        record_repo.upsert_records(
+            records=[_record(
+                holding.holding_id, "2026-04", 540000.0, 560000.0,
+                total_cost=560000.0, realized_income=0.0,
+            )]
+        )
+        existing = record_repo.read_holding_records(holding_id=holding.holding_id)
+        planned = planner.plan_save_premium(
+            holding=holding, records=existing, year_month="2026-05",
+            cumulative_premium=560000.0, surrender_value=0.0, withdrawal=530000.0,
+        )
+        record_repo.upsert_records(records=planned)
+
+        may = record_repo.read_month(year_month="2026-05")[0]
+        assert may.market_value == 0.0
+        assert may.net_investment == -530000.0
+        assert record_repo.read_month(year_month="2026-06") == []
 
 
 class TestSaleMonthClearoutPersisted:
@@ -705,15 +700,34 @@ class _FailAfterNCallsConnection:
     直接查驗結果的 Repository 實例（用於斷言 rollback 後的資料狀態）。
     """
 
-    def __init__(self, real_conn, *, fail_at: int) -> None:
+    def __init__(self, real_conn, *, fail_at: int, rollback_fails: bool = False) -> None:
         self._real_conn = real_conn
         self._fail_at = fail_at
+        self._rollback_fails = rollback_fails
 
     def cursor(self):
         return _FailingCursor(self._real_conn.cursor(), fail_at=self._fail_at)
 
     def commit(self):
         self._real_conn.commit()
+
+    def rollback(self):
+        if self._rollback_fails:
+            raise RuntimeError("模擬 rollback 失敗")
+        self._real_conn.rollback()
+
+
+class _CommitFailingConnection:
+    """包一個真實連線：execute 正常，commit 一律失敗；rollback 轉呼叫真實連線。"""
+
+    def __init__(self, real_conn) -> None:
+        self._real_conn = real_conn
+
+    def cursor(self):
+        return self._real_conn.cursor()
+
+    def commit(self):
+        raise RuntimeError("模擬 commit 失敗")
 
     def rollback(self):
         self._real_conn.rollback()
@@ -729,7 +743,7 @@ class TestBatchWriteRollbackOnFailure:
         # 兩筆待寫入，第二筆 execute 時失敗：第一筆也不應該被留存
         failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=2))
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(PersistenceError):
             failing_repo.upsert_records(
                 records=[
                     _record(seeded_holding_id, "2026-05", 400000.0, 50000.0),
@@ -741,16 +755,20 @@ class TestBatchWriteRollbackOnFailure:
         assert record_repo.read_month(year_month="2026-06") == []
 
     @pytest.mark.scenario("SC-085")
-    def test_sc085_upsert_records_failure_reraises_original_error(
+    def test_sc085_upsert_records_failure_raises_persistence_error_with_cause(
         self, record_repo, conn, seeded_holding_id
     ):
-        # 錯誤原樣往上拋，不被吞掉也不被轉譯成其他例外類型
+        # 轉成友善的 PersistenceError，原始錯誤保留在 __cause__，訊息不內插原始錯誤
         failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=1))
 
-        with pytest.raises(RuntimeError, match="模擬批次寫入中途失敗"):
+        with pytest.raises(PersistenceError) as exc_info:
             failing_repo.upsert_records(
                 records=[_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)]
             )
+
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert "模擬批次寫入中途失敗" in str(exc_info.value.__cause__)
+        assert "模擬批次寫入中途失敗" not in str(exc_info.value)
 
     @pytest.mark.scenario("SC-085")
     def test_sc085_delete_record_and_upsert_failure_restores_deleted_record(
@@ -764,7 +782,7 @@ class TestBatchWriteRollbackOnFailure:
         # call 1 = DELETE、call 2 = 第一筆 upsert（成功）、call 3 = 第二筆 upsert（失敗）
         failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=3))
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(PersistenceError):
             failing_repo.delete_record_and_upsert(
                 holding_id=seeded_holding_id,
                 year_month="2026-05",
@@ -778,148 +796,44 @@ class TestBatchWriteRollbackOnFailure:
         assert record_repo.read_month(year_month="2026-06") == []
         assert record_repo.read_month(year_month="2026-07") == []
 
-
-class TestAccumulateNetInvestments:
-    """accumulate_net_investments：只累加 net_investment，其餘欄位不動。"""
-
-    @pytest.mark.scenario("SC-086")
-    def test_sc086_accumulate_on_existing_row_keeps_market_value(
-        self, record_repo, seeded_holding_id
-    ):
-        record_repo.upsert_record(
-            record=_record(seeded_holding_id, "2026-05", 350000.0, 0.0)
-        )
-
-        record_repo.accumulate_net_investments(
-            records=[_record(seeded_holding_id, "2026-05", 0.0, -100000.0)]
-        )
-
-        stored = record_repo.read_month(year_month="2026-05")[0]
-        assert stored.market_value == 350000.0
-        assert stored.net_investment == -100000.0
-
-    @pytest.mark.scenario("SC-086")
-    def test_sc086_accumulate_twice_adds_up(self, record_repo, seeded_holding_id):
-        record_repo.upsert_record(
-            record=_record(seeded_holding_id, "2026-05", 350000.0, 0.0)
-        )
-
-        record_repo.accumulate_net_investments(
-            records=[_record(seeded_holding_id, "2026-05", 0.0, -100000.0)]
-        )
-        record_repo.accumulate_net_investments(
-            records=[_record(seeded_holding_id, "2026-05", 0.0, -50000.0)]
-        )
-
-        stored = record_repo.read_month(year_month="2026-05")[0]
-        assert stored.market_value == 350000.0
-        assert stored.net_investment == -150000.0
-
-    @pytest.mark.scenario("SC-086")
-    def test_sc086_accumulate_leaves_cost_columns_untouched(
-        self, record_repo, seeded_holding_id
-    ):
-        record_repo.upsert_record(
-            record=MonthlyRecordModel(
-                holding_id=seeded_holding_id,
-                year_month="2026-05",
-                market_value=400000.0,
-                net_investment=10000.0,
-                total_cost=350000.0,
-                realized_income=1200.0,
-                cash_dividend=200.0,
-            )
-        )
-
-        record_repo.accumulate_net_investments(
-            records=[_record(seeded_holding_id, "2026-05", 999.0, 5000.0,
-                             total_cost=1.0, realized_income=2.0)]
-        )
-
-        stored = record_repo.read_month(year_month="2026-05")[0]
-        assert stored.net_investment == 15000.0
-        assert stored.market_value == 400000.0
-        assert stored.total_cost == 350000.0
-        assert stored.realized_income == 1200.0
-        assert stored.cash_dividend == 200.0
-
-    @pytest.mark.scenario("SC-086")
-    def test_sc086_accumulate_without_existing_row_creates_net_only_row(
-        self, record_repo, seeded_holding_id
-    ):
-        record_repo.accumulate_net_investments(
-            records=[_record(seeded_holding_id, "2026-05", 0.0, -100000.0)]
-        )
-        record_repo.accumulate_net_investments(
-            records=[_record(seeded_holding_id, "2026-05", 0.0, -50000.0)]
-        )
-
-        stored = record_repo.read_month(year_month="2026-05")[0]
-        assert stored.market_value is None
-        assert stored.net_investment == -150000.0
-        assert stored.total_cost is None
-        assert stored.realized_income is None
-        assert stored.cash_dividend is None
-
-    @pytest.mark.scenario("SC-086")
-    def test_sc086_transfer_then_single_row_input_gives_same_result(
-        self, record_repo, seeded_holding_id
-    ):
-        # 先轉移（無既有列）、再單列錄入補市值：錄入帶入的淨投入為累加後的值
-        record_repo.accumulate_net_investments(
-            records=[_record(seeded_holding_id, "2026-05", 0.0, -150000.0)]
-        )
-        record_repo.upsert_record(
-            record=_record(seeded_holding_id, "2026-05", 350000.0, -150000.0)
-        )
-
-        stored = record_repo.read_month(year_month="2026-05")[0]
-        assert stored.market_value == 350000.0
-        assert stored.net_investment == -150000.0
-
-    @pytest.mark.scenario("SC-086")
-    def test_sc086_accumulate_empty_list_is_noop(self, record_repo, seeded_holding_id):
-        record_repo.accumulate_net_investments(records=[])
-
-        assert record_repo.read_month(year_month="2026-05") == []
-
-    @pytest.mark.scenario("SC-086")
-    def test_sc086_accumulate_multiple_holdings_in_one_call(
-        self, record_repo, seeded_holding_id
-    ):
-        record_repo.accumulate_net_investments(
-            records=[
-                _record(seeded_holding_id, "2026-05", 0.0, 30000.0),
-                _record(seeded_holding_id, "2026-06", 0.0, 40000.0),
-            ]
-        )
-
-        assert record_repo.read_month(year_month="2026-05")[0].net_investment == 30000.0
-        assert record_repo.read_month(year_month="2026-06")[0].net_investment == 40000.0
-
     @pytest.mark.scenario("SC-085")
-    def test_sc085_accumulate_failure_rolls_back_all_writes(
+    def test_sc085_commit_failure_rolls_back_and_raises_persistence_error(
         self, record_repo, conn, seeded_holding_id
     ):
-        record_repo.upsert_record(
-            record=_record(seeded_holding_id, "2026-05", 350000.0, 1000.0)
-        )
-        failing_repo = RecordRepository(conn=_FailAfterNCallsConnection(conn, fail_at=2))
+        # 所有 execute 都成功、最後 commit 失敗：仍須 rollback，不留下已執行的寫入
+        failing_repo = RecordRepository(conn=_CommitFailingConnection(conn))
 
-        with pytest.raises(RuntimeError, match="模擬批次寫入中途失敗"):
-            failing_repo.accumulate_net_investments(
-                records=[
-                    _record(seeded_holding_id, "2026-05", 0.0, -100000.0),
-                    _record(seeded_holding_id, "2026-06", 0.0, -50000.0),
-                ]
+        with pytest.raises(PersistenceError) as exc_info:
+            failing_repo.upsert_records(
+                records=[_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)]
             )
 
-        assert record_repo.read_month(year_month="2026-05")[0].net_investment == 1000.0
-        assert record_repo.read_month(year_month="2026-06") == []
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert record_repo.read_month(year_month="2026-05") == []
+
+    @pytest.mark.scenario("SC-085")
+    def test_sc085_rollback_failure_still_raises_persistence_error(
+        self, conn, seeded_holding_id
+    ):
+        # 復原本身也失敗：使用者仍只看到同一則友善訊息，原始錯誤在 __cause__，
+        # rollback 的錯誤以 note 附在原始錯誤上供 log 使用
+        failing_repo = RecordRepository(
+            conn=_FailAfterNCallsConnection(conn, fail_at=1, rollback_fails=True)
+        )
+
+        with pytest.raises(PersistenceError) as exc_info:
+            failing_repo.upsert_records(
+                records=[_record(seeded_holding_id, "2026-05", 400000.0, 50000.0)]
+            )
+
+        assert str(exc_info.value) == PersistenceError.DEFAULT_MESSAGE
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, RuntimeError)
+        assert any("rollback" in note for note in cause.__notes__)
 
 
 class TestBuildRecordPrefill:
-    """build_record_prefill：一般分類錄入框帶入當月既有值 —— SC-087。"""
+    """build_record_prefill：活存/定存餘額與負債應繳金額錄入框帶入當月既有值 —— SC-087。"""
 
     @pytest.mark.scenario("SC-087")
     def test_sc087_existing_record_prefilled_as_stored(self):
@@ -1017,3 +931,267 @@ class TestSummarizeMonth:
             records=[], holdings=[_asset(1, "活存")]
         )
         assert rows == []
+
+    @pytest.mark.scenario("SC-087")
+    def test_sc087_liability_amount_due_prefilled_from_existing_record(self):
+        # 負債「信用卡」2026-05 應繳金額 30000 → 帶入 30000
+        records = [_prev_record(2, "2026-05", 30000.0, 0.0)]
+        prefill = _service(_StubRecordRepo(latest_ym=None)).build_record_prefill(
+            records=records, holding_id=2, year_month="2026-05"
+        )
+        assert prefill.market_value == 30000.0
+
+
+class TestResolveInputMode:
+    """resolve_input_mode：由項目性質與分類決定錄入方式 —— SC-100 / SC-102。"""
+
+    @pytest.mark.parametrize(
+        ("category", "expected"),
+        [
+            (ASSET_CATEGORIES.TW_STOCK, INPUT_MODE.COST_BASIS),
+            (ASSET_CATEGORIES.US_STOCK, INPUT_MODE.COST_BASIS),
+            (ASSET_CATEGORIES.INSURANCE, INPUT_MODE.PREMIUM),
+            (ASSET_CATEGORIES.DEMAND_DEPOSIT, INPUT_MODE.BALANCE),
+            (ASSET_CATEGORIES.TIME_DEPOSIT, INPUT_MODE.BALANCE),
+        ],
+    )
+    @pytest.mark.scenario("SC-100")
+    def test_sc100_asset_category_resolves_to_its_input_mode(self, category, expected):
+        service = _service(_StubRecordRepo(latest_ym=None))
+        assert service.resolve_input_mode(holding=_asset_in(1, "項目", category)) == expected
+
+    @pytest.mark.scenario("SC-100")
+    def test_sc100_liability_always_resolves_to_amount_due(self):
+        service = _service(_StubRecordRepo(latest_ym=None))
+        assert service.resolve_input_mode(holding=_liability(2, "信用卡")) == INPUT_MODE.AMOUNT_DUE
+
+    @pytest.mark.scenario("SC-102")
+    def test_sc102_asset_without_category_is_rejected(self):
+        service = _service(_StubRecordRepo(latest_ym=None))
+        with pytest.raises(DataValidationError):
+            service.resolve_input_mode(holding=_asset_in(3, "舊匯入項目", None))
+
+    @pytest.mark.scenario("SC-102")
+    def test_sc102_asset_with_unknown_category_is_rejected(self):
+        service = _service(_StubRecordRepo(latest_ym=None))
+        with pytest.raises(DataValidationError):
+            service.resolve_input_mode(holding=_asset_in(3, "舊匯入項目", "不存在的分類"))
+
+    @pytest.mark.scenario("SC-102")
+    def test_sc102_empty_string_category_is_rejected(self):
+        service = _service(_StubRecordRepo(latest_ym=None))
+        with pytest.raises(DataValidationError):
+            service.resolve_input_mode(holding=_asset_in(3, "舊匯入項目", ""))
+
+    @pytest.mark.scenario("SC-102")
+    def test_sc102_every_known_asset_category_maps_to_exactly_one_mode(self):
+        # 日後新增分類卻漏設錄入方式時，這裡會失敗
+        service = _service(_StubRecordRepo(latest_ym=None))
+        for category in ASSET_CATEGORIES.ALL:
+            mode = service.resolve_input_mode(holding=_asset_in(1, "項目", category))
+            assert mode in {
+                INPUT_MODE.COST_BASIS,
+                INPUT_MODE.PREMIUM,
+                INPUT_MODE.BALANCE,
+            }
+
+
+class TestBuildAmountDueRecord:
+    """build_amount_due_record：負債只填應繳金額，淨投入固定為 0 —— SC-100。"""
+
+    @pytest.mark.scenario("SC-100")
+    def test_sc100_record_has_amount_due_and_zero_net_investment(self):
+        record = _service(_StubRecordRepo(latest_ym=None)).build_amount_due_record(
+            holding=_liability(2, "信用卡"), year_month="2026-05", amount_due=30000.0
+        )
+        assert record.holding_id == 2
+        assert record.year_month == "2026-05"
+        assert record.market_value == 30000.0
+        assert record.net_investment == 0.0
+
+    @pytest.mark.scenario("SC-100")
+    def test_sc100_cost_columns_are_none(self):
+        record = _service(_StubRecordRepo(latest_ym=None)).build_amount_due_record(
+            holding=_liability(2, "信用卡"), year_month="2026-05", amount_due=30000.0
+        )
+        assert record.total_cost is None
+        assert record.realized_income is None
+        assert record.cash_dividend is None
+
+    @pytest.mark.scenario("SC-100")
+    def test_sc100_zero_amount_due_is_valid(self):
+        # 貸款還清：應繳金額 0 是已填，不是留空
+        record = _service(_StubRecordRepo(latest_ym=None)).build_amount_due_record(
+            holding=_liability(2, "房貸"), year_month="2026-05", amount_due=0.0
+        )
+        assert record.market_value == 0.0
+        assert record.net_investment == 0.0
+
+    @pytest.mark.scenario("SC-100")
+    def test_sc100_non_liability_holding_is_rejected(self):
+        with pytest.raises(DataValidationError):
+            _service(_StubRecordRepo(latest_ym=None)).build_amount_due_record(
+                holding=_asset(1, "活存"), year_month="2026-05", amount_due=1.0
+            )
+
+    @pytest.mark.scenario("SC-100")
+    def test_sc100_edit_overwrites_same_month_and_delete_removes_it(
+        self, record_repo, conn
+    ):
+        # 存檔 → 改成 28000 不新增重複列、淨投入維持 0 → 刪除只移除該月
+        holding_id = HoldingRepository(conn=conn).add_holding(
+            holding=HoldingModel(
+                holding_id=None, name="信用卡", kind=HOLDING_KIND.LIABILITY, category=None,
+                initial_market_value=None, initial_cost=None,
+            )
+        )
+        liability = _liability(holding_id, "信用卡")
+        service = _service(_StubRecordRepo(latest_ym=None))
+        for ym, amount in (("2026-04", 10000.0), ("2026-05", 30000.0), ("2026-05", 28000.0)):
+            record_repo.upsert_records(
+                records=[
+                    service.build_amount_due_record(
+                        holding=liability, year_month=ym, amount_due=amount
+                    )
+                ]
+            )
+
+        may = record_repo.read_month(year_month="2026-05")
+        assert len(may) == 1
+        assert may[0].market_value == 28000.0
+        assert may[0].net_investment == 0.0
+
+        record_repo.delete_record_and_upsert(
+            holding_id=holding_id, year_month="2026-05", records=[]
+        )
+        assert record_repo.read_month(year_month="2026-05") == []
+        assert len(record_repo.read_month(year_month="2026-04")) == 1
+
+    @pytest.mark.scenario("SC-100")
+    def test_sc100_resaving_legacy_nonzero_net_investment_resets_to_zero(
+        self, record_repo, conn
+    ):
+        holding_id = HoldingRepository(conn=conn).add_holding(
+            holding=HoldingModel(
+                holding_id=None, name="房貸", kind=HOLDING_KIND.LIABILITY, category=None,
+                initial_market_value=None, initial_cost=None,
+            )
+        )
+        record_repo.upsert_record(record=_record(holding_id, "2026-03", 900000.0, 5000.0))
+        service = _service(_StubRecordRepo(latest_ym=None))
+        record_repo.upsert_records(
+            records=[
+                service.build_amount_due_record(
+                    holding=_liability(holding_id, "房貸"), year_month="2026-03",
+                    amount_due=900000.0,
+                )
+            ]
+        )
+        assert record_repo.read_month(year_month="2026-03")[0].net_investment == 0.0
+
+
+class TestBalanceItemCrudFlow:
+    """活存餘額新增/編輯/刪除（Service 規劃 → Repository 寫入）—— SC-006 / SC-009。"""
+
+    @staticmethod
+    def _demand_deposit(conn) -> HoldingModel:
+        holding = HoldingModel(
+            holding_id=None, name="活存", kind=HOLDING_KIND.ASSET,
+            category=ASSET_CATEGORIES.DEMAND_DEPOSIT,
+            initial_market_value=500000.0, initial_cost=None,
+        )
+        holding_id = HoldingRepository(conn=conn).add_holding(holding=holding)
+        return holding.model_copy(update={"holding_id": holding_id})
+
+    @pytest.mark.scenario("SC-006")
+    def test_sc006_balance_add_edit_delete_flow(self, record_repo, conn):
+        holding = self._demand_deposit(conn)
+        planner = BalanceInputService(balance_categories=BALANCE_INPUT.CATEGORIES)
+
+        record_repo.upsert_records(
+            records=planner.plan_save(
+                holding=holding, records=[], year_month="2026-05", balance=520000.0
+            )
+        )
+        saved = record_repo.read_month(year_month="2026-05")
+        assert len(saved) == 1
+        assert saved[0].market_value == 520000.0
+        assert saved[0].net_investment == 20000.0  # 520000 - 初始 500000
+
+        existing = record_repo.read_holding_records(holding_id=holding.holding_id)
+        record_repo.upsert_records(
+            records=planner.plan_save(
+                holding=holding, records=existing, year_month="2026-05", balance=530000.0
+            )
+        )
+        edited = record_repo.read_month(year_month="2026-05")
+        assert len(edited) == 1
+        assert edited[0].market_value == 530000.0
+
+        existing = record_repo.read_holding_records(holding_id=holding.holding_id)
+        record_repo.delete_record_and_upsert(
+            holding_id=holding.holding_id,
+            year_month="2026-05",
+            records=planner.plan_delete(
+                holding=holding, records=existing, year_month="2026-05"
+            ),
+        )
+        assert record_repo.read_month(year_month="2026-05") == []
+
+    @pytest.mark.scenario("SC-009")
+    def test_sc009_deposit_cleared_to_zero_records_negative_previous_balance(
+        self, record_repo, conn
+    ):
+        holding = self._demand_deposit(conn)
+        planner = BalanceInputService(balance_categories=BALANCE_INPUT.CATEGORIES)
+        record_repo.upsert_records(
+            records=planner.plan_save(
+                holding=holding, records=[], year_month="2026-04", balance=500000.0
+            )
+        )
+        existing = record_repo.read_holding_records(holding_id=holding.holding_id)
+        record_repo.upsert_records(
+            records=planner.plan_save(
+                holding=holding, records=existing, year_month="2026-05", balance=0.0
+            )
+        )
+        cleared = record_repo.read_month(year_month="2026-05")[0]
+        assert cleared.market_value == 0.0
+        assert cleared.net_investment == -500000.0
+
+
+class TestSummarizeMonthLiabilityColumns:
+    """summarize_month：負債列標記與保險成本欄 —— SC-089 / SC-101。"""
+
+    @pytest.mark.scenario("SC-089")
+    @pytest.mark.scenario("SC-101")
+    def test_sc101_is_liability_flag_follows_holding_kind(self):
+        holdings = [_asset(1, "活存"), _liability(2, "信用卡"), _liability(3, "房貸")]
+        records = [
+            _prev_record(1, "2026-06", 370000.0),
+            _prev_record(2, "2026-06", 30000.0),
+            _prev_record(3, "2026-06", None),
+        ]
+        rows = _service(_StubRecordRepo(latest_ym=None)).summarize_month(
+            records=records, holdings=holdings
+        )
+        assert [row.is_liability for row in rows] == [False, True, True]
+        # 負債金額照舊在 market_value，空白仍標記未填
+        assert rows[1].market_value == 30000.0
+        assert [row.market_value_missing for row in rows] == [False, False, True]
+
+    @pytest.mark.scenario("SC-089")
+    def test_sc089_insurance_row_carries_cost_and_withdrawal_columns(self):
+        holdings = [_asset_in(1, "保單", ASSET_CATEGORIES.INSURANCE)]
+        records = [
+            MonthlyRecordModel(
+                holding_id=1, year_month="2026-06", market_value=530000.0,
+                net_investment=20000.0, total_cost=560000.0, realized_income=0.0,
+            )
+        ]
+        rows = _service(_StubRecordRepo(latest_ym=None)).summarize_month(
+            records=records, holdings=holdings
+        )
+        assert rows[0].total_cost == 560000.0
+        assert rows[0].realized_income == 0.0
+        assert rows[0].is_liability is False

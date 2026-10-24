@@ -11,7 +11,7 @@ HoldingModel/MonthlyRecordModel 驗證，不連任何 DB。所有金額皆為虛
 import pytest
 
 # ==== 專案內部 ====
-from asset_lab.core.constants import ASSET_CATEGORIES, COST_BASIS_INPUT
+from asset_lab.core.constants import ASSET_CATEGORIES, COST_BASIS_INPUT, PREMIUM_INPUT
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
@@ -65,7 +65,10 @@ def _approx(value: float, expected: float, abs_: float = 1e-6) -> bool:
 
 @pytest.fixture
 def service() -> CostBasisService:
-    return CostBasisService(cost_basis_categories=COST_BASIS_INPUT.CATEGORIES)
+    return CostBasisService(
+        cost_basis_categories=COST_BASIS_INPUT.CATEGORIES,
+        premium_categories=PREMIUM_INPUT.CATEGORIES,
+    )
 
 
 class TestUsesCostBasis:
@@ -484,67 +487,6 @@ class TestPlanSaveDeletePlanValidation:
             service.plan_delete(holding=holding, records=[], year_month="2026-05")
 
 
-class TestTransferRecordsToWrite:
-    """transfer_records_to_write：轉移成對紀錄中濾掉走總成本推算的股票/ETF 端（SC-079/080）。"""
-
-    @pytest.mark.scenario("SC-079")
-    def test_sc079_source_non_stock_dest_stock_only_source_written(self, service: CostBasisService):
-        demand_deposit = _holding(
-            holding_id=1, name="活存", category=ASSET_CATEGORIES.DEMAND_DEPOSIT
-        )
-        tsmc = _holding(holding_id=2, name="台積電", category=ASSET_CATEGORIES.TW_STOCK)
-        source = _record(holding_id=1, year_month="2026-05", net_investment=-80_000)
-        dest = _record(holding_id=2, year_month="2026-05", net_investment=80_000)
-
-        result = service.transfer_records_to_write(
-            pair=(source, dest), holdings=[demand_deposit, tsmc]
-        )
-
-        assert result == [source]
-
-    @pytest.mark.scenario("SC-079")
-    def test_sc079_source_stock_dest_non_stock_only_dest_written(self, service: CostBasisService):
-        tsmc = _holding(holding_id=2, name="台積電", category=ASSET_CATEGORIES.TW_STOCK)
-        demand_deposit = _holding(
-            holding_id=1, name="活存", category=ASSET_CATEGORIES.DEMAND_DEPOSIT
-        )
-        source = _record(holding_id=2, year_month="2026-05", net_investment=-50_000)
-        dest = _record(holding_id=1, year_month="2026-05", net_investment=50_000)
-
-        result = service.transfer_records_to_write(
-            pair=(source, dest), holdings=[tsmc, demand_deposit]
-        )
-
-        assert result == [dest]
-
-    @pytest.mark.scenario("SC-079")
-    def test_sc079_neither_end_stock_both_written_unchanged(self, service: CostBasisService):
-        """邊界自審：兩端皆非股票/ETF 時不觸發任何過濾，成對紀錄原樣寫入。"""
-        demand_deposit = _holding(
-            holding_id=1, name="活存", category=ASSET_CATEGORIES.DEMAND_DEPOSIT
-        )
-        time_deposit = _holding(holding_id=4, name="定存", category=ASSET_CATEGORIES.TIME_DEPOSIT)
-        source = _record(holding_id=1, year_month="2026-05", net_investment=-30_000)
-        dest = _record(holding_id=4, year_month="2026-05", net_investment=30_000)
-
-        result = service.transfer_records_to_write(
-            pair=(source, dest), holdings=[demand_deposit, time_deposit]
-        )
-
-        assert result == [source, dest]
-
-    @pytest.mark.scenario("SC-080")
-    def test_sc080_both_ends_stock_neither_written(self, service: CostBasisService):
-        tsmc = _holding(holding_id=2, name="台積電", category=ASSET_CATEGORIES.TW_STOCK)
-        mediatek = _holding(holding_id=3, name="聯發科", category=ASSET_CATEGORIES.TW_STOCK)
-        source = _record(holding_id=2, year_month="2026-05", net_investment=-60_000)
-        dest = _record(holding_id=3, year_month="2026-05", net_investment=60_000)
-
-        result = service.transfer_records_to_write(pair=(source, dest), holdings=[tsmc, mediatek])
-
-        assert result == []
-
-
 class TestRealizedPnlAndCashDividendSplit:
     """derive／plan_save：已實現損益與現金股利相加計入推算（SC-090）、現金股利非負（SC-091）。"""
 
@@ -565,6 +507,33 @@ class TestRealizedPnlAndCashDividendSplit:
         )
 
         assert _approx(result.net_investment, -302_000)
+
+    @pytest.mark.scenario("SC-103")
+    def test_sc103_stock_side_net_investment_for_buy_and_sell(self, service: CostBasisService):
+        holding = _holding(name="台積電")
+        # 情境一：2026-04 總成本 300000 → 2026-05 填 400000（活存拿 100000 買入）
+        records = [_record(year_month="2026-04", net_investment=0, total_cost=300_000)]
+        buy = service.derive(
+            holding=holding,
+            records=records,
+            year_month="2026-05",
+            total_cost=400_000,
+            realized_pnl=0,
+            cash_dividend=0.0,
+        )
+        assert _approx(buy.net_investment, 100_000)
+        # 情境二：2026-05 總成本 400000 → 2026-06 賣出剩 250000，已實現損益 0
+        records.append(_record(year_month="2026-05", net_investment=100_000, total_cost=400_000))
+        sell = service.derive(
+            holding=holding,
+            records=records,
+            year_month="2026-06",
+            total_cost=250_000,
+            realized_pnl=0,
+            cash_dividend=0.0,
+        )
+        assert _approx(sell.previous_total_cost, 400_000)
+        assert _approx(sell.net_investment, -150_000)
 
     @pytest.mark.scenario("SC-090")
     def test_sc090_plan_save_persists_split_and_sum(self, service: CostBasisService):
@@ -751,3 +720,403 @@ class TestBuildCostBasisPrefill:
 
         assert prefill.realized_pnl == 0
         assert prefill.cash_dividend == 0
+
+
+# ==== 保險：累計已繳保費＋解約金＋本月領回 ====
+
+
+def _insurance(*, holding_id: int = 1, initial_cost: float | None = 0.0) -> HoldingModel:
+    """建立一個保險分類的資產項目主檔。"""
+    return _holding(
+        holding_id=holding_id,
+        name="海外年金保單",
+        category=ASSET_CATEGORIES.INSURANCE,
+        initial_cost=initial_cost,
+    )
+
+
+def _premium_record(
+    *,
+    year_month: str,
+    cumulative_premium: float,
+    net_investment: float,
+    surrender_value: float | None = 0.0,
+    withdrawal: float = 0.0,
+) -> MonthlyRecordModel:
+    """建立一筆新制保險紀錄（total_cost＝累計保費、realized_income＝領回）。"""
+    return _record(
+        year_month=year_month,
+        market_value=surrender_value,
+        net_investment=net_investment,
+        total_cost=cumulative_premium,
+        realized_income=withdrawal,
+    )
+
+
+class TestDerivePremium:
+    """derive_premium：淨投入＝(本月累計保費 − 前期累計保費) − 領回（SC-095、SC-096、SC-097）。"""
+
+    @pytest.mark.scenario("SC-095")
+    def test_sc095_previous_premium_from_prior_new_style_record(self, service: CostBasisService):
+        records = [
+            _premium_record(year_month="2026-04", cumulative_premium=600_000, net_investment=0)
+        ]
+
+        result = service.derive_premium(
+            holding=_insurance(),
+            records=records,
+            year_month="2026-05",
+            cumulative_premium=620_000,
+            withdrawal=0,
+        )
+
+        assert _approx(result.previous_total_cost, 600_000)
+        assert _approx(result.net_investment, 20_000)
+        assert result.is_transition_estimate is False
+
+    @pytest.mark.scenario("SC-095")
+    def test_sc095_withdrawal_subtracted_from_net_investment(self, service: CostBasisService):
+        records = [
+            _premium_record(year_month="2026-05", cumulative_premium=620_000, net_investment=20_000)
+        ]
+
+        result = service.derive_premium(
+            holding=_insurance(),
+            records=records,
+            year_month="2026-06",
+            cumulative_premium=620_000,
+            withdrawal=30_000,
+        )
+
+        assert _approx(result.net_investment, -30_000)
+
+    @pytest.mark.scenario("SC-095")
+    def test_sc095_first_record_uses_initial_cost_as_previous_premium(
+        self, service: CostBasisService
+    ):
+        result = service.derive_premium(
+            holding=_insurance(initial_cost=500_000),
+            records=[],
+            year_month="2026-05",
+            cumulative_premium=520_000,
+            withdrawal=0,
+        )
+
+        assert _approx(result.previous_total_cost, 500_000)
+        assert _approx(result.net_investment, 20_000)
+
+    @pytest.mark.scenario("SC-095")
+    def test_sc095_surrender_month_net_investment_equals_negative_payout(
+        self, service: CostBasisService
+    ):
+        records = [
+            _premium_record(year_month="2026-05", cumulative_premium=620_000, net_investment=0)
+        ]
+
+        result = service.derive_premium(
+            holding=_insurance(),
+            records=records,
+            year_month="2026-06",
+            cumulative_premium=620_000,
+            withdrawal=560_000,
+        )
+
+        assert _approx(result.net_investment, -560_000)
+
+    @pytest.mark.scenario("SC-097")
+    def test_sc097_previous_legacy_record_estimates_from_initial_cost_and_net_investment_sum(
+        self, service: CostBasisService
+    ):
+        records = [
+            _record(year_month="2026-02", net_investment=20_000),
+            _record(year_month="2026-03", net_investment=20_000),
+        ]
+
+        result = service.derive_premium(
+            holding=_insurance(initial_cost=500_000),
+            records=records,
+            year_month="2026-04",
+            cumulative_premium=560_000,
+            withdrawal=0,
+        )
+
+        assert _approx(result.previous_total_cost, 540_000)
+        assert _approx(result.net_investment, 20_000)
+        assert result.is_transition_estimate is True
+
+    @pytest.mark.scenario("SC-097")
+    def test_sc097_record_after_new_style_is_not_estimate(self, service: CostBasisService):
+        records = [
+            _record(year_month="2026-03", net_investment=20_000),
+            _premium_record(
+                year_month="2026-04", cumulative_premium=560_000, net_investment=20_000
+            ),
+        ]
+
+        result = service.derive_premium(
+            holding=_insurance(initial_cost=500_000),
+            records=records,
+            year_month="2026-05",
+            cumulative_premium=580_000,
+            withdrawal=0,
+        )
+
+        assert _approx(result.previous_total_cost, 560_000)
+        assert result.is_transition_estimate is False
+
+    @pytest.mark.scenario("SC-096")
+    def test_sc096_derive_rejects_negative_withdrawal(self, service: CostBasisService):
+        with pytest.raises(DataValidationError):
+            service.derive_premium(
+                holding=_insurance(),
+                records=[],
+                year_month="2026-06",
+                cumulative_premium=620_000,
+                withdrawal=-1_000,
+            )
+
+    @pytest.mark.scenario("SC-096")
+    def test_sc096_zero_withdrawal_is_valid(self, service: CostBasisService):
+        result = service.derive_premium(
+            holding=_insurance(initial_cost=600_000),
+            records=[],
+            year_month="2026-06",
+            cumulative_premium=620_000,
+            withdrawal=0,
+        )
+
+        assert _approx(result.net_investment, 20_000)
+
+    @pytest.mark.scenario("SC-096")
+    def test_sc096_derive_rejects_non_premium_category(self, service: CostBasisService):
+        with pytest.raises(DataValidationError):
+            service.derive_premium(
+                holding=_holding(category=ASSET_CATEGORIES.DEMAND_DEPOSIT),
+                records=[],
+                year_month="2026-06",
+                cumulative_premium=1,
+                withdrawal=0,
+            )
+
+    @pytest.mark.scenario("SC-096")
+    def test_sc096_derive_rejects_stock_category(self, service: CostBasisService):
+        with pytest.raises(DataValidationError):
+            service.derive_premium(
+                holding=_holding(category=ASSET_CATEGORIES.TW_STOCK),
+                records=[],
+                year_month="2026-06",
+                cumulative_premium=1,
+                withdrawal=0,
+            )
+
+
+class TestPlanSavePremium:
+    """plan_save_premium：存檔列欄位對映與連動重算（SC-095、SC-096、SC-098）。"""
+
+    @pytest.mark.scenario("SC-095")
+    def test_sc095_plan_save_maps_fields_into_saved_row(self, service: CostBasisService):
+        records = [
+            _premium_record(year_month="2026-04", cumulative_premium=600_000, net_investment=0)
+        ]
+
+        plan = service.plan_save_premium(
+            holding=_insurance(),
+            records=records,
+            year_month="2026-05",
+            surrender_value=580_000,
+            cumulative_premium=620_000,
+            withdrawal=0,
+        )
+
+        saved = plan[0]
+        assert saved.year_month == "2026-05"
+        assert saved.market_value == 580_000
+        assert saved.total_cost == 620_000
+        assert saved.realized_income == 0
+        assert saved.cash_dividend is None
+        assert _approx(saved.net_investment, 20_000)
+        assert len(plan) == 1
+
+    @pytest.mark.scenario("SC-096")
+    def test_sc096_plan_save_rejects_negative_withdrawal(self, service: CostBasisService):
+        with pytest.raises(DataValidationError):
+            service.plan_save_premium(
+                holding=_insurance(),
+                records=[],
+                year_month="2026-06",
+                surrender_value=585_000,
+                cumulative_premium=620_000,
+                withdrawal=-1_000,
+            )
+
+    @pytest.mark.scenario("SC-096")
+    def test_sc096_plan_save_rejects_non_premium_category(self, service: CostBasisService):
+        with pytest.raises(DataValidationError):
+            service.plan_save_premium(
+                holding=_holding(category=ASSET_CATEGORIES.TW_STOCK),
+                records=[],
+                year_month="2026-06",
+                surrender_value=1,
+                cumulative_premium=1,
+                withdrawal=0,
+            )
+
+    @pytest.mark.scenario("SC-098")
+    def test_sc098_edit_earlier_record_recalculates_only_following_changed_record(
+        self, service: CostBasisService
+    ):
+        records = [
+            _premium_record(
+                year_month="2026-05", cumulative_premium=420_000, net_investment=20_000
+            ),
+            _premium_record(
+                year_month="2026-06", cumulative_premium=440_000, net_investment=20_000
+            ),
+            _premium_record(
+                year_month="2026-07", cumulative_premium=460_000, net_investment=20_000
+            ),
+        ]
+
+        plan = service.plan_save_premium(
+            holding=_insurance(initial_cost=400_000),
+            records=records,
+            year_month="2026-05",
+            surrender_value=410_000,
+            cumulative_premium=430_000,
+            withdrawal=0,
+        )
+
+        by_ym = _net_investment_by_year_month(plan)
+        assert set(by_ym) == {"2026-05", "2026-06"}
+        assert _approx(by_ym["2026-05"], 30_000)
+        assert _approx(by_ym["2026-06"], 10_000)
+
+    @pytest.mark.scenario("SC-098")
+    def test_sc098_legacy_record_after_edit_keeps_value_and_next_new_style_recalculated(
+        self, service: CostBasisService
+    ):
+        # 2026-06 為舊制列（無累計保費），2026-07 為新制列，前期以過渡估算涵蓋被改的 2026-05
+        records = [
+            _premium_record(
+                year_month="2026-05", cumulative_premium=420_000, net_investment=20_000
+            ),
+            _record(year_month="2026-06", net_investment=20_000),
+            _premium_record(
+                year_month="2026-07", cumulative_premium=460_000, net_investment=20_000
+            ),
+        ]
+
+        plan = service.plan_save_premium(
+            holding=_insurance(initial_cost=400_000),
+            records=records,
+            year_month="2026-05",
+            surrender_value=410_000,
+            cumulative_premium=430_000,
+            withdrawal=0,
+        )
+
+        by_ym = _net_investment_by_year_month(plan)
+        assert "2026-06" not in by_ym
+        # 前期估算 = 400000 + 30000 + 20000 = 450000 → 460000 − 450000 = 10000
+        assert _approx(by_ym["2026-07"], 10_000)
+
+
+class TestPlanDeletePremium:
+    """plan_delete：守門放寬為股票/ETF 或保險（SC-098）。"""
+
+    @pytest.mark.scenario("SC-098")
+    def test_sc098_delete_middle_record_recalculates_next_from_earlier(
+        self, service: CostBasisService
+    ):
+        records = [
+            _premium_record(
+                year_month="2026-05", cumulative_premium=420_000, net_investment=20_000
+            ),
+            _premium_record(
+                year_month="2026-06", cumulative_premium=440_000, net_investment=20_000
+            ),
+            _premium_record(
+                year_month="2026-07", cumulative_premium=460_000, net_investment=20_000
+            ),
+        ]
+
+        plan = service.plan_delete(
+            holding=_insurance(initial_cost=400_000), records=records, year_month="2026-06"
+        )
+
+        by_ym = _net_investment_by_year_month(plan)
+        assert set(by_ym) == {"2026-07"}
+        assert _approx(by_ym["2026-07"], 40_000)
+
+    @pytest.mark.scenario("SC-098")
+    def test_sc098_plan_delete_still_rejects_non_stock_non_premium(self, service: CostBasisService):
+        with pytest.raises(DataValidationError):
+            service.plan_delete(
+                holding=_holding(category=ASSET_CATEGORIES.DEMAND_DEPOSIT),
+                records=[],
+                year_month="2026-06",
+            )
+
+
+class TestBuildPremiumPrefill:
+    """build_premium_prefill：保險錄入框帶入值（SC-099）。"""
+
+    @pytest.mark.scenario("SC-099")
+    def test_sc099_existing_record_returns_stored_values(self, service: CostBasisService):
+        records = [
+            _premium_record(
+                year_month="2026-05",
+                cumulative_premium=620_000,
+                net_investment=20_000,
+                surrender_value=580_000,
+                withdrawal=0,
+            )
+        ]
+
+        prefill = service.build_premium_prefill(records=records, year_month="2026-05")
+
+        assert prefill.cumulative_premium == 620_000
+        assert prefill.surrender_value == 580_000
+        assert prefill.withdrawal == 0
+
+    @pytest.mark.scenario("SC-099")
+    def test_sc099_no_record_blank_required_fields_zero_withdrawal(self, service: CostBasisService):
+        records = [
+            _premium_record(year_month="2026-05", cumulative_premium=620_000, net_investment=0)
+        ]
+
+        prefill = service.build_premium_prefill(records=records, year_month="2026-06")
+
+        assert prefill.cumulative_premium is None
+        assert prefill.surrender_value is None
+        assert prefill.withdrawal == 0.0
+
+    @pytest.mark.scenario("SC-099")
+    def test_sc099_record_with_blank_values_prefills_blank_not_zero(
+        self, service: CostBasisService
+    ):
+        records = [
+            _record(year_month="2026-05", market_value=None, total_cost=None, realized_income=None)
+        ]
+
+        prefill = service.build_premium_prefill(records=records, year_month="2026-05")
+
+        assert prefill.cumulative_premium is None
+        assert prefill.surrender_value is None
+        assert prefill.withdrawal == 0.0
+
+    @pytest.mark.scenario("SC-099")
+    def test_sc099_nonzero_withdrawal_prefilled(self, service: CostBasisService):
+        records = [
+            _premium_record(
+                year_month="2026-06",
+                cumulative_premium=620_000,
+                net_investment=-30_000,
+                surrender_value=585_000,
+                withdrawal=30_000,
+            )
+        ]
+
+        prefill = service.build_premium_prefill(records=records, year_month="2026-06")
+
+        assert prefill.withdrawal == 30_000
