@@ -213,7 +213,7 @@ def test_sc113_batch_write_clears_only_after_final_commit(rig: _Rig) -> None:
     writer.execute("UPDATE t SET v = 1 WHERE k = 1")
     writer.execute("INSERT INTO t (k, v) VALUES (2, 2)")
 
-    # commit 前，快取內既有項目尚未被清（但讀取會繞過快取，見 SC-114）
+    # commit 前，快取內既有項目尚未被清（但有未 commit 的寫入時，讀取會繞過快取）
     assert rig.cache.get((_SELECT, (1,))) == [(100,)]
 
     rig.conn.commit()

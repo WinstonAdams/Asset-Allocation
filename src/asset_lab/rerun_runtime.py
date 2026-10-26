@@ -102,7 +102,6 @@ def rerun_scope(
             )
 
 
-
 def verified_container() -> "Container":
     """取得本次執行已驗證連線的容器；同一次執行只探測一次。
 

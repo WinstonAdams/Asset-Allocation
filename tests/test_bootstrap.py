@@ -1109,7 +1109,7 @@ def test_app_disables_pyarrow_mimalloc_before_importing_streamlit() -> None:
     )
 
 
-# === logging 設定與頁面 logger 命名（SC-132） ===
+# === logging 設定與頁面 logger 命名 ===
 
 _VIEWS_DIR = APP_DIR / "views"
 
