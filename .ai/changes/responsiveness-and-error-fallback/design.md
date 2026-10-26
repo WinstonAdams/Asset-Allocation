@@ -746,6 +746,7 @@ showErrorDetails = "none"
 | 13 | `asset_lab` logger 的 `propagate` 為 True | 若之後有套件在 root 掛 handler，log 會重複輸出 | 出現時再調整 |
 | 14 | architecture-brief TD-7（「帶入上月」寫入沒人讀的 session 狀態）、TD-8（總覽與買房頁的讀取重疊） | 維持現狀 | 範圍外，另案 |
 | 15 | `st.App(on_script_error)` 未採用 | callback、fragment、腳本仍分三處處理錯誤 | Community Cloud 確認支援後再評估 |
+| 16 | 錯誤細節的主防線 L1（`app.py` 的 `st.set_option`）要到 `main()` 才執行；`main()` 之前的錯誤（例如部署後某個依賴或專案模組 import 失敗，每次執行都失敗在同一處）只靠 L0 `config.toml` | 若雲端以命令列參數或環境變數蓋掉 L0，未登入訪客可能看到 stacktrace 模式（通用訊息加程式堆疊，內容是公開 repo 的程式碼與路徑，不含機密或財務資料）；只在 import 層壞掉時發生 | 3-2 決定不改程式；上線後照 review.md 3-2「上線目視檢查」確認 L0 在雲端是否生效，未生效再評估把 `set_option` 提前到專案模組 import 之前 |
 
 ## 待確認事項
 
