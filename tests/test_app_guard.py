@@ -22,6 +22,9 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
+from asset_lab.core.constants import ERROR_DETAILS
+from asset_lab.error_boundary import UNEXPECTED_ERROR_MESSAGE
+
 # 注意：不在模組層級 import app.py——app.py 在載入時即呼叫 main()（觸發 secrets 讀取），
 # 只有透過 AppTest 在受控替身下執行才安全。守門放行後存依賴容器用的 session key 直接內聯
 # （與 app.CONTAINER_SESSION_KEY 對齊），避免 import 時副作用。
@@ -32,6 +35,16 @@ STRANGER_EMAIL = "stranger@example.test"
 ALLOWED = frozenset({OWNER_EMAIL})
 
 APP_DIR = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _restore_error_details_option():
+    """app.py 每次執行都 st.set_option（程序全域），測試後還原以免污染其他測試。"""
+    import streamlit as st
+
+    original = st.get_option("client.showErrorDetails")
+    yield
+    st.set_option("client.showErrorDetails", original)
 
 
 def _app() -> AppTest:
@@ -193,3 +206,48 @@ class TestSc108VerifiedContainerEntry:
 
         probe.assert_called_once_with()
         assert app.session_state[CONTAINER_SESSION_KEY] is container
+
+
+class TestSc123AppBoundary:
+    """SC-123：守門放行後的未預期錯誤只顯示通用訊息；守門的停止不被當成錯誤。"""
+
+    @staticmethod
+    def _run_owner_with_db_error(monkeypatch, env_value: str | None) -> AppTest:
+        import streamlit as st
+
+        if env_value is None:
+            monkeypatch.delenv(ERROR_DETAILS.ENV_VAR, raising=False)
+        else:
+            monkeypatch.setenv(ERROR_DETAILS.ENV_VAR, env_value)
+        owner = SimpleNamespace(is_logged_in=True, email=OWNER_EMAIL)
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", owner), \
+             mock.patch(
+                 "asset_lab.bootstrap.get_resilient_container",
+                 side_effect=RuntimeError("libsql native error at /srv/secret_path.py"),
+             ):
+            return _app().run()
+
+    @pytest.mark.scenario("SC-123")
+    def test_sc123_unexpected_error_after_login_shows_generic_message(self, monkeypatch):
+        app = self._run_owner_with_db_error(monkeypatch, None)
+
+        assert not app.exception
+        assert [e.value for e in app.error] == [UNEXPECTED_ERROR_MESSAGE]
+        # 側欄仍可操作，資料庫故障時使用者還能登出
+        assert "登出" in [b.label for b in app.sidebar.button]
+
+    @pytest.mark.scenario("SC-123")
+    def test_sc123_login_gate_stop_is_not_reported_as_error(self):
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED):
+            app = _app().run()
+
+        assert not app.exception
+        assert UNEXPECTED_ERROR_MESSAGE not in [e.value for e in app.error]
+
+    @pytest.mark.scenario("SC-125")
+    def test_sc125_enabled_switch_surfaces_the_original_error(self, monkeypatch):
+        app = self._run_owner_with_db_error(monkeypatch, "1")
+
+        assert len(app.exception) == 1
+        assert UNEXPECTED_ERROR_MESSAGE not in [e.value for e in app.error]

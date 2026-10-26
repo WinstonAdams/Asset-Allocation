@@ -34,6 +34,7 @@ from asset_lab.core.constants import (
     APP_LOGGING,
     BALANCE_INPUT,
     COST_BASIS_INPUT,
+    ERROR_DETAILS,
     HOLDING_KIND,
     INPUT_MODE,
     PREMIUM_INPUT,
@@ -422,3 +423,16 @@ def ensure_logging_configured() -> None:
         level=APP_LOGGING.LEVEL,
         fmt=APP_LOGGING.FORMAT,
     )
+
+
+def resolve_error_detail_mode(*, raw: str | None) -> str:
+    """環境變數原始值轉成 Streamlit 的錯誤細節模式（純函式）。
+
+    Args:
+        raw: 環境變數原始值，未設定為 None。
+
+    Returns:
+        值（去空白、轉小寫）在開啟集合內回 ERROR_DETAILS.SHOW，其餘一律 ERROR_DETAILS.HIDE。
+    """
+    normalized = (raw or "").strip().lower()
+    return ERROR_DETAILS.SHOW if normalized in ERROR_DETAILS.ENABLED_VALUES else ERROR_DETAILS.HIDE

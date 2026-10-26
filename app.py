@@ -39,7 +39,8 @@ import streamlit as st
 from asset_lab import bootstrap
 from asset_lab.amount_widget import inject_amount_input_style
 from asset_lab.core.access import AccessReason, evaluate_access
-from asset_lab.core.constants import RERUN_KIND
+from asset_lab.core.constants import ERROR_DETAILS, RERUN_KIND
+from asset_lab.error_boundary import error_boundary
 from asset_lab.rerun_runtime import rerun_scope, verified_container
 
 # 固定瀏覽器分頁標題與圖示：st.set_page_config 必須是整支腳本第一個 Streamlit 指令，
@@ -81,9 +82,18 @@ def _require_access() -> None:
 
 def main() -> None:
     """守門通過後組裝依賴並路由到當前頁面；整次執行包在計時區塊內，結束時記一行量測。"""
+    # 每次執行都以專案環境變數覆蓋 Streamlit 的錯誤細節設定：雲端不設環境變數即永遠隱藏，
+    # Streamlit 原生的 --client.showErrorDetails 不會讓細節露出。
+    st.set_option(
+        "client.showErrorDetails",
+        bootstrap.resolve_error_detail_mode(raw=os.environ.get(ERROR_DETAILS.ENV_VAR)),
+    )
     bootstrap.ensure_logging_configured()
 
-    with rerun_scope(kind=RERUN_KIND.FULL, metrics=bootstrap.get_query_metrics()) as scope:
+    with (
+        rerun_scope(kind=RERUN_KIND.FULL, metrics=bootstrap.get_query_metrics()) as scope,
+        error_boundary(context="app"),
+    ):
         _require_access()
 
         # 守門通過後、路由前呼叫一次，全站金額輸入框放大樣式即對所有頁面生效。

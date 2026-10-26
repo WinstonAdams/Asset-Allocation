@@ -355,6 +355,15 @@ class APP_LOGGING:
     FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
 
+class ERROR_DETAILS:
+    """錯誤細節顯示開關。SHOW/HIDE 為 Streamlit client.showErrorDetails 的值。"""
+
+    ENV_VAR = "ASSET_LAB_SHOW_ERROR_DETAILS"
+    ENABLED_VALUES = frozenset({"1", "true", "yes", "on"})  # 比對前先去空白、轉小寫
+    SHOW = "full"
+    HIDE = "none"
+
+
 class RERUN_KIND:
     """重跑量測 log 的重跑類型。"""
 
