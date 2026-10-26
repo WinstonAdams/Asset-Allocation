@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 # ==== 第三方套件 ====
 # 無
+
 # ==== 專案內部 ====
 # 無
 
@@ -28,6 +29,7 @@ class _ThreadCounters(threading.local):
     """各執行緒獨立的累計值；threading.local 子類的 __init__ 會在每個新執行緒各跑一次。"""
 
     def __init__(self) -> None:
+        """初始化本執行緒的三個累計值為零。"""
         self.db_roundtrips = 0
         self.cache_hits = 0
         self.reconnected = False
@@ -37,6 +39,7 @@ class QueryMetrics:
     """每執行緒累計的查詢量測，加上程序累計往返數（測試用）。"""
 
     def __init__(self) -> None:
+        """建立計數器；本執行緒累計與程序累計皆從零開始。"""
         self._local = _ThreadCounters()
         self._lock = threading.Lock()
         self._total_roundtrips = 0
@@ -56,7 +59,11 @@ class QueryMetrics:
         self._local.reconnected = True
 
     def take(self) -> QueryMetricsSnapshot:
-        """讀取本執行緒累計值並歸零。"""
+        """讀取本執行緒累計值並歸零。
+
+        Returns:
+            歸零前的量測值。
+        """
         local = self._local
         snapshot = QueryMetricsSnapshot(
             db_roundtrips=local.db_roundtrips,
@@ -69,6 +76,10 @@ class QueryMetrics:
         return snapshot
 
     def total_roundtrips(self) -> int:
-        """程序啟動以來的總往返數（不歸零）；測試以前後差值斷言。"""
+        """程序啟動以來的總往返數（不歸零）；測試以前後差值斷言。
+
+        Returns:
+            程序累計的資料庫往返次數。
+        """
         with self._lock:
             return self._total_roundtrips

@@ -2,8 +2,10 @@
 
 # ==== 原生（標準庫） ====
 # 無
+
 # ==== 第三方套件 ====
 # 無
+
 # ==== 專案內部 ====
 from asset_lab.repositories.connection_layers import DbConnection
 
@@ -15,6 +17,11 @@ class ConnectionHealthRepository:
     """連線存活探測。必須注入不經快取的連線（計數層），否則探測永遠命中快取。"""
 
     def __init__(self, *, conn: DbConnection) -> None:
+        """注入不經快取的連線。
+
+        Args:
+            conn: 計數層連線。
+        """
         self._conn = conn
 
     def ping(self) -> None:

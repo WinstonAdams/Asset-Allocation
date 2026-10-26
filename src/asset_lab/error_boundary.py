@@ -79,7 +79,7 @@ def guarded_callback(*, context: str) -> Callable[[F], F]:
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: object, **kwargs: object) -> object:
             try:
                 return func(*args, **kwargs)
             except AssetLabError as error:

@@ -14,6 +14,7 @@ from collections.abc import Callable
 
 # ==== 第三方套件 ====
 # 無
+
 # ==== 專案內部 ====
 # 無
 
@@ -24,6 +25,12 @@ class ReadCache:
     """依 (sql, 參數) 存取查詢結果 rows 的快取。"""
 
     def __init__(self, *, ttl_seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+        """建立空快取。
+
+        Args:
+            ttl_seconds: 整批過期秒數，從清除後第一筆寫入起算。
+            clock: 單調時鐘；測試可注入假時鐘。
+        """
         self._ttl_seconds = ttl_seconds
         self._clock = clock
         self._lock = threading.Lock()
@@ -32,17 +39,37 @@ class ReadCache:
         self._started_at: float | None = None
 
     def get(self, key: CacheKey) -> list[tuple] | None:
-        """命中回傳快取的 rows（呼叫端不得修改）；未命中回傳 None。空清單是合法的命中值。"""
+        """查詢快取。
+
+        Args:
+            key: (sql, 參數) 組成的鍵。
+
+        Returns:
+            命中回傳快取的 rows（呼叫端不得修改）；未命中回傳 None。空清單是合法的命中值。
+        """
         with self._lock:
             return self._items.get(key)
 
     def generation(self) -> int:
-        """目前世代；未命中查詢前先取得，寫回時帶入。"""
+        """取得目前世代；未命中查詢前先取得，寫回時帶入。
+
+        Returns:
+            目前的世代數。
+        """
         with self._lock:
             return self._generation
 
     def put(self, key: CacheKey, rows: list[tuple], *, generation: int) -> bool:
-        """世代仍等於 generation 才寫入並回傳 True；清除後第一筆寫入同時記下 TTL 起算時間。"""
+        """寫入查詢結果；清除後第一筆寫入同時記下 TTL 起算時間。
+
+        Args:
+            key: (sql, 參數) 組成的鍵。
+            rows: 查詢結果 rows。
+            generation: 查詢前取得的世代；已被推進則丟棄。
+
+        Returns:
+            世代仍相同而寫入成功回 True，否則 False。
+        """
         with self._lock:
             if generation != self._generation:
                 return False
@@ -64,7 +91,11 @@ class ReadCache:
             self._generation += 1
 
     def expire_if_stale(self) -> bool:
-        """距 TTL 起算時間已達 ttl_seconds 就整批清除並回傳 True；只在每次執行的入口呼叫。"""
+        """距 TTL 起算時間已達 ttl_seconds 就整批清除；只在每次執行的入口呼叫。
+
+        Returns:
+            有清除回 True，未到期回 False。
+        """
         with self._lock:
             started_at = self._started_at
             if started_at is None or self._clock() - started_at < self._ttl_seconds:

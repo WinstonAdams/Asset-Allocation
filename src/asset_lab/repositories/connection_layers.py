@@ -29,30 +29,59 @@ _SELECT_PREFIX = "SELECT"
 class DbCursor(Protocol):
     """Repository 使用的 cursor 介面。"""
 
-    def execute(self, sql: str, parameters: Sequence[object] = ...) -> object: ...
-    def fetchall(self) -> list[tuple]: ...
-    def fetchone(self) -> tuple | None: ...
+    def execute(self, sql: str, parameters: Sequence[object] = ...) -> object:
+        """執行一條語句。"""
+        ...
+
+    def fetchall(self) -> list[tuple]:
+        """取回全部 rows。"""
+        ...
+
+    def fetchone(self) -> tuple | None:
+        """取回一筆 row。"""
+        ...
+
     @property
-    def lastrowid(self) -> int | None: ...
+    def lastrowid(self) -> int | None:
+        """最近一次 INSERT 的 rowid。"""
+        ...
 
 
 class DbConnection(Protocol):
     """Repository 使用的連線介面。"""
 
-    def cursor(self) -> DbCursor: ...
-    def commit(self) -> None: ...
-    def rollback(self) -> None: ...
+    def cursor(self) -> DbCursor:
+        """建立 cursor。"""
+        ...
+
+    def commit(self) -> None:
+        """提交交易。"""
+        ...
+
+    def rollback(self) -> None:
+        """復原交易。"""
+        ...
 
 
 class CountingConnection:
     """計數層：每次 execute／commit／rollback 記一次往返後轉給內層（失敗也算）。"""
 
     def __init__(self, *, inner: DbConnection, metrics: QueryMetrics) -> None:
+        """注入內層連線與量測累計器。
+
+        Args:
+            inner: 被包住的連線。
+            metrics: 記錄往返的累計器。
+        """
         self._inner = inner
         self._metrics = metrics
 
     def cursor(self) -> "CountingCursor":
-        """建立包住內層 cursor 的計數 cursor（建立本身不算往返）。"""
+        """建立包住內層 cursor 的計數 cursor（建立本身不算往返）。
+
+        Returns:
+            計數 cursor。
+        """
         return CountingCursor(inner=self._inner.cursor(), metrics=self._metrics)
 
     def commit(self) -> None:
@@ -70,26 +99,52 @@ class CountingCursor:
     """計數 cursor：execute 記一次往返；fetch* 與 lastrowid 直接透傳不計數。"""
 
     def __init__(self, *, inner: DbCursor, metrics: QueryMetrics) -> None:
+        """注入內層 cursor 與量測累計器。
+
+        Args:
+            inner: 被包住的 cursor。
+            metrics: 記錄往返的累計器。
+        """
         self._inner = inner
         self._metrics = metrics
 
     def execute(self, sql: str, parameters: Sequence[object] = ()) -> "CountingCursor":
-        """先計數再執行；回傳自己，與 libsql cursor 的鏈式呼叫行為一致。"""
+        """先計數再執行；回傳自己，與 libsql cursor 的鏈式呼叫行為一致。
+
+        Args:
+            sql: SQL 語句。
+            parameters: 綁定參數。
+
+        Returns:
+            自己。
+        """
         self._metrics.add_roundtrip()
         self._inner.execute(sql, parameters)
         return self
 
     def fetchall(self) -> list[tuple]:
-        """取回全部 rows（不計數）。"""
+        """取回全部 rows（不計數）。
+
+        Returns:
+            全部 rows。
+        """
         return self._inner.fetchall()
 
     def fetchone(self) -> tuple | None:
-        """取回一筆 row（不計數）。"""
+        """取回一筆 row（不計數）。
+
+        Returns:
+            一筆 row；沒有則 None。
+        """
         return self._inner.fetchone()
 
     @property
     def lastrowid(self) -> int | None:
-        """最近一次 INSERT 的 rowid。"""
+        """最近一次 INSERT 的 rowid。
+
+        Returns:
+            rowid；無則 None。
+        """
         return self._inner.lastrowid
 
 
@@ -100,6 +155,13 @@ class CachingConnection:
     """
 
     def __init__(self, *, inner: DbConnection, cache: ReadCache, metrics: QueryMetrics) -> None:
+        """注入內層連線、快取與量測累計器。
+
+        Args:
+            inner: 被包住的連線（計數層）。
+            cache: 程序級讀取快取。
+            metrics: 記錄快取命中的累計器。
+        """
         self._inner = inner
         self._cache = cache
         self._metrics = metrics
@@ -109,7 +171,11 @@ class CachingConnection:
 
     @property
     def pending_write(self) -> bool:
-        """目前是否有尚未確認的寫入。"""
+        """目前是否有尚未確認的寫入。
+
+        Returns:
+            有未 commit／rollback 的寫入回 True。
+        """
         return self._pending_write
 
     def mark_pending_write(self) -> None:
@@ -118,20 +184,36 @@ class CachingConnection:
 
     @property
     def cache(self) -> ReadCache:
-        """快取實例（cursor 讀寫用）。"""
+        """快取實例（cursor 讀寫用）。
+
+        Returns:
+            程序級讀取快取。
+        """
         return self._cache
 
     @property
     def metrics(self) -> QueryMetrics:
-        """量測累計器（cursor 記命中用）。"""
+        """量測累計器（cursor 記命中用）。
+
+        Returns:
+            量測累計器。
+        """
         return self._metrics
 
     def new_inner_cursor(self) -> DbCursor:
-        """建立內層 cursor（只在真的需要打資料庫時才呼叫）。"""
+        """建立內層 cursor（只在真的需要打資料庫時才呼叫）。
+
+        Returns:
+            內層 cursor。
+        """
         return self._inner.cursor()
 
     def cursor(self) -> "CachingCursor":
-        """建立快取 cursor；此時不建立內層 cursor。"""
+        """建立快取 cursor；此時不建立內層 cursor。
+
+        Returns:
+            快取 cursor。
+        """
         return CachingCursor(owner=self)
 
     def commit(self) -> None:
@@ -153,12 +235,25 @@ class CachingCursor:
     """快取 cursor：SELECT 走快取（命中則緩衝 rows），其他語句標記寫入後透傳。"""
 
     def __init__(self, *, owner: CachingConnection) -> None:
+        """綁定所屬的快取連線。
+
+        Args:
+            owner: 提供快取、量測與寫入旗標的快取連線。
+        """
         self._owner = owner
         self._inner: DbCursor | None = None
         self._buffer: list[tuple] | None = None
 
     def execute(self, sql: str, parameters: Sequence[object] = ()) -> "CachingCursor":
-        """SELECT：命中直接緩衝；未命中查資料庫並在安全時寫回。其他語句：先標記寫入再透傳。"""
+        """SELECT：命中直接緩衝；未命中查資料庫並在安全時寫回。其他語句：先標記寫入再透傳。
+
+        Args:
+            sql: SQL 語句。
+            parameters: 綁定參數。
+
+        Returns:
+            自己。
+        """
         self._buffer = None
         if not sql.lstrip().upper().startswith(_SELECT_PREFIX):
             self._owner.mark_pending_write()
@@ -186,21 +281,33 @@ class CachingCursor:
         return self
 
     def fetchall(self) -> list[tuple]:
-        """取回全部 rows（SELECT 從緩衝區讀；其他語句透傳）。"""
+        """取回全部 rows（SELECT 從緩衝區讀；其他語句透傳）。
+
+        Returns:
+            全部 rows。
+        """
         if self._buffer is None:
             return self._ensure_inner().fetchall()
         rows, self._buffer = self._buffer, []
         return rows
 
     def fetchone(self) -> tuple | None:
-        """取回一筆 row（SELECT 從緩衝區讀；其他語句透傳）。"""
+        """取回一筆 row（SELECT 從緩衝區讀；其他語句透傳）。
+
+        Returns:
+            一筆 row；沒有則 None。
+        """
         if self._buffer is None:
             return self._ensure_inner().fetchone()
         return self._buffer.pop(0) if self._buffer else None
 
     @property
     def lastrowid(self) -> int | None:
-        """最近一次 INSERT 的 rowid；從未打過資料庫的 cursor 為 None。"""
+        """最近一次 INSERT 的 rowid。
+
+        Returns:
+            rowid；從未打過資料庫的 cursor 為 None。
+        """
         return None if self._inner is None else self._inner.lastrowid
 
     def _ensure_inner(self) -> DbCursor:

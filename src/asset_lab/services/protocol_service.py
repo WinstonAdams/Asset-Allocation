@@ -84,6 +84,14 @@ class ProtocolService:
     ) -> list[ProtocolThresholdModel]:
         """驗證三級門檻並組成待整批寫入的持久化列（L1、L2、L3 順序）。
 
+        Args:
+            l1: L1 回撤門檻。
+            l2: L2 回撤門檻。
+            l3: L3 回撤門檻。
+
+        Returns:
+            依 L1、L2、L3 順序的持久化列。
+
         Raises:
             DataValidationError: 門檻順序不合法（同 validate_thresholds）。
         """

@@ -41,6 +41,7 @@ class _ScopeState(threading.local):
     """每執行緒的 scope 巢狀深度與本次執行的連線驗證結果。"""
 
     def __init__(self) -> None:
+        """初始化本執行緒的巢狀深度與驗證暫存。"""
         self.depth = 0
         # 本次執行已驗證過的容器；最外層 scope 結束時清掉，下一次執行才會重新驗證。
         self.verified: Container | None = None
@@ -139,7 +140,7 @@ def rerun_fragment(*, label: str) -> Callable[[F], F]:
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: object, **kwargs: object) -> object:
             # 執行時才透過模組屬性取用，測試才能替換
             metrics = bootstrap.get_query_metrics()
             with rerun_scope(kind=RERUN_KIND.FRAGMENT, metrics=metrics, page=label):

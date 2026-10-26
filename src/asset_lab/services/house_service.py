@@ -143,6 +143,12 @@ class HouseService:
     def build_param_models(self, *, params: HouseParams) -> list[HouseParamModel]:
         """驗證買房參數並組成待整批寫入的持久化列（9 筆，皆以 REAL 值表示）。
 
+        Args:
+            params: 待儲存的買房參數。
+
+        Returns:
+            9 筆持久化列。
+
         Raises:
             DataValidationError: 任一參數逾越合法域（同 validate_params）。
         """
