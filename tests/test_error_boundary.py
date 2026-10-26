@@ -1,4 +1,5 @@
-"""error_boundary：未預期錯誤通用訊息、開關開啟原樣往上拋、領域錯誤維持原訊息（SC-123/125/126）。"""
+"""error_boundary：未預期錯誤通用訊息、開關開啟原樣往上拋、領域錯誤維持原訊息（SC-123/125/126），
+以及 widget callback 的 guarded_callback（SC-127）。"""
 
 # ==== 原生（標準庫） ====
 import logging
@@ -10,7 +11,12 @@ from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import ERROR_DETAILS
-from asset_lab.error_boundary import UNEXPECTED_ERROR_MESSAGE, error_details_enabled
+from asset_lab.error_boundary import (
+    CALLBACK_ERROR_SESSION_KEY,
+    UNEXPECTED_ERROR_MESSAGE,
+    error_details_enabled,
+    guarded_callback,
+)
 
 OPTION = "client.showErrorDetails"
 LOGGER_NAME = "asset_lab.error_boundary"
@@ -173,3 +179,100 @@ def test_sc126_domain_error_keeps_its_own_message(mode, caplog):
     records = [r for r in caplog.records if r.name == LOGGER_NAME]
     assert len(records) == 1
     assert records[0].exc_info is not None
+
+
+def _callback_script(mode: str, error_kind: str) -> None:
+    import streamlit as st
+
+    from asset_lab.core.exceptions import PersistenceError
+    from asset_lab.error_boundary import guarded_callback, show_callback_error
+
+    st.set_option("client.showErrorDetails", mode)
+
+    @guarded_callback(context="test-cb")
+    def on_click_handler():
+        if error_kind == "unexpected":
+            raise RuntimeError("libsql native error at /srv/app/secret_path.py")
+        if error_kind == "domain":
+            raise PersistenceError("存檔失敗，資料未變更，請重試")
+        st.session_state["handled"] = True
+
+    st.title("測試頁")
+    show_callback_error()
+    st.button("go", key="go", on_click=on_click_handler)
+    st.write("頁面已渲染")
+
+
+def _click_go(mode: str, error_kind: str) -> AppTest:
+    app = AppTest.from_function(_callback_script, args=(mode, error_kind), default_timeout=8)
+    app.run()
+    return app.button(key="go").click().run()
+
+
+@pytest.mark.scenario("SC-127")
+def test_sc127_unexpected_callback_error_shows_generic_message_below_title(caplog):
+    with caplog.at_level(logging.ERROR, logger=LOGGER_NAME):
+        app = _click_go(ERROR_DETAILS.HIDE, "unexpected")
+
+    assert not app.exception
+    assert [e.value for e in app.error] == [UNEXPECTED_ERROR_MESSAGE]
+    # 頁面照常渲染，訊息在標題之後
+    assert [m.value for m in app.markdown if m.value == "頁面已渲染"] == ["頁面已渲染"]
+    assert all(RAW_SECRET_TEXT not in str(e.value) for e in app.error)
+    records = [r for r in caplog.records if r.name == LOGGER_NAME]
+    assert len(records) == 1
+    assert "test-cb" in records[0].getMessage()
+    assert RAW_SECRET_TEXT in str(records[0].exc_info[1])
+
+
+@pytest.mark.scenario("SC-127")
+def test_sc127_callback_error_message_is_shown_once_then_cleared():
+    app = _click_go(ERROR_DETAILS.HIDE, "unexpected")
+    assert len(app.error) == 1
+
+    app.run()
+
+    assert not app.error
+    assert CALLBACK_ERROR_SESSION_KEY not in app.session_state
+
+
+@pytest.mark.scenario("SC-127")
+@pytest.mark.parametrize("mode", [ERROR_DETAILS.HIDE, ERROR_DETAILS.SHOW])
+def test_sc127_domain_callback_error_keeps_its_own_message(mode):
+    app = _click_go(mode, "domain")
+
+    assert not app.exception
+    assert [e.value for e in app.error] == ["存檔失敗，資料未變更，請重試"]
+
+
+@pytest.mark.scenario("SC-127")
+def test_sc127_details_enabled_reraises_unexpected_callback_error():
+    app = _click_go(ERROR_DETAILS.SHOW, "unexpected")
+
+    # 本機除錯：原樣往上拋，不改寫成通用訊息
+    assert len(app.exception) == 1
+    assert UNEXPECTED_ERROR_MESSAGE not in [e.value for e in app.error]
+
+
+@pytest.mark.scenario("SC-127")
+def test_sc127_normal_callback_has_no_message():
+    app = _click_go(ERROR_DETAILS.HIDE, "none")
+
+    assert not app.exception
+    assert not app.error
+    assert app.session_state["handled"] is True
+
+
+@pytest.mark.scenario("SC-127")
+def test_sc127_callback_decorator_passes_through_base_exception_and_metadata():
+    class Control(BaseException):
+        pass
+
+    @guarded_callback(context="test-cb")
+    def handler():
+        """doc"""
+        raise Control
+
+    assert handler.__name__ == "handler"
+    with pytest.raises(Control):
+        handler()

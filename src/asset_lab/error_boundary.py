@@ -6,9 +6,11 @@
 """
 
 # ==== 原生（標準庫） ====
+import functools
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from typing import TypeVar
 
 # ==== 第三方套件 ====
 import streamlit as st
@@ -21,6 +23,9 @@ from asset_lab.core.exceptions import AssetLabError
 logger = logging.getLogger(__name__)
 
 UNEXPECTED_ERROR_MESSAGE = "發生未預期錯誤，請稍後再試"
+CALLBACK_ERROR_SESSION_KEY = "callback_error_message"
+
+F = TypeVar("F", bound=Callable)
 
 
 def error_details_enabled() -> bool:
@@ -57,3 +62,42 @@ def error_boundary(*, context: str) -> Iterator[None]:
         if error_details_enabled():
             raise
         st.error(UNEXPECTED_ERROR_MESSAGE)
+
+
+def guarded_callback(*, context: str) -> Callable[[F], F]:
+    """widget callback 用：分類同 error_boundary，但不輸出元素，訊息暫存到 session_state。
+
+    callback 在腳本主體之前執行，直接輸出的元素位置不固定；改暫存訊息，由頁面在標題下方
+    呼叫 show_callback_error 顯示，頁面本身照常渲染。
+
+    Args:
+        context: 發生位置的標籤，帶進 log 以便追查。
+
+    Returns:
+        裝飾器。
+    """
+
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except AssetLabError as error:
+                logger.exception("領域錯誤 context=%s", context)
+                st.session_state[CALLBACK_ERROR_SESSION_KEY] = str(error)
+            except Exception:
+                logger.exception("未預期錯誤 context=%s", context)
+                if error_details_enabled():
+                    raise
+                st.session_state[CALLBACK_ERROR_SESSION_KEY] = UNEXPECTED_ERROR_MESSAGE
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorator
+
+
+def show_callback_error() -> None:
+    """取出並清掉 callback 暫存的錯誤訊息，有的話以紅字顯示（只顯示一次）。"""
+    message = st.session_state.pop(CALLBACK_ERROR_SESSION_KEY, None)
+    if message:
+        st.error(message)

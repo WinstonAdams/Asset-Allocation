@@ -22,6 +22,7 @@ import streamlit as st
 from asset_lab.bootstrap import Container
 from asset_lab.core.constants import HOUSE_TRIGGER, TIMEZONE
 from asset_lab.core.exceptions import AssetLabError
+from asset_lab.error_boundary import guarded_callback, show_callback_error
 from asset_lab.models.house import SubjectiveTriggerModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.results import (
@@ -30,7 +31,7 @@ from asset_lab.models.results import (
     BucketProgress,
     TriggerChecklist,
 )
-from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
+from asset_lab.rerun_runtime import verified_container
 from asset_lab.services.period_service import today_in_timezone
 
 logger = logging.getLogger("asset_lab.views.house")
@@ -56,6 +57,7 @@ def _container() -> Container:
 def render() -> None:
     """渲染買房頁：可負擔性試算、bucket 進度與組成警示、五條觸發條件檢核。"""
     st.title("買房")
+    show_callback_error()
     container = _container()
 
     try:
@@ -105,11 +107,7 @@ def render() -> None:
 
         _render_affordability(reverse_result=reverse_result, forward_result=forward_result)
         _render_bucket(progress=progress, warning=warning)
-        _render_triggers(
-            checklist=checklist,
-            subjective=subjective,
-            subjective_trigger_repo=container.subjective_trigger_repo,
-        )
+        _render_triggers(checklist=checklist, subjective=subjective)
     except AssetLabError as error:
         logger.exception("買房頁渲染失敗")
         st.error(str(error))
@@ -165,10 +163,7 @@ def _render_bucket(*, progress: BucketProgress, warning: BucketCompositionWarnin
 
 
 def _render_triggers(
-    *,
-    checklist: TriggerChecklist,
-    subjective: list[SubjectiveTriggerModel],
-    subjective_trigger_repo: SubjectiveTriggerRepository,
+    *, checklist: TriggerChecklist, subjective: list[SubjectiveTriggerModel]
 ) -> None:
     """五條觸發條件檢核：逐條顯示達成狀態、達成計數；5/5 顯示可啟動購屋，否則列缺口清單。"""
     st.subheader("觸發條件檢核")
@@ -181,7 +176,6 @@ def _render_triggers(
                 trigger_key=condition.key,
                 label=label,
                 checked=checked_map.get(condition.key, False),
-                repo=subjective_trigger_repo,
             )
         else:
             icon = "✅" if condition.met else "⬜"
@@ -208,9 +202,7 @@ def _render_triggers(
             st.write(f"- {label}（實際 {actual_text} vs 門檻 {required_text}）")
 
 
-def _render_subjective_checkbox(
-    *, trigger_key: str, label: str, checked: bool, repo: SubjectiveTriggerRepository
-) -> None:
+def _render_subjective_checkbox(*, trigger_key: str, label: str, checked: bool) -> None:
     """主觀觸發勾選框：勾選狀態變動即時持久化，不需另按儲存按鈕。"""
     key = f"house_trigger_{trigger_key}"
     st.checkbox(
@@ -218,16 +210,19 @@ def _render_subjective_checkbox(
         value=checked,
         key=key,
         on_change=_persist_subjective_trigger,
-        kwargs={"trigger_key": trigger_key, "widget_key": key, "repo": repo},
+        kwargs={"trigger_key": trigger_key, "widget_key": key},
     )
 
 
-def _persist_subjective_trigger(
-    *, trigger_key: str, widget_key: str, repo: SubjectiveTriggerRepository
-) -> None:
-    """把使用者剛勾選/取消的主觀觸發狀態即時寫回 DB。"""
+@guarded_callback(context="買房主觀勾選")
+def _persist_subjective_trigger(*, trigger_key: str, widget_key: str) -> None:
+    """把使用者剛勾選/取消的主觀觸發狀態即時寫回 DB。
+
+    callback 在腳本主體之前執行，不能沿用上一輪抓住的 repo（閒置後連線可能已失效），
+    所以自行取已驗證連線的容器。
+    """
     checked = st.session_state[widget_key]
-    repo.upsert_trigger(
+    verified_container().subjective_trigger_repo.upsert_trigger(
         trigger=SubjectiveTriggerModel(trigger_key=trigger_key, checked=checked)
     )
 
