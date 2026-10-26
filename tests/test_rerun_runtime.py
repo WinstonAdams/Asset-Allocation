@@ -15,7 +15,8 @@ from streamlit.testing.v1 import AppTest
 # ==== 專案內部 ====
 from asset_lab.core.constants import RERUN_KIND
 from asset_lab.repositories.query_metrics import QueryMetrics
-from asset_lab.rerun_runtime import rerun_scope
+from asset_lab.repositories.read_cache import ReadCache
+from asset_lab.rerun_runtime import CONTAINER_SESSION_KEY, rerun_scope, verified_container
 
 APP_DIR = Path(__file__).resolve().parent.parent
 LOGGER_NAME = "asset_lab.rerun_runtime"
@@ -203,3 +204,165 @@ def test_sc130_login_guard_stop_logs_one_interrupted_line_and_no_ui_metrics(capl
     rendered = [e.value for e in app.error]
     rendered += [t.value for t in app.title] + [m.value for m in app.markdown]
     assert not any("重跑量測" in text for text in rendered)
+
+
+# === verified_container：每次執行最多探測一次、入口做 TTL 判定 ===
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def probe_env():
+    """替換 bootstrap 的探測入口與讀取快取，並以空 session_state 取代 st.session_state。"""
+    clock = _FakeClock()
+    cache = ReadCache(ttl_seconds=300, clock=clock)
+    container = SimpleNamespace(name="container")
+    calls: list[str] = []
+
+    def _probe():
+        calls.append("probe")
+        return container
+
+    original_expire = cache.expire_if_stale
+
+    def _expire():
+        calls.append("expire")
+        return original_expire()
+
+    cache.expire_if_stale = _expire
+    session: dict = {}
+    with mock.patch("asset_lab.bootstrap.get_resilient_container", side_effect=_probe) as probe, \
+         mock.patch("asset_lab.bootstrap.get_read_cache", return_value=cache), \
+         mock.patch.object(st, "session_state", session):
+        yield SimpleNamespace(
+            clock=clock, cache=cache, container=container, calls=calls, probe=probe, session=session
+        )
+
+
+def _scope(metrics: QueryMetrics | None = None):
+    return rerun_scope(kind=RERUN_KIND.FULL, metrics=metrics or QueryMetrics())
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_verified_container_probes_once_per_execution(probe_env) -> None:
+    with _scope():
+        first = verified_container()
+        second = verified_container()
+        third = verified_container()
+
+    assert first is second is third is probe_env.container
+    probe_env.probe.assert_called_once_with()
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_verified_container_writes_session_state_every_call(probe_env) -> None:
+    with _scope():
+        verified_container()
+        probe_env.session.clear()
+        verified_container()
+
+    assert probe_env.session[CONTAINER_SESSION_KEY] is probe_env.container
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_each_new_execution_probes_again(probe_env) -> None:
+    with _scope():
+        verified_container()
+    with _scope():
+        verified_container()
+
+    assert probe_env.probe.call_count == 2
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_nested_scope_exit_keeps_the_execution_result(probe_env) -> None:
+    # 整頁重跑裡的 fragment（巢狀 scope）結束，不能讓外層後續呼叫重新探測
+    with _scope():
+        verified_container()
+        with rerun_scope(kind=RERUN_KIND.FRAGMENT, metrics=QueryMetrics()):
+            verified_container()
+        verified_container()
+
+    probe_env.probe.assert_called_once_with()
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_result_is_cleared_even_when_the_scope_is_interrupted(probe_env) -> None:
+    with pytest.raises(_Interrupt):
+        with _scope():
+            verified_container()
+            raise _Interrupt
+    with _scope():
+        verified_container()
+
+    assert probe_env.probe.call_count == 2
+
+
+@pytest.mark.scenario("SC-110")
+def test_sc110_probe_failure_propagates_and_is_not_cached(probe_env) -> None:
+    probe_env.probe.side_effect = [ValueError("boom"), probe_env.container]
+
+    with _scope():
+        with pytest.raises(ValueError, match="boom"):
+            verified_container()
+        assert CONTAINER_SESSION_KEY not in probe_env.session
+        assert verified_container() is probe_env.container
+
+    assert probe_env.probe.call_count == 2
+
+
+@pytest.mark.scenario("SC-115")
+def test_sc115_expiry_checked_once_at_entry_after_probe(probe_env) -> None:
+    with _scope():
+        verified_container()
+        verified_container()
+
+    assert probe_env.calls == ["probe", "expire"]
+
+
+@pytest.mark.scenario("SC-115")
+def test_sc115_entry_at_299_keeps_cache_and_at_300_clears_whole_batch(probe_env) -> None:
+    cache, clock = probe_env.cache, probe_env.clock
+    key_a, key_b = ("SELECT a", ()), ("SELECT b", ())
+    cache.put(key_a, [(1,)], generation=cache.generation())
+    cache.put(key_b, [(2,)], generation=cache.generation())
+    clock.now += 299
+    with _scope():
+        verified_container()
+    assert cache.get(key_a) == [(1,)] and cache.get(key_b) == [(2,)]
+
+    clock.now += 1
+    with _scope():
+        verified_container()
+
+    assert cache.get(key_a) is None and cache.get(key_b) is None
+
+
+@pytest.mark.scenario("SC-115")
+def test_sc115_no_expiry_check_inside_the_same_execution(probe_env) -> None:
+    # 同一次重跑內不逐筆判定：進入後時間走過 TTL，這次執行仍看到同一批資料
+    cache, clock = probe_env.cache, probe_env.clock
+    key = ("SELECT a", ())
+    cache.put(key, [(1,)], generation=cache.generation())
+    with _scope():
+        verified_container()
+        clock.now += 400
+        verified_container()
+        assert cache.get(key) == [(1,)]
+
+
+@pytest.mark.scenario("SC-115")
+def test_sc115_expiry_not_checked_when_probe_fails(probe_env) -> None:
+    probe_env.probe.side_effect = ValueError("boom")
+
+    with _scope():
+        with pytest.raises(ValueError):
+            verified_container()
+
+    assert "expire" not in probe_env.calls

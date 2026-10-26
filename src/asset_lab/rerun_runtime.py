@@ -11,23 +11,34 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 # ==== 第三方套件 ====
-# 無
+import streamlit as st
+
 # ==== 專案內部 ====
+from asset_lab import bootstrap
 from asset_lab.repositories.query_metrics import QueryMetrics
 
+if TYPE_CHECKING:
+    from asset_lab.bootstrap import Container
+
 logger = logging.getLogger(__name__)
+
+# 放行後把組裝好的依賴容器存入 session，供各頁以同一容器取用，免每頁重組。
+CONTAINER_SESSION_KEY = "container"
 
 # 頁面名稱尚未知道（例如登入守門就被擋下）時的佔位，讓 log 行欄位數固定、好 grep。
 _UNKNOWN_PAGE = "-"
 
 
 class _ScopeState(threading.local):
-    """每執行緒的 scope 巢狀深度。"""
+    """每執行緒的 scope 巢狀深度與本次執行的連線驗證結果。"""
 
     def __init__(self) -> None:
         self.depth = 0
+        # 本次執行已驗證過的容器；最外層 scope 結束時清掉，下一次執行才會重新驗證。
+        self.verified: Container | None = None
 
 
 _state = _ScopeState()
@@ -70,6 +81,7 @@ def rerun_scope(
     finally:
         _state.depth -= 1
         if scope.is_outermost:
+            _state.verified = None
             elapsed_ms = round((time.perf_counter() - started) * 1000)
             snapshot = metrics.take()
             logger.info(
@@ -83,3 +95,24 @@ def rerun_scope(
                 str(snapshot.reconnected).lower(),
                 str(interrupted).lower(),
             )
+
+
+
+def verified_container() -> "Container":
+    """取得本次執行已驗證連線的容器；同一次執行只探測一次。
+
+    第一次呼叫才經 bootstrap 做連線確認（含必要的重連），成功後在入口判定讀取快取是否
+    到期；之後同一次執行（含 widget callback 與腳本主體，同一執行緒）直接回傳暫存結果。
+    探測失敗時不暫存，例外原樣往上拋，也不做到期判定。
+
+    Returns:
+        連線已驗證存活的容器；同時寫入 session_state 供各頁取用。
+    """
+    container = _state.verified
+    if container is None:
+        container = bootstrap.get_resilient_container()
+        # 到期判定只在每次執行的入口做一次，同一次重跑看到的是同一批資料
+        bootstrap.get_read_cache().expire_if_stale()
+        _state.verified = container
+    st.session_state[CONTAINER_SESSION_KEY] = container
+    return container

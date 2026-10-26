@@ -41,6 +41,7 @@ from asset_lab.core.constants import (
     READ_CACHE,
 )
 from asset_lab.repositories.connection_layers import CachingConnection, CountingConnection
+from asset_lab.repositories.health_repository import ConnectionHealthRepository
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.house_param_repository import HouseParamRepository
 from asset_lab.repositories.protocol_doc_repository import ProtocolDocRepository
@@ -94,6 +95,7 @@ class Container:
     record_repo: RecordRepository
     target_repo: TargetRepository
     schema_repo: SchemaRepository
+    health_repo: ConnectionHealthRepository
     protocol_threshold_repo: ProtocolThresholdRepository
     protocol_doc_repo: ProtocolDocRepository
     house_param_repo: HouseParamRepository
@@ -149,7 +151,8 @@ def build_container(
     連線分兩層，是全專案唯一的組裝點：
       counted = CountingConnection(inner=conn)          # 記錄真的打到資料庫的往返
       cached  = CachingConnection(inner=counted)        # SELECT read-through 快取
-    建表 Repository 接 counted（不經快取，才看得到資料庫的真實狀態）；其餘 Repository 與
+    建表與探測 Repository 接 counted（不經快取，才看得到資料庫的真實狀態；探測若命中快取
+    就永遠不會發現連線失效）；其餘 Repository 與
     TransactionRepository 接 cached。Repository 本身看不出有快取：commit 成功才清快取，
     讀到的內容與不經快取時完全相同，只是少了重複往返。
 
@@ -167,6 +170,7 @@ def build_container(
     record_repo = RecordRepository(conn=cached)
     target_repo = TargetRepository(conn=cached)
     schema_repo = SchemaRepository(conn=counted)
+    health_repo = ConnectionHealthRepository(conn=counted)
     protocol_threshold_repo = ProtocolThresholdRepository(conn=cached)
     protocol_doc_repo = ProtocolDocRepository(doc_path=_PROTOCOL_DOC_PATH)
     house_param_repo = HouseParamRepository(conn=cached)
@@ -178,6 +182,7 @@ def build_container(
         record_repo=record_repo,
         target_repo=target_repo,
         schema_repo=schema_repo,
+        health_repo=health_repo,
         protocol_threshold_repo=protocol_threshold_repo,
         protocol_doc_repo=protocol_doc_repo,
         house_param_repo=house_param_repo,
@@ -252,21 +257,30 @@ def get_query_metrics() -> QueryMetrics:
 
 @st.cache_resource
 def get_container() -> Container:
-    """組裝並快取依賴容器，且在首次組裝時確保資料表存在。
+    """組裝並快取依賴容器（純組裝，不碰資料庫）。
 
-    以快取的連線組出容器，並呼叫建表入口（if not exists，重複安全），使 app 首次啟動
-    即備妥三張表。跨 rerun 復用同一容器，避免重複建連線與建表。
+    建表不在這裡做：重連會清掉本快取重建容器，若建表綁在這裡，每次重連都會重跑建表。
+    建表由程序級只做一次的 `ensure_schema_once()` 負責。
 
     Returns:
-        已組裝且 schema 就緒的 Container。
+        已組裝的 Container。
     """
-    container = build_container(
+    return build_container(
         conn=get_connection(),
         read_cache=get_read_cache(),
         query_metrics=get_query_metrics(),
     )
-    container.schema_repo.ensure_schema()
-    return container
+
+
+@st.cache_resource
+def ensure_schema_once() -> bool:
+    """確保資料表存在，每個程序只做一次；重連時不清，所以重連不會重新建表。
+
+    Returns:
+        固定 True（cache_resource 需要一個可快取的回傳值）。
+    """
+    get_container().schema_repo.ensure_schema()
+    return True
 
 
 # Turso Hrana stream 閒置逾時失效時，libsql 拋出的例外訊息固定含此關鍵字（依實測樣態
@@ -291,56 +305,69 @@ def _is_stale_stream_error(exc: Exception) -> bool:
 def _with_reconnect_on_stale_stream(
     *,
     get_container: Callable[[], Container],
+    ensure_schema_once: Callable[[], object],
     clear_connection_cache: Callable[[], None],
     clear_container_cache: Callable[[], None],
+    on_reconnect: Callable[[], None],
 ) -> Container:
-    """取容器並以 `ensure_schema()` 驗證連線存活；偵測到失效則清快取重連重試一次。
+    """取容器、確保資料表存在並以 `ping()` 驗證連線存活；失效則清快取重連重試一次。
 
-    `ensure_schema()` 是 idempotent 的 `CREATE TABLE IF NOT EXISTS`，順便當作連線存活
-    探測——若底層 Hrana stream 已失效，會在這裡先踩到，而非等使用者頁面查詢時才崩潰
-    （假設：同一條連線若 stream 已死，其上任何操作都會以同一樣態失敗，故此探測結果
-    可代表該連線本次 rerun 對所有 Repository 呼叫皆有效）。
+    探測只要一次 `SELECT 1`；建表交給程序級只做一次的 `ensure_schema_once`，兩者都在同
+    一個 try 內，所以連線失效不論先在哪一步踩到都會被偵測。
 
-    偵測到可重連的失效樣態時，依序清掉連線與容器兩層快取——`get_container()` 組裝的
-    各 Repository 在建構時就綁定了舊連線物件，只清連線快取不足以讓既有 Repository
-    改用新連線，必須連容器一起重建——重取一次並再驗證一次。非可重連例外（SQL 語法
-    錯、約束違反等業務例外）原樣往上拋，不誤判為可重連而吞掉。最多重試一次：第二次
-    仍失敗就讓例外原樣浮出，不無限重連。
+    偵測到可重連的失效樣態時，依序清掉連線與容器兩層快取——容器內各 Repository 在建構
+    時就綁定了舊連線物件，只清連線快取不足以讓既有 Repository 改用新連線——通知
+    `on_reconnect`，重取一次並再驗證一次。不清建表快取：資料表早已建好，重連不必重建。
+    非可重連例外（SQL 語法錯、約束違反等）原樣往上拋，不誤判為可重連而吞掉。最多重試
+    一次：第二次仍失敗就讓例外原樣浮出，不無限重連。
 
     Args:
         get_container: 取得（可能快取的）容器；重連後會再呼叫一次取得新容器。
+        ensure_schema_once: 確保資料表存在（程序級只做一次）。
         clear_connection_cache: 清除連線快取（`get_connection.clear`）。
         clear_container_cache: 清除容器快取（`get_container.clear`）。
+        on_reconnect: 偵測到連線失效、清完快取後呼叫（記 log、標記量測）。
 
     Returns:
         連線已驗證存活（或重連成功）的容器。
     """
     container = get_container()
     try:
-        container.schema_repo.ensure_schema()
+        ensure_schema_once()
+        container.health_repo.ping()
     except Exception as exc:
         if not _is_stale_stream_error(exc):
             raise
         clear_connection_cache()
         clear_container_cache()
+        on_reconnect()
         container = get_container()
-        container.schema_repo.ensure_schema()
+        ensure_schema_once()
+        container.health_repo.ping()
     return container
 
 
-def get_resilient_container() -> Container:
-    """app.py 實際取用容器的入口：確保連線存活，失效時自動清快取重連並重試一次。
+def _on_reconnect() -> None:
+    """連線失效已重連：記一行警告，並在本次執行的量測標記已重連。"""
+    get_query_metrics().mark_reconnected()
+    logger.warning("event=reconnected 連線失效已重連")
 
-    每次 rerun 都會呼叫（見 `_with_reconnect_on_stale_stream`），取代直接呼叫
-    `get_container()`——後者本身仍是單純的 cached 組裝，不含存活驗證與重連。
+
+def get_resilient_container() -> Container:
+    """取用容器的入口：確保連線存活，失效時自動清快取重連並重試一次。
+
+    由 `rerun_runtime.verified_container` 在每次執行第一次需要容器時呼叫；頁面與
+    app.py 不直接呼叫。後者本身仍是單純的 cached 組裝，不含存活驗證與重連。
 
     Returns:
         連線已驗證存活的容器。
     """
     return _with_reconnect_on_stale_stream(
         get_container=get_container,
+        ensure_schema_once=ensure_schema_once,
         clear_connection_cache=get_connection.clear,
         clear_container_cache=get_container.clear,
+        on_reconnect=_on_reconnect,
     )
 
 

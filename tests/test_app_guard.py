@@ -152,3 +152,44 @@ class TestSc116SidebarReloadButton:
             app = _app().run()
 
         assert "重新讀取資料" not in [b.label for b in app.sidebar.button]
+
+
+class TestSc108VerifiedContainerEntry:
+    """SC-108：守門先於連線確認；放行後整輪只經 verified_container 驗證一次。"""
+
+    @pytest.mark.scenario("SC-108")
+    def test_sc108_logged_out_visitor_never_triggers_connection_check(self):
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch("asset_lab.bootstrap.get_resilient_container") as probe:
+            _app().run()
+
+        probe.assert_not_called()
+
+    @pytest.mark.scenario("SC-108")
+    def test_sc108_stranger_never_triggers_connection_check(self):
+        import streamlit as st
+
+        stranger = SimpleNamespace(is_logged_in=True, email=STRANGER_EMAIL)
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", stranger), \
+             mock.patch("asset_lab.bootstrap.get_resilient_container") as probe:
+            _app().run()
+
+        probe.assert_not_called()
+
+    @pytest.mark.scenario("SC-108")
+    def test_sc108_owner_probe_runs_once_per_rerun_and_container_goes_to_session(self):
+        import streamlit as st
+
+        container = SimpleNamespace(name="fake-container")
+        owner = SimpleNamespace(is_logged_in=True, email=OWNER_EMAIL)
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", owner), \
+             mock.patch(
+                 "asset_lab.bootstrap.get_resilient_container", return_value=container
+             ) as probe, \
+             mock.patch("asset_lab.bootstrap.get_read_cache"):
+            app = _app().run()
+
+        probe.assert_called_once_with()
+        assert app.session_state[CONTAINER_SESSION_KEY] is container

@@ -8,7 +8,7 @@ CLI 參數，故不採 RPA 的 main.py + argparse 模型）。本檔職責限於
    財務資料。允許 email 與登入設定皆來自 st.secrets，不寫死。
 2. 組裝：放行後注入全站金額輸入框放大樣式（見 amount_widget.py），先渲染側欄（重新讀取資料、
    登出，資料庫故障時仍可操作），再取快取的依賴容器
-   （連線與 schema 已就緒；連線因閒置逾時失效時 `get_resilient_container()` 會自動清
+   （連線已確認存活；連線因閒置逾時失效時 `verified_container()` 會自動清
    快取重連並重試一次，見 bootstrap.py），存入 session 供各頁取用。
 3. 路由：以 st.navigation 註冊多頁並執行當前頁。
 
@@ -40,16 +40,13 @@ from asset_lab import bootstrap
 from asset_lab.amount_widget import inject_amount_input_style
 from asset_lab.core.access import AccessReason, evaluate_access
 from asset_lab.core.constants import RERUN_KIND
-from asset_lab.rerun_runtime import rerun_scope
+from asset_lab.rerun_runtime import rerun_scope, verified_container
 
 # 固定瀏覽器分頁標題與圖示：st.set_page_config 必須是整支腳本第一個 Streamlit 指令，
 # 且每次 rerun（包含切頁、登入前後）都會重新執行到這裡並帶入相同值，因此標題與圖示
 # 不會被登入畫面、拒絕畫面或 st.navigation／各頁的 st.Page(title=...) 覆蓋——後者只影響
 # 側邊欄導覽項目的顯示文字，不影響瀏覽器分頁標題。
 st.set_page_config(page_title="資產管理", page_icon="💰")
-
-# 放行後把組裝好的依賴容器存入 session，供各頁以同一容器取用，免每頁重組。
-CONTAINER_SESSION_KEY = "container"
 
 
 def _require_access() -> None:
@@ -98,7 +95,7 @@ def main() -> None:
             st.button("重新讀取資料", on_click=bootstrap.clear_read_cache)
             st.button("登出", on_click=st.logout)
 
-        st.session_state[CONTAINER_SESSION_KEY] = bootstrap.get_resilient_container()
+        verified_container()
 
         navigation = st.navigation(
             [

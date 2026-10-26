@@ -17,7 +17,7 @@
 |------|------|------|
 | t01 量測基礎與 logging | 完成 | SC-130,132；本 commit 即 AD-13 改前基準版本；app.py 總覽註冊行保留 noqa E501（SC-049 測試以 regex 掃單行） |
 | t02 連線層讀取快取 | 完成 | SC-112~114,116~119；SC-118 卡片預期測試位置改為 test_read_cache_equivalence.py |
-| t03 探測與 verified_container | 未開始 | SC-108~110,115 |
+| t03 探測與 verified_container | 完成 | SC-108~110,115；整頁重跑往返降為 1；錄入頁與買房頁測試替身延到 t05、t06 補 |
 | t04 全站錯誤兜底 | 未開始 | SC-123~126 |
 | t05 月度錄入編輯器 fragment | 未開始 | SC-120~122,131 |
 | t06 guarded_callback 與買房勾選 | 未開始 | SC-111,127 |
