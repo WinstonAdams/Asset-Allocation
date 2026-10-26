@@ -103,3 +103,52 @@ class TestSc034StrangerFailClosed:
             app = _app().run()
         assert [t.value for t in app.title] == ["無權限"]
         assert CONTAINER_SESSION_KEY not in app.session_state
+
+
+class TestSc116SidebarReloadButton:
+    """SC-116：側欄「重新讀取資料」在每頁可見，且在連線確認之前渲染。"""
+
+    @staticmethod
+    def _owner_user() -> SimpleNamespace:
+        return SimpleNamespace(is_logged_in=True, email=OWNER_EMAIL)
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_sidebar_buttons_render_even_when_database_is_down(self):
+        # 資料庫故障（取容器拋錯）時，重新讀取與登出仍在側欄，使用者還能登出
+        import streamlit as st
+
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", self._owner_user()), \
+             mock.patch(
+                 "asset_lab.bootstrap.get_resilient_container",
+                 side_effect=RuntimeError("db down"),
+             ):
+            app = _app().run()
+
+        labels = [b.label for b in app.sidebar.button]
+        assert "重新讀取資料" in labels
+        assert "登出" in labels
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_clicking_reload_runs_clear_read_cache_callback(self):
+        import streamlit as st
+
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", self._owner_user()), \
+             mock.patch(
+                 "asset_lab.bootstrap.get_resilient_container",
+                 side_effect=RuntimeError("db down"),
+             ), \
+             mock.patch("asset_lab.bootstrap.clear_read_cache") as clear:
+            app = _app().run()
+            next(b for b in app.sidebar.button if b.label == "重新讀取資料").click()
+            app.run()
+
+        clear.assert_called_once_with()
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_reload_button_is_not_shown_to_logged_out_visitors(self):
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED):
+            app = _app().run()
+
+        assert "重新讀取資料" not in [b.label for b in app.sidebar.button]

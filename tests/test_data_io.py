@@ -832,3 +832,74 @@ class TestImportFailureMessage:
         assert "模擬匯入寫入中途失敗" in caplog.text
         assert "模擬匯入寫入中途失敗" not in str(errors)
         assert _db_counts(real_conn) == (0, 0, 0)
+
+
+class TestSc117ImportGuardReadsFresh:
+    """SC-117：按「執行匯入」先清快取，空庫守門讀到最新資料。"""
+
+    @staticmethod
+    def _page(container) -> AppTest:
+        at = AppTest.from_file(APP_DIR / "views" / "data_io.py", default_timeout=15)
+        at.session_state["container"] = container
+        return at
+
+    @staticmethod
+    def _fill_uploads(at: AppTest, service: DataIoService) -> None:
+        for key, content in (
+            ("up_holdings", service.export_holdings_csv(holdings=_holdings())),
+            ("up_records", service.export_records_csv(records=_records_df())),
+            ("up_targets", service.export_targets_csv(targets=_targets())),
+        ):
+            uploader = next(u for u in at.get("file_uploader") if u.key == key)
+            uploader.set_value([("data.csv", content, "text/csv")])
+
+    def _setup(self, tmp_path, monkeypatch):
+        from asset_lab import bootstrap
+        from asset_lab.repositories.query_metrics import QueryMetrics
+        from asset_lab.repositories.read_cache import ReadCache
+
+        db_path = str(tmp_path / "shared.db")
+        this_process = libsql.connect(db_path)
+        SchemaRepository(conn=this_process).ensure_schema()
+        cache = ReadCache(ttl_seconds=300)
+        container = bootstrap.build_container(
+            conn=this_process, read_cache=cache, query_metrics=QueryMetrics()
+        )
+        monkeypatch.setattr(bootstrap, "get_read_cache", lambda: cache)
+        return db_path, this_process, container
+
+    @pytest.mark.scenario("SC-117")
+    def test_sc117_import_is_rejected_when_other_connection_has_written(
+        self, service, tmp_path, monkeypatch
+    ):
+        db_path, this_process, container = self._setup(tmp_path, monkeypatch)
+        at = self._page(container)
+        at.run()  # 匯出區塊讀過空庫，快取記住「空」
+        # 別處（另一條連線）寫入資料，實際庫已非空
+        other = libsql.connect(db_path)
+        HoldingRepository(conn=other).add_holding(holding=_holdings()[0])
+        self._fill_uploads(at, service)
+
+        at.button[0].click()
+        at.run()
+
+        assert [e.value for e in at.error] and "清空" in at.error[0].value
+        assert not at.success
+        # 資料不被覆蓋：仍只有別處寫入的那一筆主檔
+        assert len(HoldingRepository(conn=libsql.connect(db_path)).list_holdings()) == 1
+
+    @pytest.mark.scenario("SC-117")
+    def test_sc117_import_succeeds_when_database_is_really_empty(
+        self, service, tmp_path, monkeypatch
+    ):
+        db_path, this_process, container = self._setup(tmp_path, monkeypatch)
+        at = self._page(container)
+        at.run()
+        self._fill_uploads(at, service)
+
+        at.button[0].click()
+        at.run()
+
+        assert not at.exception
+        assert [s.value for s in at.success] == ["匯入完成"]
+        assert _db_counts(libsql.connect(db_path)) == (2, 3, 2)

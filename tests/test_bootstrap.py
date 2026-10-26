@@ -45,13 +45,15 @@ from asset_lab.core.constants import (
     INPUT_MODE,
     MONTHLY_RECORDS_TABLE,
     PREMIUM_INPUT,
+    READ_CACHE,
 )
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
-from asset_lab.repositories.connection_layers import CountingConnection
+from asset_lab.repositories.connection_layers import CachingConnection, CountingConnection
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
 from asset_lab.repositories.query_metrics import QueryMetrics
+from asset_lab.repositories.read_cache import ReadCache
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
@@ -148,7 +150,11 @@ def test_build_container_wires_repositories_to_connection() -> None:
     """容器以注入的同一連線建立各 Repository，並由 DB schema 建表入口備妥。"""
     conn = _FakeConnection()
 
-    container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
+    container = bootstrap.build_container(
+        conn=conn,
+        read_cache=ReadCache(ttl_seconds=300),
+        query_metrics=QueryMetrics(),
+    )
 
     assert isinstance(container.holding_repo, HoldingRepository)
     assert isinstance(container.record_repo, RecordRepository)
@@ -156,22 +162,31 @@ def test_build_container_wires_repositories_to_connection() -> None:
     assert isinstance(container.schema_repo, SchemaRepository)
     assert isinstance(container.protocol_threshold_repo, ProtocolThresholdRepository)
     assert isinstance(container.transaction_repo, TransactionRepository)
-    # 所有 Repository 接上同一個計數層，計數層包住注入的連線
-    counted = container.holding_repo._conn
+    # 連線分層：Repository 接快取層，快取層包計數層，計數層包住注入的連線
+    cached = container.holding_repo._conn
+    assert isinstance(cached, CachingConnection)
+    counted = cached._inner
     assert isinstance(counted, CountingConnection)
     assert counted._inner is conn
-    assert container.record_repo._conn is counted
-    assert container.target_repo._conn is counted
-    assert container.schema_repo._conn is counted
-    assert container.protocol_threshold_repo._conn is counted
-    assert container.transaction_repo._conn is counted
+    assert container.record_repo._conn is cached
+    assert container.target_repo._conn is cached
+    assert container.protocol_threshold_repo._conn is cached
+    assert container.transaction_repo._conn is cached
+    # 建表 Repository 不經快取，直接接計數層
+    assert container.schema_repo._conn is not cached
+    assert isinstance(container.schema_repo._conn, CountingConnection)
+    assert container.schema_repo._conn._inner is conn
 
 
 def test_build_container_wires_services() -> None:
     """容器組出各 Service；月度錄入服務接上主檔與紀錄 Repository（其餘為純運算無依賴）。"""
     conn = _FakeConnection()
 
-    container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
+    container = bootstrap.build_container(
+        conn=conn,
+        read_cache=ReadCache(ttl_seconds=300),
+        query_metrics=QueryMetrics(),
+    )
 
     assert isinstance(container.return_service, ReturnService)
     assert isinstance(container.allocation_service, AllocationService)
@@ -954,3 +969,58 @@ def test_sc132_every_view_logger_is_named_after_its_file_under_asset_lab_views()
     assert len(view_files) == 8
     for path in view_files:
         assert _module_level_logger_names(path) == [f"asset_lab.views.{path.stem}"], path.name
+
+
+class TestSc116ClearReadCache:
+    """SC-116：clear_read_cache 立即清掉程序級快取並記一行 log。"""
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_clear_read_cache_empties_cache_and_logs(self, monkeypatch, caplog) -> None:
+        cache = ReadCache(ttl_seconds=300)
+        cache.put(("SELECT 1", ()), [(1,)], generation=cache.generation())
+        monkeypatch.setattr(bootstrap, "get_read_cache", lambda: cache)
+
+        with caplog.at_level(logging.INFO, logger="asset_lab"):
+            bootstrap.clear_read_cache()
+
+        assert cache.get(("SELECT 1", ())) is None
+        records = [r for r in caplog.records if r.name.startswith("asset_lab")]
+        assert len(records) == 1
+        assert "read_cache_cleared" in records[0].getMessage()
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_after_clear_next_read_comes_from_database(self) -> None:
+        conn = libsql.connect(":memory:")
+        SchemaRepository(conn=conn).ensure_schema()
+        cache = ReadCache(ttl_seconds=300)
+        container = bootstrap.build_container(
+            conn=conn, read_cache=cache, query_metrics=QueryMetrics()
+        )
+        assert container.holding_repo.list_holdings() == []
+        # 別處（另一條路徑）改了資料庫，這條連線的快取仍是舊的
+        HoldingRepository(conn=conn).add_holding(
+            holding=HoldingModel(
+                name="別處新增",
+                kind=HOLDING_KIND.ASSET,
+                category=ASSET_CATEGORIES.DEMAND_DEPOSIT,
+                initial_market_value=1.0,
+                initial_cost=1.0,
+            )
+        )
+        assert container.holding_repo.list_holdings() == []
+
+        cache.clear()
+
+        assert [h.name for h in container.holding_repo.list_holdings()] == ["別處新增"]
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_get_read_cache_uses_configured_ttl_and_survives_reconnect(self) -> None:
+        bootstrap.get_read_cache.clear()
+        first = bootstrap.get_read_cache()
+
+        bootstrap.get_connection.clear()
+        bootstrap.get_container.clear()
+
+        assert bootstrap.get_read_cache() is first
+        assert first._ttl_seconds == READ_CACHE.TTL_SECONDS
+        bootstrap.get_read_cache.clear()

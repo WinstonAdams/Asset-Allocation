@@ -38,13 +38,15 @@ from asset_lab.core.constants import (
     INPUT_MODE,
     PREMIUM_INPUT,
     PROTOCOL_DOC_RELATIVE_PATH,
+    READ_CACHE,
 )
-from asset_lab.repositories.connection_layers import CountingConnection
+from asset_lab.repositories.connection_layers import CachingConnection, CountingConnection
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.house_param_repository import HouseParamRepository
 from asset_lab.repositories.protocol_doc_repository import ProtocolDocRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
 from asset_lab.repositories.query_metrics import QueryMetrics
+from asset_lab.repositories.read_cache import ReadCache
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
@@ -63,6 +65,8 @@ from asset_lab.services.return_service import ReturnService
 
 if TYPE_CHECKING:
     from libsql import Connection
+
+logger = logging.getLogger(__name__)
 
 # st.secrets 內 Turso 連線設定的區段與鍵；值為機密，只存在於 secrets，不寫死於此。
 _SECRET_TURSO_SECTION = "turso"
@@ -134,32 +138,40 @@ def parse_allowed_emails(raw: object) -> set[str]:
     return {email.strip().lower() for email in candidates if email.strip()}
 
 
-def build_container(*, conn: "Connection", query_metrics: QueryMetrics) -> Container:
+def build_container(
+    *, conn: "Connection", read_cache: ReadCache, query_metrics: QueryMetrics
+) -> Container:
     """以注入的連線組裝全部 Repository 與 Service（純組裝，無 I/O、無 st.*）。
 
     連線以 keyword args 注入各 Repository；需要 I/O 的 Service（月度錄入）再以 keyword
     args 接上對應 Repository；純運算 Service（報酬/配置/區間/CSV 整形）無依賴直接建立。
 
-    連線先被計數層（CountingConnection）包住再注入各 Repository，所有資料庫往返都記進
-    query_metrics；Repository 程式碼不需改動。
+    連線分兩層，是全專案唯一的組裝點：
+      counted = CountingConnection(inner=conn)          # 記錄真的打到資料庫的往返
+      cached  = CachingConnection(inner=counted)        # SELECT read-through 快取
+    建表 Repository 接 counted（不經快取，才看得到資料庫的真實狀態）；其餘 Repository 與
+    TransactionRepository 接 cached。Repository 本身看不出有快取：commit 成功才清快取，
+    讀到的內容與不經快取時完全相同，只是少了重複往返。
 
     Args:
         conn: libsql 連線；正式由 get_connection 提供，測試可注入假連線驗證接線。
+        read_cache: 程序級讀取快取；正式由 get_read_cache 提供。
         query_metrics: 查詢量測累計器；正式由 get_query_metrics 提供。
 
     Returns:
         組裝完成的 Container。
     """
     counted = CountingConnection(inner=conn, metrics=query_metrics)
-    holding_repo = HoldingRepository(conn=counted)
-    record_repo = RecordRepository(conn=counted)
-    target_repo = TargetRepository(conn=counted)
+    cached = CachingConnection(inner=counted, cache=read_cache, metrics=query_metrics)
+    holding_repo = HoldingRepository(conn=cached)
+    record_repo = RecordRepository(conn=cached)
+    target_repo = TargetRepository(conn=cached)
     schema_repo = SchemaRepository(conn=counted)
-    protocol_threshold_repo = ProtocolThresholdRepository(conn=counted)
+    protocol_threshold_repo = ProtocolThresholdRepository(conn=cached)
     protocol_doc_repo = ProtocolDocRepository(doc_path=_PROTOCOL_DOC_PATH)
-    house_param_repo = HouseParamRepository(conn=counted)
-    subjective_trigger_repo = SubjectiveTriggerRepository(conn=counted)
-    transaction_repo = TransactionRepository(conn=counted)
+    house_param_repo = HouseParamRepository(conn=cached)
+    subjective_trigger_repo = SubjectiveTriggerRepository(conn=cached)
+    transaction_repo = TransactionRepository(conn=cached)
 
     return Container(
         holding_repo=holding_repo,
@@ -213,6 +225,22 @@ def get_connection() -> "Connection":
 
 
 @st.cache_resource
+def get_read_cache() -> ReadCache:
+    """持有程序級的讀取快取；與連線脫鉤，重連時不清（資料是否有效跟連線無關）。
+
+    Returns:
+        全程序共用的 ReadCache。
+    """
+    return ReadCache(ttl_seconds=READ_CACHE.TTL_SECONDS)
+
+
+def clear_read_cache() -> None:
+    """立即清掉程序級讀取快取並記一行 log；供按鈕 on_click 使用（callback 在腳本主體之前執行）。"""
+    get_read_cache().clear()
+    logger.info("event=read_cache_cleared")
+
+
+@st.cache_resource
 def get_query_metrics() -> QueryMetrics:
     """持有程序級的查詢量測累計器；與連線脫鉤，重連時不清。
 
@@ -232,7 +260,11 @@ def get_container() -> Container:
     Returns:
         已組裝且 schema 就緒的 Container。
     """
-    container = build_container(conn=get_connection(), query_metrics=get_query_metrics())
+    container = build_container(
+        conn=get_connection(),
+        read_cache=get_read_cache(),
+        query_metrics=get_query_metrics(),
+    )
     container.schema_repo.ensure_schema()
     return container
 

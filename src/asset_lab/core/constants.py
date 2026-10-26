@@ -341,6 +341,12 @@ class CSV_EXPORT:
     )
 
 
+class READ_CACHE:
+    """讀取快取的時效：另一處的修改最慢在此秒數後的下一次操作反映。"""
+
+    TTL_SECONDS = 300
+
+
 class APP_LOGGING:
     """App 的 log 設定。專案沒有 config.yml，運維參數集中於此。"""
 

@@ -6,7 +6,8 @@ CLI 參數，故不採 RPA 的 main.py + argparse 模型）。本檔職責限於
 1. 守門：未登入先顯示登入入口並停止；已登入則以純判定（evaluate_access）比對 st.user.email
    是否在允許清單，非本人即顯示拒絕並停止——前置於任何資料存取，確保非本人看不到任何
    財務資料。允許 email 與登入設定皆來自 st.secrets，不寫死。
-2. 組裝：放行後注入全站金額輸入框放大樣式（見 amount_widget.py），再取快取的依賴容器
+2. 組裝：放行後注入全站金額輸入框放大樣式（見 amount_widget.py），先渲染側欄（重新讀取資料、
+   登出，資料庫故障時仍可操作），再取快取的依賴容器
    （連線與 schema 已就緒；連線因閒置逾時失效時 `get_resilient_container()` 會自動清
    快取重連並重試一次，見 bootstrap.py），存入 session 供各頁取用。
 3. 路由：以 st.navigation 註冊多頁並執行當前頁。
@@ -91,11 +92,13 @@ def main() -> None:
         # 守門通過後、路由前呼叫一次，全站金額輸入框放大樣式即對所有頁面生效。
         inject_amount_input_style()
 
-        st.session_state[CONTAINER_SESSION_KEY] = bootstrap.get_resilient_container()
-
+        # 側欄在連線確認之前渲染：資料庫故障時使用者仍能重新讀取或登出。
         with st.sidebar:
             st.caption(f"已登入：{st.user.email}")
+            st.button("重新讀取資料", on_click=bootstrap.clear_read_cache)
             st.button("登出", on_click=st.logout)
+
+        st.session_state[CONTAINER_SESSION_KEY] = bootstrap.get_resilient_container()
 
         navigation = st.navigation(
             [

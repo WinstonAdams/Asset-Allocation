@@ -15,6 +15,7 @@ import pytest
 from asset_lab import bootstrap
 from asset_lab.repositories.connection_layers import CountingConnection
 from asset_lab.repositories.query_metrics import QueryMetrics, QueryMetricsSnapshot
+from asset_lab.repositories.read_cache import ReadCache
 
 
 class _ExplodingConnection:
@@ -152,9 +153,13 @@ def test_sc130_build_container_routes_repository_io_through_counting_layer() -> 
     metrics = QueryMetrics()
     inner = libsql.connect(":memory:")
 
-    container = bootstrap.build_container(conn=inner, query_metrics=metrics)
+    container = bootstrap.build_container(
+        conn=inner,
+        read_cache=ReadCache(ttl_seconds=300),
+        query_metrics=metrics,
+    )
     container.schema_repo.ensure_schema()
 
-    assert isinstance(container.holding_repo._conn, CountingConnection)
+    assert isinstance(container.holding_repo._conn._inner, CountingConnection)
     assert container.holding_repo._conn is container.record_repo._conn
     assert metrics.take().db_roundtrips > 0
