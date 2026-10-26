@@ -21,7 +21,7 @@
 | t04 全站錯誤兜底 | 完成 | SC-123~126；SC-123/124/125 卡片測試位置照實修正；README 開關說明留 4-1 |
 | t05 月度錄入編輯器 fragment | 完成 | SC-120~122,131；rerun_fragment 共用裝飾器；test_input_view 補入口替身（t03 延後項） |
 | t06 guarded_callback 與買房勾選 | 完成 | SC-111,127；test_house 補 callback 入口替身（t03 延後項）；SC-111/127 卡片測試位置照實修正 |
-| t07 設定頁整批存檔 | 未開始 | SC-128,129 |
+| t07 設定頁整批存檔 | 完成 | SC-128,129；補 SC-129 失敗不清快取整合測試（變異驗證會紅）；SC-128/129 卡片測試位置照實修正 |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
 
 ## Phase 3：審查

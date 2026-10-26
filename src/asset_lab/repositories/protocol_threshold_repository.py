@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 # ==== 專案內部 ====
 from asset_lab.core.constants import PROTOCOL_THRESHOLDS_TABLE
 from asset_lab.models.protocol import ProtocolThresholdModel
+from asset_lab.repositories.transaction_repository import write_transaction
 
 if TYPE_CHECKING:
     from libsql import Connection
@@ -55,3 +56,14 @@ class ProtocolThresholdRepository:
         cursor = self._conn.cursor()
         cursor.execute(_UPSERT, (threshold.level, threshold.drawdown_threshold))
         self._conn.commit()
+
+    def upsert_thresholds(self, *, thresholds: list[ProtocolThresholdModel]) -> None:
+        """整批新增或更新回撤門檻，單一交易；失敗全數復原並拋 PersistenceError。
+
+        空清單不產生任何寫入。
+        """
+        if not thresholds:
+            return
+        with write_transaction(self._conn) as cursor:
+            for threshold in thresholds:
+                cursor.execute(_UPSERT, (threshold.level, threshold.drawdown_threshold))

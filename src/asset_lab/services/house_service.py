@@ -140,6 +140,28 @@ class HouseService:
         if errors:
             raise DataValidationError("；".join(errors))
 
+    def build_param_models(self, *, params: HouseParams) -> list[HouseParamModel]:
+        """驗證買房參數並組成待整批寫入的持久化列（9 筆，皆以 REAL 值表示）。
+
+        Raises:
+            DataValidationError: 任一參數逾越合法域（同 validate_params）。
+        """
+        self.validate_params(params=params)
+        return [
+            HouseParamModel(param_key=key, param_value=value)
+            for key, value in (
+                (HOUSE_PARAM_KEY.TARGET_TOTAL_PRICE, params.target_total_price),
+                (HOUSE_PARAM_KEY.TARGET_YEAR, float(params.target_year)),
+                (HOUSE_PARAM_KEY.MONTHLY_AFTER_TAX_INCOME, params.monthly_after_tax_income),
+                (HOUSE_PARAM_KEY.INCOME_THRESHOLD, params.income_threshold),
+                (HOUSE_PARAM_KEY.CASH_FLOOR, params.cash_floor),
+                (HOUSE_PARAM_KEY.DOWN_PAYMENT_RATIO, params.down_payment_ratio),
+                (HOUSE_PARAM_KEY.PAYMENT_CAP_RATIO, params.payment_cap_ratio),
+                (HOUSE_PARAM_KEY.TEST_ANNUAL_RATE, params.test_annual_rate),
+                (HOUSE_PARAM_KEY.LOAN_YEARS, float(params.loan_years)),
+            )
+        ]
+
     def bucket_value(
         self,
         *,

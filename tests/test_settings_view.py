@@ -29,14 +29,25 @@ from pathlib import Path
 from types import SimpleNamespace
 
 # ==== 第三方套件 ====
+import libsql
 import pytest
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import ASSET_CATEGORIES, HOLDING_KIND, HOLDING_PURPOSE
+from asset_lab.core.exceptions import PersistenceError
 from asset_lab.models.holding import HoldingModel
+from asset_lab.models.house import HouseParamModel
+from asset_lab.models.protocol import ProtocolThresholdModel
+from asset_lab.repositories.connection_layers import CachingConnection, CountingConnection
+from asset_lab.repositories.house_param_repository import HouseParamRepository
+from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
+from asset_lab.repositories.query_metrics import QueryMetrics
+from asset_lab.repositories.read_cache import ReadCache
+from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.services.house_service import HouseService
 from asset_lab.services.protocol_service import ProtocolService
+from tests.flaky_connection import FlakyConnection
 
 APP_DIR = Path(__file__).resolve().parent.parent
 
@@ -70,27 +81,44 @@ class _StubTargetRepo:
 
 
 class _StubProtocolThresholdRepo:
-    """門檻替身：無既有保存值，ProtocolService 會補上預設值。"""
+    """門檻替身：無既有保存值，ProtocolService 會補上預設值；整批寫入呼叫會被記錄。"""
+
+    def __init__(self):
+        self.batches: list[list] = []
 
     def read_thresholds(self):
         return []
 
+    def upsert_thresholds(self, *, thresholds):
+        self.batches.append(list(thresholds))
+
 
 class _StubHouseParamRepo:
-    """買房參數替身：無既有保存值，HouseService 會補上中性/方法論預設值。"""
+    """買房參數替身：無既有保存值，HouseService 會補上中性/方法論預設值；整批寫入會被記錄。"""
+
+    def __init__(self):
+        self.batches: list[list] = []
 
     def read_params(self):
         return []
 
+    def upsert_params(self, *, params):
+        self.batches.append(list(params))
 
-def _run_app(*, holding_repo: _StubHoldingRepo | None = None) -> AppTest:
+
+def _run_app(
+    *,
+    holding_repo: _StubHoldingRepo | None = None,
+    protocol_threshold_repo=None,
+    house_param_repo=None,
+) -> AppTest:
     """以替身容器跑 views/settings.py，回傳已 run() 完成的 AppTest。"""
     container = SimpleNamespace(
         holding_repo=holding_repo or _StubHoldingRepo(),
         target_repo=_StubTargetRepo(),
-        protocol_threshold_repo=_StubProtocolThresholdRepo(),
+        protocol_threshold_repo=protocol_threshold_repo or _StubProtocolThresholdRepo(),
         protocol_service=ProtocolService(),
-        house_param_repo=_StubHouseParamRepo(),
+        house_param_repo=house_param_repo or _StubHouseParamRepo(),
         house_service=HouseService(),
     )
     at = AppTest.from_file(APP_DIR / "views" / "settings.py")
@@ -556,3 +584,205 @@ class TestEditExistingHoldingPurposeSelectbox:
         at = _run_app(holding_repo=_StubHoldingRepo(holdings=[holding]))
         with pytest.raises(KeyError):
             at.selectbox(key="edit_13_purpose")
+
+
+def _click(at: AppTest, label: str) -> None:
+    next(b for b in at.button if b.label == label).click().run()
+
+
+class TestBatchSaveSuccess:
+    """SC-128：門檻與買房參數各自整批一次寫入，成功顯示訊息；驗證失敗不進入寫入。"""
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_save_thresholds_writes_three_rows_in_one_batch(self):
+        repo = _StubProtocolThresholdRepo()
+        at = _run_app(protocol_threshold_repo=repo)
+        at.number_input(key="protocol_l1").set_value(10.0)
+        at.number_input(key="protocol_l2").set_value(20.0)
+        at.number_input(key="protocol_l3").set_value(30.0).run()
+
+        _click(at, "儲存門檻")
+
+        assert len(repo.batches) == 1
+        assert [(m.level, m.drawdown_threshold) for m in repo.batches[0]] == [
+            ("L1", 10.0),
+            ("L2", 20.0),
+            ("L3", 30.0),
+        ]
+        assert any("已儲存回撤門檻" in s.value for s in at.success)
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_invalid_thresholds_do_not_enter_write(self):
+        repo = _StubProtocolThresholdRepo()
+        at = _run_app(protocol_threshold_repo=repo)
+        at.number_input(key="protocol_l1").set_value(30.0)
+        at.number_input(key="protocol_l2").set_value(20.0)
+        at.number_input(key="protocol_l3").set_value(10.0).run()
+
+        _click(at, "儲存門檻")
+
+        assert repo.batches == []
+        assert len(at.error) == 1
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_save_house_params_writes_nine_rows_in_one_batch(self):
+        repo = _StubHouseParamRepo()
+        at = _run_app(house_param_repo=repo)
+        at.text_input(key="house_target_total_price").set_value("10,000,000").run()
+
+        _click(at, "儲存買房參數")
+
+        assert len(repo.batches) == 1
+        assert len(repo.batches[0]) == 9
+        price = next(m for m in repo.batches[0] if m.param_key == "target_total_price")
+        assert price.param_value == 10000000.0
+        assert any("已儲存買房參數" in s.value for s in at.success)
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_invalid_house_params_do_not_enter_write(self):
+        repo = _StubHouseParamRepo()
+        at = _run_app(house_param_repo=repo)
+        at.number_input(key="house_loan_years").set_value(1).run()
+        at.number_input(key="house_down_payment_ratio").set_value(0.0).run()
+
+        _click(at, "儲存買房參數")
+
+        assert repo.batches == []
+        assert len(at.error) == 1
+
+
+def _run_app_with_real_repos(conn) -> AppTest:
+    """以真實 Repository（走傳入連線）組容器，其餘沿用替身。"""
+    container = SimpleNamespace(
+        holding_repo=_StubHoldingRepo(),
+        target_repo=_StubTargetRepo(),
+        protocol_threshold_repo=ProtocolThresholdRepository(conn=conn),
+        protocol_service=ProtocolService(),
+        house_param_repo=HouseParamRepository(conn=conn),
+        house_service=HouseService(),
+    )
+    at = AppTest.from_file(APP_DIR / "views" / "settings.py")
+    at.session_state["container"] = container
+    at.run()
+    return at
+
+
+@pytest.fixture
+def real_conn():
+    connection = libsql.connect(":memory:")
+    SchemaRepository(conn=connection).ensure_schema()
+    return connection
+
+
+_FRIENDLY_SAVE_FAILURE = "存檔失敗，資料未變更，請重試"
+
+
+class TestBatchSaveFailure:
+    """SC-129：整批存檔中途失敗，全部維持原值、只顯示友善訊息。"""
+
+    @pytest.mark.scenario("SC-129")
+    def test_sc129_threshold_failure_keeps_all_original_values(self, real_conn):
+        ProtocolThresholdRepository(conn=real_conn).upsert_thresholds(
+            thresholds=[
+                ProtocolThresholdModel(level="L1", drawdown_threshold=10.0),
+                ProtocolThresholdModel(level="L2", drawdown_threshold=20.0),
+                ProtocolThresholdModel(level="L3", drawdown_threshold=30.0),
+            ]
+        )
+        at = _run_app_with_real_repos(FlakyConnection(real_conn, fail_at=2))
+        at.number_input(key="protocol_l1").set_value(15.0)
+        at.number_input(key="protocol_l2").set_value(25.0)
+        at.number_input(key="protocol_l3").set_value(35.0).run()
+
+        _click(at, "儲存門檻")
+
+        stored = {
+            t.level: t.drawdown_threshold
+            for t in ProtocolThresholdRepository(conn=real_conn).read_thresholds()
+        }
+        assert stored == {"L1": 10.0, "L2": 20.0, "L3": 30.0}
+        assert [e.value for e in at.error] == [_FRIENDLY_SAVE_FAILURE]
+        assert not at.exception
+        assert not at.success
+
+    @pytest.mark.scenario("SC-129")
+    def test_sc129_house_param_failure_keeps_all_original_values(self, real_conn):
+        original = [
+            HouseParamModel(param_key=key, param_value=value)
+            for key, value in (
+                ("target_total_price", 1000000.0),
+                ("target_year", 2040.0),
+                ("monthly_after_tax_income", 80000.0),
+                ("income_threshold", 50000.0),
+                ("cash_floor", 100000.0),
+                ("down_payment_ratio", 30.0),
+                ("payment_cap_ratio", 35.0),
+                ("test_annual_rate", 2.5),
+                ("loan_years", 30.0),
+            )
+        ]
+        HouseParamRepository(conn=real_conn).upsert_params(params=original)
+        at = _run_app_with_real_repos(FlakyConnection(real_conn, fail_at=4))
+        at.number_input(key="house_loan_years").set_value(20)
+        at.number_input(key="house_target_year").set_value(2050).run()
+
+        _click(at, "儲存買房參數")
+
+        stored = {
+            m.param_key: m.param_value
+            for m in HouseParamRepository(conn=real_conn).read_params()
+        }
+        assert stored == {m.param_key: m.param_value for m in original}
+        assert [e.value for e in at.error] == [_FRIENDLY_SAVE_FAILURE]
+        assert not at.exception
+
+    @pytest.mark.scenario("SC-129")
+    def test_sc129_commit_and_rollback_failure_show_same_friendly_message(self, real_conn):
+        flaky = FlakyConnection(real_conn, commit_fails=True, rollback_fails=True)
+        at = _run_app_with_real_repos(flaky)
+        at.number_input(key="protocol_l1").set_value(5.0).run()
+
+        _click(at, "儲存門檻")
+
+        assert [e.value for e in at.error] == [_FRIENDLY_SAVE_FAILURE]
+        assert not at.exception
+
+
+class TestBatchSaveFailureKeepsCache:
+    """SC-129：整批存檔失敗時，讀取快取不被清除。"""
+
+    @pytest.mark.scenario("SC-129")
+    def test_sc129_failed_batch_write_does_not_clear_read_cache(self, real_conn):
+        seed = ProtocolThresholdRepository(conn=real_conn)
+        seed.upsert_thresholds(
+            thresholds=[
+                ProtocolThresholdModel(level="L1", drawdown_threshold=10.0),
+                ProtocolThresholdModel(level="L2", drawdown_threshold=20.0),
+                ProtocolThresholdModel(level="L3", drawdown_threshold=30.0),
+            ]
+        )
+        metrics = QueryMetrics()
+        stack = CachingConnection(
+            inner=CountingConnection(
+                inner=FlakyConnection(real_conn, fail_at=2), metrics=metrics
+            ),
+            cache=ReadCache(ttl_seconds=300),
+            metrics=metrics,
+        )
+        repo = ProtocolThresholdRepository(conn=stack)
+        repo.read_thresholds()  # 讓快取有資料
+        metrics.take()
+
+        with pytest.raises(PersistenceError):
+            repo.upsert_thresholds(
+                thresholds=[
+                    ProtocolThresholdModel(level="L1", drawdown_threshold=15.0),
+                    ProtocolThresholdModel(level="L2", drawdown_threshold=25.0),
+                    ProtocolThresholdModel(level="L3", drawdown_threshold=35.0),
+                ]
+            )
+        metrics.take()
+        stored = repo.read_thresholds()
+
+        assert metrics.take().cache_hits == 1
+        assert [t.drawdown_threshold for t in stored] == [10.0, 20.0, 30.0]

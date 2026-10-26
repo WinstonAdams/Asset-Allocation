@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 # ==== 專案內部 ====
 from asset_lab.core.constants import HOUSE_PARAMS_TABLE
 from asset_lab.models.house import HouseParamModel
+from asset_lab.repositories.transaction_repository import write_transaction
 
 if TYPE_CHECKING:
     from libsql import Connection
@@ -55,3 +56,14 @@ class HouseParamRepository:
         cursor = self._conn.cursor()
         cursor.execute(_UPSERT, (param.param_key, param.param_value))
         self._conn.commit()
+
+    def upsert_params(self, *, params: list[HouseParamModel]) -> None:
+        """整批新增或更新買房參數，單一交易；失敗全數復原並拋 PersistenceError。
+
+        空清單不產生任何寫入。
+        """
+        if not params:
+            return
+        with write_transaction(self._conn) as cursor:
+            for param in params:
+                cursor.execute(_UPSERT, (param.param_key, param.param_value))

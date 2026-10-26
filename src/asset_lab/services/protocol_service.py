@@ -79,6 +79,21 @@ class ProtocolService:
                 f"收到 L1={l1}、L2={l2}、L3={l3}"
             )
 
+    def build_threshold_models(
+        self, *, l1: float, l2: float, l3: float
+    ) -> list[ProtocolThresholdModel]:
+        """驗證三級門檻並組成待整批寫入的持久化列（L1、L2、L3 順序）。
+
+        Raises:
+            DataValidationError: 門檻順序不合法（同 validate_thresholds）。
+        """
+        self.validate_thresholds(l1=l1, l2=l2, l3=l3)
+        return [
+            ProtocolThresholdModel(level=PROTOCOL_LEVEL_CODE.L1, drawdown_threshold=l1),
+            ProtocolThresholdModel(level=PROTOCOL_LEVEL_CODE.L2, drawdown_threshold=l2),
+            ProtocolThresholdModel(level=PROTOCOL_LEVEL_CODE.L3, drawdown_threshold=l3),
+        ]
+
     def assess(
         self,
         *,

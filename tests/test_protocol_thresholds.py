@@ -15,7 +15,7 @@ import pytest
 # ==== 專案內部 ====
 from asset_lab import bootstrap
 from asset_lab.core.constants import PROTOCOL_LEVEL_CODE, PROTOCOL_MIN_DATA_MONTHS
-from asset_lab.core.exceptions import DataValidationError
+from asset_lab.core.exceptions import DataValidationError, PersistenceError
 from asset_lab.models.protocol import ProtocolThresholdModel, ProtocolThresholds
 from asset_lab.models.results import CumulativeTwrPoint
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
@@ -23,6 +23,7 @@ from asset_lab.repositories.query_metrics import QueryMetrics
 from asset_lab.repositories.read_cache import ReadCache
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.services.protocol_service import ProtocolService
+from tests.flaky_connection import FlakyConnection
 
 
 @pytest.fixture
@@ -188,3 +189,85 @@ class TestInvalidThresholdsDoNotPersist:
 
         unchanged = {t.level: t.drawdown_threshold for t in repo.read_thresholds()}
         assert unchanged == {"L1": 10.0, "L2": 20.0, "L3": 30.0}
+
+
+def _stored_thresholds(conn) -> dict[str, float]:
+    return {
+        t.level: t.drawdown_threshold
+        for t in ProtocolThresholdRepository(conn=conn).read_thresholds()
+    }
+
+
+class TestBatchUpsertThresholds:
+    """門檻三筆整批寫入同一交易（SC-128／SC-129）。"""
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_build_models_returns_three_levels_in_order(self, service):
+        models = service.build_threshold_models(l1=10.0, l2=20.0, l3=30.0)
+
+        assert [(m.level, m.drawdown_threshold) for m in models] == [
+            ("L1", 10.0),
+            ("L2", 20.0),
+            ("L3", 30.0),
+        ]
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_build_models_rejects_invalid_order(self, service):
+        with pytest.raises(DataValidationError):
+            service.build_threshold_models(l1=30.0, l2=20.0, l3=10.0)
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_batch_upsert_writes_all_three_together(self, conn, service):
+        ProtocolThresholdRepository(conn=conn).upsert_thresholds(
+            thresholds=service.build_threshold_models(l1=10.0, l2=20.0, l3=30.0)
+        )
+
+        assert _stored_thresholds(conn) == {"L1": 10.0, "L2": 20.0, "L3": 30.0}
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_batch_upsert_empty_list_issues_no_write(self, conn):
+        flaky = FlakyConnection(conn, fail_at=1)
+
+        ProtocolThresholdRepository(conn=flaky).upsert_thresholds(thresholds=[])
+
+        assert _stored_thresholds(conn) == {}
+
+    @pytest.mark.scenario("SC-129")
+    def test_sc129_failure_at_second_row_keeps_all_original_values(self, conn, service):
+        ProtocolThresholdRepository(conn=conn).upsert_thresholds(
+            thresholds=service.build_threshold_models(l1=10.0, l2=20.0, l3=30.0)
+        )
+        flaky = FlakyConnection(conn, fail_at=2)
+
+        with pytest.raises(PersistenceError) as exc_info:
+            ProtocolThresholdRepository(conn=flaky).upsert_thresholds(
+                thresholds=service.build_threshold_models(l1=15.0, l2=25.0, l3=35.0)
+            )
+
+        assert str(exc_info.value) == "存檔失敗，資料未變更，請重試"
+        assert _stored_thresholds(conn) == {"L1": 10.0, "L2": 20.0, "L3": 30.0}
+
+    @pytest.mark.scenario("SC-129")
+    def test_sc129_commit_failure_keeps_original_values(self, conn, service):
+        ProtocolThresholdRepository(conn=conn).upsert_thresholds(
+            thresholds=service.build_threshold_models(l1=10.0, l2=20.0, l3=30.0)
+        )
+        flaky = FlakyConnection(conn, commit_fails=True)
+
+        with pytest.raises(PersistenceError):
+            ProtocolThresholdRepository(conn=flaky).upsert_thresholds(
+                thresholds=service.build_threshold_models(l1=15.0, l2=25.0, l3=35.0)
+            )
+
+        assert _stored_thresholds(conn) == {"L1": 10.0, "L2": 20.0, "L3": 30.0}
+
+    @pytest.mark.scenario("SC-129")
+    def test_sc129_rollback_failure_still_raises_same_friendly_error(self, conn, service):
+        flaky = FlakyConnection(conn, fail_at=2, rollback_fails=True)
+
+        with pytest.raises(PersistenceError) as exc_info:
+            ProtocolThresholdRepository(conn=flaky).upsert_thresholds(
+                thresholds=service.build_threshold_models(l1=15.0, l2=25.0, l3=35.0)
+            )
+
+        assert str(exc_info.value) == "存檔失敗，資料未變更，請重試"
