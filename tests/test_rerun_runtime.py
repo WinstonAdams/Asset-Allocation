@@ -16,7 +16,12 @@ from streamlit.testing.v1 import AppTest
 from asset_lab.core.constants import RERUN_KIND
 from asset_lab.repositories.query_metrics import QueryMetrics
 from asset_lab.repositories.read_cache import ReadCache
-from asset_lab.rerun_runtime import CONTAINER_SESSION_KEY, rerun_scope, verified_container
+from asset_lab.rerun_runtime import (
+    CONTAINER_SESSION_KEY,
+    rerun_fragment,
+    rerun_scope,
+    verified_container,
+)
 
 APP_DIR = Path(__file__).resolve().parent.parent
 LOGGER_NAME = "asset_lab.rerun_runtime"
@@ -366,3 +371,126 @@ def test_sc115_expiry_not_checked_when_probe_fails(probe_env) -> None:
             verified_container()
 
     assert "expire" not in probe_env.calls
+
+
+# === rerun_fragment：st.fragment → rerun_scope → error_boundary → verified_container ===
+
+FRAGMENT_LABEL = "測試編輯器"
+
+
+def _fragment_script(mode: str) -> None:
+    import streamlit as st
+
+    from asset_lab.core.exceptions import PersistenceError
+    from asset_lab.rerun_runtime import rerun_fragment
+
+    @rerun_fragment(label="測試編輯器")
+    def editor(*, target_ym: str) -> None:
+        st.write(f"編輯器 {target_ym}")
+        if mode == "unexpected":
+            raise RuntimeError("libsql native error at /srv/app/secret_path.py")
+        if mode == "domain":
+            raise PersistenceError("存檔失敗，資料未變更，請重試")
+        if mode == "rerun":
+            st.session_state["reruns"] = st.session_state.get("reruns", 0) + 1
+            if st.session_state["reruns"] == 1:
+                st.rerun()
+
+    editor(target_ym="2026-09")
+
+
+@pytest.fixture
+def fragment_env():
+    """fragment 入口用的連線探測替身；回傳可檢查探測次數的替身組。"""
+    container = SimpleNamespace(name="container")
+    cache = SimpleNamespace(expire_if_stale=lambda: None)
+    with mock.patch(
+        "asset_lab.bootstrap.get_resilient_container", return_value=container
+    ) as probe, mock.patch("asset_lab.bootstrap.get_read_cache", return_value=cache), \
+         mock.patch("asset_lab.bootstrap.get_query_metrics", return_value=QueryMetrics()):
+        yield SimpleNamespace(container=container, probe=probe)
+
+
+def _run_fragment(mode: str) -> AppTest:
+    return AppTest.from_function(_fragment_script, args=(mode,), default_timeout=8).run()
+
+
+@pytest.mark.scenario("SC-120")
+def test_sc120_fragment_verifies_connection_before_running_the_body(fragment_env) -> None:
+    app = _run_fragment("ok")
+
+    assert not app.exception
+    assert [m.value for m in app.markdown] == ["編輯器 2026-09"]
+    fragment_env.probe.assert_called_once_with()
+    assert app.session_state[CONTAINER_SESSION_KEY] is fragment_env.container
+
+
+@pytest.mark.scenario("SC-120")
+@pytest.mark.scenario("SC-131")
+def test_sc131_fragment_run_logs_exactly_one_fragment_line(fragment_env, caplog) -> None:
+    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+        _run_fragment("ok")
+
+    records = _metric_records(caplog)
+    assert len(records) == 1
+    match = LINE_PATTERN.match(records[0].getMessage())
+    assert match
+    assert match["kind"] == RERUN_KIND.FRAGMENT
+    assert match["page"] == FRAGMENT_LABEL
+    assert match["interrupted"] == "false"
+
+
+@pytest.mark.scenario("SC-122")
+def test_sc122_domain_error_inside_fragment_shows_friendly_message(fragment_env, caplog) -> None:
+    with caplog.at_level(logging.ERROR):
+        app = _run_fragment("domain")
+
+    assert not app.exception
+    assert [e.value for e in app.error] == ["存檔失敗，資料未變更，請重試"]
+    assert "領域錯誤" in caplog.text
+
+
+@pytest.mark.scenario("SC-122")
+def test_sc122_unexpected_error_inside_fragment_shows_generic_message(
+    fragment_env, caplog
+) -> None:
+    original = st.get_option("client.showErrorDetails")
+    st.set_option("client.showErrorDetails", "none")
+    try:
+        with caplog.at_level(logging.ERROR):
+            app = _run_fragment("unexpected")
+    finally:
+        st.set_option("client.showErrorDetails", original)
+
+    assert not app.exception
+    assert [e.value for e in app.error] == ["發生未預期錯誤，請稍後再試"]
+    assert "secret_path" not in "".join(str(e.value) for e in app.error)
+    assert "secret_path" in caplog.text
+
+
+@pytest.mark.scenario("SC-121")
+@pytest.mark.scenario("SC-131")
+def test_sc131_st_rerun_inside_fragment_is_not_swallowed_and_marks_interrupted(
+    fragment_env, caplog
+) -> None:
+    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+        app = _run_fragment("rerun")
+
+    assert not app.exception
+    assert not app.error
+    records = _metric_records(caplog)
+    interrupted = [r.getMessage().split("interrupted=")[1] for r in records]
+    # 存檔那次被 st.rerun 中斷記一行，接著的重跑再記一行，兩行都是 fragment 類型
+    assert interrupted == ["true", "false"]
+    assert all("kind=fragment" in r.getMessage() for r in records)
+
+
+@pytest.mark.scenario("SC-120")
+def test_sc120_fragment_preserves_wrapped_function_identity(fragment_env) -> None:
+    # Streamlit 以 __module__／__qualname__ 計算 fragment id，裝飾後必須保留
+    @rerun_fragment(label=FRAGMENT_LABEL)
+    def sample_editor() -> None:
+        return None
+
+    assert getattr(sample_editor, "__name__", None) == "sample_editor"
+    assert "sample_editor" in getattr(sample_editor, "__qualname__", "")

@@ -19,7 +19,7 @@
 | t02 連線層讀取快取 | 完成 | SC-112~114,116~119；SC-118 卡片預期測試位置改為 test_read_cache_equivalence.py |
 | t03 探測與 verified_container | 完成 | SC-108~110,115；整頁重跑往返降為 1；錄入頁與買房頁測試替身延到 t05、t06 補 |
 | t04 全站錯誤兜底 | 完成 | SC-123~126；SC-123/124/125 卡片測試位置照實修正；README 開關說明留 4-1 |
-| t05 月度錄入編輯器 fragment | 未開始 | SC-120~122,131 |
+| t05 月度錄入編輯器 fragment | 完成 | SC-120~122,131；rerun_fragment 共用裝飾器；test_input_view 補入口替身（t03 延後項） |
 | t06 guarded_callback 與買房勾選 | 未開始 | SC-111,127 |
 | t07 設定頁整批存檔 | 未開始 | SC-128,129 |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
