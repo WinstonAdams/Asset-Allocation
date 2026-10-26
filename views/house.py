@@ -33,7 +33,7 @@ from asset_lab.models.results import (
 from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
 from asset_lab.services.period_service import today_in_timezone
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.house")
 
 # 觸發條件鍵→中文標籤，供五條檢核清單與缺口清單顯示（HOUSE_TRIGGER.ALL 值域固定五條）。
 _TRIGGER_LABEL = {

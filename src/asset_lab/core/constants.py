@@ -339,3 +339,18 @@ class CSV_EXPORT:
         "category",
         "target_weight",
     )
+
+
+class APP_LOGGING:
+    """App 的 log 設定。專案沒有 config.yml，運維參數集中於此。"""
+
+    LOGGER_NAMESPACE = "asset_lab"  # 專案 logger 共同前綴；頁面 logger 皆掛在其下
+    LEVEL = "INFO"
+    FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+class RERUN_KIND:
+    """重跑量測 log 的重跑類型。"""
+
+    FULL = "full"
+    FRAGMENT = "fragment"

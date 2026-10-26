@@ -19,6 +19,7 @@ from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.protocol import ProtocolThresholdModel, ProtocolThresholds
 from asset_lab.models.results import CumulativeTwrPoint
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
+from asset_lab.repositories.query_metrics import QueryMetrics
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.services.protocol_service import ProtocolService
 
@@ -107,13 +108,13 @@ class TestThresholdPersistence:
     def test_sc046_thresholds_persist_across_container_rebuild(self, conn):
         # 端到端：以 bootstrap 重新組裝容器（模擬 app 重啟重建容器）沿用同一底層連線，
         # 門檻仍在——「重啟後生效」的持久化保證不因容器重建而丟失
-        first_container = bootstrap.build_container(conn=conn)
+        first_container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
         for level, value in (("L1", 12.0), ("L2", 25.0), ("L3", 35.0)):
             first_container.protocol_threshold_repo.upsert_threshold(
                 threshold=ProtocolThresholdModel(level=level, drawdown_threshold=value)
             )
 
-        restarted_container = bootstrap.build_container(conn=conn)
+        restarted_container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
         thresholds = restarted_container.protocol_service.effective_thresholds(
             stored=restarted_container.protocol_threshold_repo.read_thresholds()
         )

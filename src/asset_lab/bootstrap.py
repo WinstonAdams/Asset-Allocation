@@ -18,6 +18,8 @@ Repository/Service 不直接讀 st.secrets。
 """
 
 # ==== 原生（標準庫） ====
+import logging
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +31,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import (
+    APP_LOGGING,
     BALANCE_INPUT,
     COST_BASIS_INPUT,
     HOLDING_KIND,
@@ -36,10 +39,12 @@ from asset_lab.core.constants import (
     PREMIUM_INPUT,
     PROTOCOL_DOC_RELATIVE_PATH,
 )
+from asset_lab.repositories.connection_layers import CountingConnection
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.house_param_repository import HouseParamRepository
 from asset_lab.repositories.protocol_doc_repository import ProtocolDocRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
+from asset_lab.repositories.query_metrics import QueryMetrics
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
@@ -129,27 +134,32 @@ def parse_allowed_emails(raw: object) -> set[str]:
     return {email.strip().lower() for email in candidates if email.strip()}
 
 
-def build_container(*, conn: "Connection") -> Container:
+def build_container(*, conn: "Connection", query_metrics: QueryMetrics) -> Container:
     """以注入的連線組裝全部 Repository 與 Service（純組裝，無 I/O、無 st.*）。
 
     連線以 keyword args 注入各 Repository；需要 I/O 的 Service（月度錄入）再以 keyword
     args 接上對應 Repository；純運算 Service（報酬/配置/區間/CSV 整形）無依賴直接建立。
 
+    連線先被計數層（CountingConnection）包住再注入各 Repository，所有資料庫往返都記進
+    query_metrics；Repository 程式碼不需改動。
+
     Args:
         conn: libsql 連線；正式由 get_connection 提供，測試可注入假連線驗證接線。
+        query_metrics: 查詢量測累計器；正式由 get_query_metrics 提供。
 
     Returns:
         組裝完成的 Container。
     """
-    holding_repo = HoldingRepository(conn=conn)
-    record_repo = RecordRepository(conn=conn)
-    target_repo = TargetRepository(conn=conn)
-    schema_repo = SchemaRepository(conn=conn)
-    protocol_threshold_repo = ProtocolThresholdRepository(conn=conn)
+    counted = CountingConnection(inner=conn, metrics=query_metrics)
+    holding_repo = HoldingRepository(conn=counted)
+    record_repo = RecordRepository(conn=counted)
+    target_repo = TargetRepository(conn=counted)
+    schema_repo = SchemaRepository(conn=counted)
+    protocol_threshold_repo = ProtocolThresholdRepository(conn=counted)
     protocol_doc_repo = ProtocolDocRepository(doc_path=_PROTOCOL_DOC_PATH)
-    house_param_repo = HouseParamRepository(conn=conn)
-    subjective_trigger_repo = SubjectiveTriggerRepository(conn=conn)
-    transaction_repo = TransactionRepository(conn=conn)
+    house_param_repo = HouseParamRepository(conn=counted)
+    subjective_trigger_repo = SubjectiveTriggerRepository(conn=counted)
+    transaction_repo = TransactionRepository(conn=counted)
 
     return Container(
         holding_repo=holding_repo,
@@ -203,6 +213,16 @@ def get_connection() -> "Connection":
 
 
 @st.cache_resource
+def get_query_metrics() -> QueryMetrics:
+    """持有程序級的查詢量測累計器；與連線脫鉤，重連時不清。
+
+    Returns:
+        全程序共用的 QueryMetrics。
+    """
+    return QueryMetrics()
+
+
+@st.cache_resource
 def get_container() -> Container:
     """組裝並快取依賴容器，且在首次組裝時確保資料表存在。
 
@@ -212,7 +232,7 @@ def get_container() -> Container:
     Returns:
         已組裝且 schema 就緒的 Container。
     """
-    container = build_container(conn=get_connection())
+    container = build_container(conn=get_connection(), query_metrics=get_query_metrics())
     container.schema_repo.ensure_schema()
     return container
 
@@ -307,3 +327,39 @@ def allowed_emails() -> set[str]:
     except StreamlitSecretNotFoundError:
         return set()
     return parse_allowed_emails(raw)
+
+
+# 以 handler 名稱判斷是否已掛過：Streamlit 每次重跑都會呼叫 ensure_logging_configured，
+# 且 logger 是程序級單例，沒有這個判斷會讓同一行 log 重複輸出。
+_LOG_HANDLER_NAME = "asset_lab_stderr"
+
+
+def configure_logging(*, logger_name: str, level: str, fmt: str) -> None:
+    """在指定 logger 上掛一個輸出到 stderr 的 handler 並設定 level（冪等）。
+
+    不動 root logger、propagate 維持預設 True（pytest caplog 掛在 root，才收得到）。
+    Streamlit 只設定自己的 streamlit logger，root 沒有 handler，不會重複輸出；雲端
+    Manage app → Logs 會收到 stderr。
+
+    Args:
+        logger_name: 要設定的 logger 名稱（專案命名空間）。
+        level: log level 名稱，例如 "INFO"。
+        fmt: log 格式字串。
+    """
+    target = logging.getLogger(logger_name)
+    target.setLevel(level)
+    if any(handler.get_name() == _LOG_HANDLER_NAME for handler in target.handlers):
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.set_name(_LOG_HANDLER_NAME)
+    handler.setFormatter(logging.Formatter(fmt))
+    target.addHandler(handler)
+
+
+def ensure_logging_configured() -> None:
+    """以 APP_LOGGING 常數設定專案 logger；app.py 每次執行呼叫，重複呼叫安全。"""
+    configure_logging(
+        logger_name=APP_LOGGING.LOGGER_NAMESPACE,
+        level=APP_LOGGING.LEVEL,
+        fmt=APP_LOGGING.FORMAT,
+    )

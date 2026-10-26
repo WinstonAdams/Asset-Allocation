@@ -42,7 +42,7 @@ from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 from asset_lab.services.period_service import today_in_timezone
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.input")
 
 # 年份下拉可選範圍：當年往前推 N 年到當年，不開放未來年份——月度錄入記的是已發生的市值/
 # 淨投入，未來月份無實際數據可記；往前 5 年已足夠涵蓋近年回溯修正需求。

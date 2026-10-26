@@ -42,7 +42,7 @@ from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.services.house_service import HouseService
 from asset_lab.services.protocol_service import ProtocolService
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.settings")
 
 # 內部值（HOLDING_KIND.ASSET/LIABILITY）供 DB 與業務判斷使用，不可異動；
 # 此對照僅供畫面顯示中文，不影響選取後取得的內部值。

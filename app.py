@@ -38,6 +38,8 @@ import streamlit as st
 from asset_lab import bootstrap
 from asset_lab.amount_widget import inject_amount_input_style
 from asset_lab.core.access import AccessReason, evaluate_access
+from asset_lab.core.constants import RERUN_KIND
+from asset_lab.rerun_runtime import rerun_scope
 
 # 固定瀏覽器分頁標題與圖示：st.set_page_config 必須是整支腳本第一個 Streamlit 指令，
 # 且每次 rerun（包含切頁、登入前後）都會重新執行到這裡並帶入相同值，因此標題與圖示
@@ -80,31 +82,36 @@ def _require_access() -> None:
 
 
 def main() -> None:
-    """守門通過後組裝依賴並路由到當前頁面。"""
-    _require_access()
+    """守門通過後組裝依賴並路由到當前頁面；整次執行包在計時區塊內，結束時記一行量測。"""
+    bootstrap.ensure_logging_configured()
 
-    # 守門通過後、路由前呼叫一次，全站金額輸入框放大樣式即對所有頁面生效。
-    inject_amount_input_style()
+    with rerun_scope(kind=RERUN_KIND.FULL, metrics=bootstrap.get_query_metrics()) as scope:
+        _require_access()
 
-    st.session_state[CONTAINER_SESSION_KEY] = bootstrap.get_resilient_container()
+        # 守門通過後、路由前呼叫一次，全站金額輸入框放大樣式即對所有頁面生效。
+        inject_amount_input_style()
 
-    with st.sidebar:
-        st.caption(f"已登入：{st.user.email}")
-        st.button("登出", on_click=st.logout)
+        st.session_state[CONTAINER_SESSION_KEY] = bootstrap.get_resilient_container()
 
-    navigation = st.navigation(
-        [
-            st.Page("views/overview.py", title="總覽", icon=":material/dashboard:", default=True),
-            st.Page("views/input.py", title="月度錄入", icon=":material/edit_note:"),
-            st.Page("views/allocation.py", title="資產配置", icon=":material/donut_large:"),
-            st.Page("views/returns.py", title="報酬率", icon=":material/trending_up:"),
-            st.Page("views/protocol.py", title="行為協定", icon=":material/menu_book:"),
-            st.Page("views/house.py", title="買房", icon=":material/home:"),
-            st.Page("views/settings.py", title="設定", icon=":material/settings:"),
-            st.Page("views/data_io.py", title="匯出入", icon=":material/import_export:"),
-        ]
-    )
-    navigation.run()
+        with st.sidebar:
+            st.caption(f"已登入：{st.user.email}")
+            st.button("登出", on_click=st.logout)
+
+        navigation = st.navigation(
+            [
+                # 單行：tests/test_overview.py 以 regex 掃描這個註冊式
+                st.Page("views/overview.py", title="總覽", icon=":material/dashboard:", default=True),  # noqa: E501
+                st.Page("views/input.py", title="月度錄入", icon=":material/edit_note:"),
+                st.Page("views/allocation.py", title="資產配置", icon=":material/donut_large:"),
+                st.Page("views/returns.py", title="報酬率", icon=":material/trending_up:"),
+                st.Page("views/protocol.py", title="行為協定", icon=":material/menu_book:"),
+                st.Page("views/house.py", title="買房", icon=":material/home:"),
+                st.Page("views/settings.py", title="設定", icon=":material/settings:"),
+                st.Page("views/data_io.py", title="匯出入", icon=":material/import_export:"),
+            ]
+        )
+        scope.page = navigation.title
+        navigation.run()
 
 
 main()

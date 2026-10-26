@@ -19,6 +19,7 @@ from asset_lab.core.constants import HOUSE_PARAM_DEFAULTS, HOUSE_PARAM_KEY, HOUS
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.house import HouseParamModel, HouseParams, SubjectiveTriggerModel
 from asset_lab.repositories.house_param_repository import HouseParamRepository
+from asset_lab.repositories.query_metrics import QueryMetrics
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
 from asset_lab.services.house_service import HouseService
@@ -136,14 +137,14 @@ class TestHouseParamsPersistence:
     @pytest.mark.scenario("SC-054")
     def test_sc054_saved_params_persist_across_container_rebuild(self, conn):
         # 端到端：以 bootstrap 重新組裝容器（模擬 app 重啟）沿用同一底層連線，已存值仍在
-        first_container = bootstrap.build_container(conn=conn)
+        first_container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
         first_container.house_param_repo.upsert_param(
             param=HouseParamModel(
                 param_key=HOUSE_PARAM_KEY.TARGET_TOTAL_PRICE, param_value=5_000_000.0
             )
         )
 
-        restarted_container = bootstrap.build_container(conn=conn)
+        restarted_container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
         params = restarted_container.house_service.effective_params(
             stored=restarted_container.house_param_repo.read_params()
         )
@@ -283,12 +284,12 @@ class TestSubjectiveTriggerPersistence:
     @pytest.mark.scenario("SC-068")
     def test_sc068_checked_state_persists_across_container_rebuild(self, conn):
         # 端到端：模擬「關閉並重新開啟應用程式」——以 bootstrap 重新組裝容器沿用同一連線
-        first_container = bootstrap.build_container(conn=conn)
+        first_container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
         first_container.subjective_trigger_repo.upsert_trigger(
             trigger=SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.ANCHOR, checked=True)
         )
 
-        restarted_container = bootstrap.build_container(conn=conn)
+        restarted_container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
         reloaded = {
             t.trigger_key: t.checked
             for t in restarted_container.subjective_trigger_repo.read_triggers()

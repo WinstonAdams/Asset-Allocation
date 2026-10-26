@@ -29,7 +29,7 @@ from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.return_service import ReturnService
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.allocation")
 
 # 圓餅圖粒度的中文顯示（內部值需與 AllocationService.snapshot(by=...) 的合約一致）。
 _GRANULARITY_LABEL = {"category": "分類", "holding": "項目"}

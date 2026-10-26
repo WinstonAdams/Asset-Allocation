@@ -20,7 +20,7 @@ from asset_lab.bootstrap import Container
 from asset_lab.core.exceptions import AssetLabError, PersistenceError
 from asset_lab.repositories.csv_import_writer import write_import
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.data_io")
 
 
 def _container() -> Container:

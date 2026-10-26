@@ -39,7 +39,7 @@ from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.results import HouseSummary, ProtocolStatus
 from asset_lab.services.period_service import today_in_timezone
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.overview")
 
 # 燈號 emoji：對映等級代碼，供畫面上的等級指示（平時 → 深熊漸次升高警覺）。
 _SIGNAL_EMOJI = {

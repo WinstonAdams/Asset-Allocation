@@ -21,6 +21,8 @@ bootstrap 的 st.cache_resource 包裝與 st.secrets 讀取屬無法純測的 St
 
 # ==== 原生（標準庫） ====
 import ast
+import logging
+import sys
 import tomllib
 from pathlib import Path
 from unittest.mock import Mock
@@ -33,6 +35,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 # ==== 專案內部 ====
 from asset_lab import bootstrap
 from asset_lab.core.constants import (
+    APP_LOGGING,
     ASSET_CATEGORIES,
     BALANCE_INPUT,
     COST_BASIS_INPUT,
@@ -45,8 +48,10 @@ from asset_lab.core.constants import (
 )
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
+from asset_lab.repositories.connection_layers import CountingConnection
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
+from asset_lab.repositories.query_metrics import QueryMetrics
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
@@ -143,7 +148,7 @@ def test_build_container_wires_repositories_to_connection() -> None:
     """容器以注入的同一連線建立各 Repository，並由 DB schema 建表入口備妥。"""
     conn = _FakeConnection()
 
-    container = bootstrap.build_container(conn=conn)
+    container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
 
     assert isinstance(container.holding_repo, HoldingRepository)
     assert isinstance(container.record_repo, RecordRepository)
@@ -151,20 +156,22 @@ def test_build_container_wires_repositories_to_connection() -> None:
     assert isinstance(container.schema_repo, SchemaRepository)
     assert isinstance(container.protocol_threshold_repo, ProtocolThresholdRepository)
     assert isinstance(container.transaction_repo, TransactionRepository)
-    # 所有 Repository 接上同一連線
-    assert container.holding_repo._conn is conn
-    assert container.record_repo._conn is conn
-    assert container.target_repo._conn is conn
-    assert container.schema_repo._conn is conn
-    assert container.protocol_threshold_repo._conn is conn
-    assert container.transaction_repo._conn is conn
+    # 所有 Repository 接上同一個計數層，計數層包住注入的連線
+    counted = container.holding_repo._conn
+    assert isinstance(counted, CountingConnection)
+    assert counted._inner is conn
+    assert container.record_repo._conn is counted
+    assert container.target_repo._conn is counted
+    assert container.schema_repo._conn is counted
+    assert container.protocol_threshold_repo._conn is counted
+    assert container.transaction_repo._conn is counted
 
 
 def test_build_container_wires_services() -> None:
     """容器組出各 Service；月度錄入服務接上主檔與紀錄 Repository（其餘為純運算無依賴）。"""
     conn = _FakeConnection()
 
-    container = bootstrap.build_container(conn=conn)
+    container = bootstrap.build_container(conn=conn, query_metrics=QueryMetrics())
 
     assert isinstance(container.return_service, ReturnService)
     assert isinstance(container.allocation_service, AllocationService)
@@ -831,3 +838,119 @@ def test_app_disables_pyarrow_mimalloc_before_importing_streamlit() -> None:
     assert call.args[1].value == "system", (
         "ARROW_DEFAULT_MEMORY_POOL 須設為 'system' 才會停用 mimalloc"
     )
+
+
+# === logging 設定與頁面 logger 命名（SC-132） ===
+
+_VIEWS_DIR = APP_DIR / "views"
+
+
+@pytest.fixture
+def isolated_logger():
+    """測試專用 logger（不污染真正的 asset_lab）；結束後還原 handler 與 level。"""
+    name = "asset_lab_test_logging"
+    logger = logging.getLogger(name)
+    logger.handlers.clear()
+    logger.setLevel(logging.NOTSET)
+    yield logger
+    logger.handlers.clear()
+    logger.setLevel(logging.NOTSET)
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_configure_logging_attaches_stderr_handler_with_level_and_format(
+    isolated_logger,
+) -> None:
+    bootstrap.configure_logging(logger_name=isolated_logger.name, level="INFO", fmt="%(message)s")
+
+    assert len(isolated_logger.handlers) == 1
+    handler = isolated_logger.handlers[0]
+    assert isinstance(handler, logging.StreamHandler)
+    assert handler.stream is sys.stderr
+    assert handler.formatter._fmt == "%(message)s"
+    assert isolated_logger.level == logging.INFO
+    # 不動 root、維持 propagate（既有 caplog 型測試依賴）
+    assert isolated_logger.propagate is True
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_configure_logging_is_idempotent(isolated_logger) -> None:
+    for _ in range(3):
+        bootstrap.configure_logging(
+            logger_name=isolated_logger.name, level="INFO", fmt="%(message)s"
+        )
+
+    assert len(isolated_logger.handlers) == 1
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_repeated_configure_emits_each_line_once(isolated_logger, capsys) -> None:
+    for _ in range(3):
+        bootstrap.configure_logging(
+            logger_name=isolated_logger.name, level="INFO", fmt="%(message)s"
+        )
+    # handler 在 configure 時綁定 sys.stderr，capsys 已替換 → 可直接讀到輸出
+    isolated_logger.info("一行")
+
+    assert capsys.readouterr().err.count("一行") == 1
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_info_level_is_not_dropped_for_child_loggers(isolated_logger, capsys) -> None:
+    bootstrap.configure_logging(logger_name=isolated_logger.name, level="INFO", fmt="%(message)s")
+    child = logging.getLogger(f"{isolated_logger.name}.views.input")
+
+    child.info("資訊層級")
+
+    assert "資訊層級" in capsys.readouterr().err
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_ensure_logging_configured_uses_app_logging_constants() -> None:
+    logger = logging.getLogger(APP_LOGGING.LOGGER_NAMESPACE)
+    saved_handlers, saved_level = list(logger.handlers), logger.level
+    logger.handlers.clear()
+    try:
+        bootstrap.ensure_logging_configured()
+        bootstrap.ensure_logging_configured()
+
+        assert len(logger.handlers) == 1
+        assert logger.level == logging.getLevelName(APP_LOGGING.LEVEL)
+        assert logger.handlers[0].formatter._fmt == APP_LOGGING.FORMAT
+        assert logging.getLogger("asset_lab.views.input").isEnabledFor(logging.INFO)
+    finally:
+        logger.handlers[:] = saved_handlers
+        logger.setLevel(saved_level)
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_get_query_metrics_returns_one_shared_instance() -> None:
+    bootstrap.get_query_metrics.clear()
+    try:
+        assert bootstrap.get_query_metrics() is bootstrap.get_query_metrics()
+        assert isinstance(bootstrap.get_query_metrics(), QueryMetrics)
+    finally:
+        bootstrap.get_query_metrics.clear()
+
+
+def _module_level_logger_names(path: Path) -> list[str]:
+    """回傳頁面檔頂層 `logger = logging.getLogger("...")` 的名稱引數（字串常數才算）。"""
+    names: list[str] = []
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+            continue
+        target, call = node.targets[0], node.value
+        if not (isinstance(target, ast.Name) and target.id == "logger"):
+            continue
+        if isinstance(call, ast.Call) and call.args and isinstance(call.args[0], ast.Constant):
+            names.append(call.args[0].value)
+    return names
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_every_view_logger_is_named_after_its_file_under_asset_lab_views() -> None:
+    view_files = sorted(_VIEWS_DIR.glob("*.py"))
+
+    assert len(view_files) == 8
+    for path in view_files:
+        assert _module_level_logger_names(path) == [f"asset_lab.views.{path.stem}"], path.name
