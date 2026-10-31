@@ -36,15 +36,17 @@
 - 大跌行為協定：登入後總覽頁顯示目前協定等級（L0 平時／L1 修正／L2 熊市／L3 深熊）、該等級必做／禁止摘要與關鍵指標（累積 TWR、淨值、目前回撤%）；等級門檻可於設定頁調整並持久化；另有唯讀頁完整呈現協定全文（`docs/PROTOCOL.md`）。
 - 購屋規劃：「買房」頁提供可負擔性雙向試算（依月收反推可負擔房價／依目標房價正算月付負擔）、自備款準備金（bucket）累積進度與非活存／定存資產混入的組成警示、五條購屋觸發條件檢核（三項系統判定＋定錨／認知兩項主觀勾選，勾選即時持久化）；總覽頁同步顯示 bucket 進度與觸發達成數摘要。個人化參數（月收、房價、年份等）預設中性 0，未設定時不誤判達標（fail-closed）。
 - 資料保全：CSV 匯出與匯入還原（成對），持有項目主檔的用途標記、月度紀錄的總成本、已實現收益與現金股利隨匯出入保留（舊格式 4 欄或 6 欄 CSV 缺這些欄位仍可匯入，視為未填）；還原僅支援空庫（避免污染既有資料）。匯入時主檔、月度紀錄、目標配置三張表在同一個交易內寫入，中途失敗整批復原、資料庫維持空庫，畫面顯示「匯入失敗，資料未變更，請重試」，可直接重新匯入。
+- 回應速度：讀取結果快取最長 5 分鐘，切頁、改下拉選單不再重查已讀過的資料；在同一個 App 程序內存檔或刪除後，畫面立即反映新資料。月度錄入頁修改欄位時只重跑編輯器區塊，存檔前的淨投入預覽照常即時更新。側欄「重新讀取資料」按鈕可立即清除快取，供在另一處（本機或雲端）改過資料後使用。
+- 錯誤呈現：未預期錯誤一律只顯示「發生未預期錯誤，請稍後再試」，細節寫進伺服器 log，公開網址不露出程式堆疊；連線因閒置失效時自動重連（含買房頁的主觀勾選）。設定頁的協定門檻與買房參數整批存檔，任一筆寫入失敗則全部維持原值。
 
 ## 系統架構與流程
 
 採分層架構，相依方向單向（Page → Service → Repository → Model）；Service 為純運算、不碰 I/O 與 Streamlit，故可獨立單元測試。
 
-1. `app.py` 入口：登入守門（未登入顯示登入入口、非本人顯示拒絕，皆停止後續渲染）→ 組裝依賴容器（連線與建表就緒，連線失效時自動清快取重連重試一次）→ `st.navigation` 多頁路由，登入後預設落地頁為「總覽」。
+1. `app.py` 入口（以下整段都在全頁錯誤兜底與重跑量測範圍內）：登入守門（未登入顯示登入入口、非本人顯示拒絕，皆停止後續渲染）→ 渲染側欄（「重新讀取資料」、登出）→ 取得依賴容器（建表每個程序只做一次；每次重跑最多以一次 `SELECT 1` 確認連線，連線 stream 失效時重連後重試一次）→ `st.navigation` 多頁路由，登入後預設落地頁為「總覽」。
 2. 各 `views/` 頁面為 View／Controller：讀使用者操作 → 委派 Service 運算 → 經 Repository 存取 Turso → 以 Plotly 呈現。頁面路由僅由 `app.py` 的 `st.navigation` 註冊——資料夾刻意不命名為 `pages/`，因該名稱是 Streamlit 保留字，會觸發框架自動多頁探索，使子頁可繞過登入守門直接以 URL 存取。
 3. `services/` 純運算：報酬率三管線、配置／淨值／漂移、目標偏離、月度錄入整形（含依分類解析錄入方式、負債應繳金額紀錄、錄入框帶入值與本月已存紀錄彙總）、CSV 匯出入驗證、大跌協定等級判定（`ProtocolService`）、買房可負擔性雙向試算（`AffordabilityService`）、自備款 bucket／組成警示／五條觸發條件判定（`HouseService`）、股票／ETF 與保險以累計成本推算淨投入與連動重算（`CostBasisService`）、活存／定存以餘額變動推算淨投入與下一筆連動重算（`BalanceInputService`）、各項目市值趨勢序列（`AllocationService`）。分類與錄入方式的對應集中定義於 `core/constants.py`（`INPUT_MODE` 由 `COST_BASIS_INPUT`／`PREMIUM_INPUT`／`BALANCE_INPUT` 三個分類集合組出），新增分類時只需改一處。金額千分位的解析與格式化為 `core/utils` 純函式，輸入元件 `amount_widget.py` 以帶 key 的容器包住 `st.text_input`（原生 `number_input` 無法顯示千分位），並由 `app.py` 注入只命中金額欄的放大樣式；帶入值只在切換項目／月份（資料來源改變）時重新填入，來源不變時保留使用者尚未存檔的輸入。
-4. `repositories/` 以 `libsql` 連 Turso，六張表（持有項目主檔、月度紀錄、目標配置、協定回撤門檻、買房參數、主觀觸發勾選），月度紀錄以 (holding_id, year_month) 複合主鍵保證同月同項目唯一；`ensure_schema` 對既有庫以 `PRAGMA table_info` 探測後條件式 `ALTER TABLE` 補欄位（如 holdings 的 purpose、月度紀錄的 total_cost／realized_income／cash_dividend），新庫則直接建表，兩路徑皆冪等；月度紀錄的寫入（存檔連帶重算後續月份、刪除連帶重算，負債也走同一條路徑）與 CSV 匯入的三表寫入，都經共用的寫入交易工具（`write_transaction`／`TransactionRepository`）在單一交易內完成：任一步或 commit 失敗即整批 rollback，並轉成 `PersistenceError`，頁面只顯示「存檔失敗，資料未變更，請重試」之類的友善訊息、不露出程式堆疊，原始錯誤保留在例外鏈並寫進 log；另有 `ProtocolDocRepository` 以 `__file__` 錨定路徑唯讀讀取 repo 內 `docs/PROTOCOL.md`。
+4. `repositories/` 以 `libsql` 連 Turso，六張表（持有項目主檔、月度紀錄、目標配置、協定回撤門檻、買房參數、主觀觸發勾選），月度紀錄以 (holding_id, year_month) 複合主鍵保證同月同項目唯一；`ensure_schema` 對既有庫以 `PRAGMA table_info` 探測後條件式 `ALTER TABLE` 補欄位（如 holdings 的 purpose、月度紀錄的 total_cost／realized_income／cash_dividend），新庫則直接建表，兩路徑皆冪等；月度紀錄的寫入（存檔連帶重算後續月份、刪除連帶重算，負債也走同一條路徑）與 CSV 匯入的三表寫入，都經共用的寫入交易工具（`write_transaction`／`TransactionRepository`）在單一交易內完成：任一步或 commit 失敗即整批 rollback，並轉成 `PersistenceError`，頁面只顯示「存檔失敗，資料未變更，請重試」之類的友善訊息、不露出程式堆疊，原始錯誤保留在例外鏈並寫進 log；Repository 經兩層連線包裝存取 Turso——計數層記錄每次重跑的資料庫往返數、快取層在程序內快取讀取結果（見「關鍵邏輯：讀取快取、連線探測與錯誤兜底」），建表與連線探測則走只計數、不快取的連線；另有 `ProtocolDocRepository` 以 `__file__` 錨定路徑唯讀讀取 repo 內 `docs/PROTOCOL.md`。
 
 ### 關鍵邏輯：報酬率口徑
 
@@ -93,6 +95,15 @@
 - **五條觸發條件**：定錨（主觀勾選）、收入達門檻、自備款達標、月付占比未超上限（三項系統依既有服務判定）、認知（主觀勾選）；五條全數達成才視為「可啟動購屋」，缺一即列出具體缺口（差多少金額／百分點）。主觀勾選即時持久化，不需按儲存按鈕。
 - 「買房」獨立頁與「總覽」頁摘要皆呼叫同一組 `HouseService`/`AffordabilityService` 方法，確保兩處顯示的 bucket 進度％與觸發達成數在同一時點必然一致。
 
+### 關鍵邏輯：讀取快取、連線探測與錯誤兜底
+
+Streamlit 每次操作都整頁重跑，而 Turso 是遠端資料庫，每次往返都是等待時間。以下機制讓重跑少碰資料庫，但只改變「何時讀」，不改變「讀到什麼」，計算結果與不快取時相同。
+
+- **讀取快取**：快取放在連線層，同一段 SQL 與參數的讀取結果在 App 程序內共用（本機與雲端各自一份、互不同步）。只有寫入 commit 成功才清空整份快取，失敗或 rollback 不清；有尚未 commit 的寫入時，讀取一律不走快取，交易內讀到的必是最新值。整份快取 5 分鐘到期（`core/constants.py` 的 `READ_CACHE.TTL_SECONDS`）。CSV 匯入前「資料庫必須是空的」檢查會先清快取、一律讀最新；月度錄入存檔則沿用快取（風險見「注意事項」）。
+- **連線探測與重連**：建表（`ensure_schema`）每個程序只跑一次；之後每次重跑最多以一次 `SELECT 1` 探測連線。探測遇到連線 stream 失效（`stream not found`）時重新連線（不重建表、保留讀取快取）再試一次，並在重連當下 log 記一筆 WARNING「連線失效已重連」；重試仍失敗，或探測遇到其他錯誤，才交給錯誤兜底顯示通用訊息。買房頁主觀勾選的 callback 也走同一套探測。
+- **局部重跑**：月度錄入的編輯器以 `rerun_fragment` 包成 `st.fragment`，改欄位只重跑編輯器；存檔或刪除成功後才整頁重跑，讓「本月已存紀錄」表同步更新。
+- **錯誤兜底（四層）**：`.streamlit/config.toml` 預設 `showErrorDetails = "none"`，擋住腳本還沒執行到 `app.py` 設定之前的錯誤（如 import 失敗）→ `app.py` 每次執行以 `st.set_option` 依錯誤細節開關設定 → 全頁兜底 → fragment 與 widget callback 各自兜底。領域錯誤（`AssetLabError`）原樣顯示其訊息；其他例外只顯示「發生未預期錯誤，請稍後再試」，細節以 `logger.exception` 寫進 log。callback 的錯誤訊息先暫存，再顯示在頁面標題下方，頁面照常渲染。
+
 ## 環境需求
 
 - Python >= 3.12
@@ -119,6 +130,8 @@ cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 | `auth.cookie_secret` | 是 | session cookie 簽章用高熵隨機字串（自行產生） |
 | `auth.server_metadata_url` | 是 | OIDC metadata，Google 固定為 `https://accounts.google.com/.well-known/openid-configuration` |
 
+> 雲端 Secrets 不得加入 `ASSET_LAB_SHOW_ERROR_DETAILS`：Community Cloud 會把 Secrets 的頂層鍵設成環境變數，等於在公開網址開啟完整錯誤畫面（含程式堆疊）。這個開關只供本機除錯，開法見「執行」。
+
 ## 安裝
 
 ```bash
@@ -135,6 +148,26 @@ streamlit run app.py
 ```
 
 啟動後於瀏覽器以允許清單內的 Google 帳號登入即可使用。
+
+本機除錯要看完整錯誤畫面（含程式堆疊）時，以環境變數開啟：
+
+```bash
+ASSET_LAB_SHOW_ERROR_DETAILS=1 streamlit run app.py
+```
+
+值去空白、不分大小寫為 `1`／`true`／`yes`／`on` 時開啟，其他值或未設定一律隱藏。只能用環境變數開：`app.py` 每次執行都以 `st.set_option` 覆蓋設定，命令列參數 `--client.showErrorDetails` 不會生效。雲端不得設定（見「機密設定」）。
+
+重跑量測 log：每次整頁或局部重跑結束時，log 記一行 INFO（logger `asset_lab.rerun_runtime`），畫面不變。本機在終端機查看，雲端在 Manage app → Logs 查看；log 等級與格式設定在 `core/constants.py` 的 `APP_LOGGING`。
+
+```
+重跑量測 kind=<full|fragment> page=<頁面或局部區塊標籤，未知為 -> elapsed_ms=<int> db_roundtrips=<int> cache_hits=<int> reconnected=<true|false> interrupted=<true|false>
+```
+
+- `kind`：`full` 為整頁重跑、`fragment` 為局部重跑（如月度錄入編輯器）。
+- `elapsed_ms`：伺服器端腳本耗時，不含網路與瀏覽器繪製。
+- `db_roundtrips`／`cache_hits`：該次重跑的資料庫往返數與快取命中數。
+- `reconnected=true`：該次重跑發生過閒置重連。
+- `interrupted=true`：該次執行被 `st.rerun()`／`st.stop()`（含登入守門）中途結束，或例外穿過錯誤兜底往外拋（錯誤細節開關開啟時）。例如存檔後主動整頁重跑，存檔那次就記為 `true`。被錯誤兜底接住、只顯示通用訊息的那次仍記為 `false`。
 
 部署：推送到 GitHub repo，於 [Streamlit Community Cloud](https://share.streamlit.io) 連結該 repo、指定主檔 `app.py`，並在後台 Secrets UI 貼上與 `secrets.toml` 相同的內容；Google OAuth 的 redirect_uri 需加入雲端網址。
 
@@ -155,14 +188,17 @@ pip-audit       # 依賴漏洞掃描
 ├── src/asset_lab/
 │   ├── models/                  # pydantic 資料模型（項目/紀錄/目標/協定門檻/結果）
 │   ├── core/                    # 常數（含協定等級結構）、例外、純工具、登入存取判定
-│   ├── repositories/            # Turso (libsql) 資料存取與建表、寫入交易工具、CSV 匯入單一交易寫入、協定文件唯讀讀取
+│   ├── repositories/            # Turso (libsql) 資料存取與建表、連線分層（查詢計數、讀取快取、存活探測）、寫入交易工具、CSV 匯入單一交易寫入、協定文件唯讀讀取
 │   ├── services/                # 報酬率/配置/淨值/錄入（含淨投入推算）/匯出入/大跌協定判定 純運算
 │   ├── charts.py                # Plotly 圖表元件
 │   ├── amount_widget.py         # 千分位金額輸入元件與金額欄放大樣式
 │   ├── overview_presentation.py # 總覽頁純呈現轉換（等級查表、狀態→顯示資料）
-│   └── bootstrap.py             # 依賴組裝（連線 → Repository → Service，連線失效自動重連）
+│   ├── rerun_runtime.py         # 重跑量測範圍、每次重跑最多一次連線探測、局部重跑包裝
+│   ├── error_boundary.py        # 錯誤兜底：未預期錯誤只顯示通用訊息、細節寫 log
+│   └── bootstrap.py             # 依賴組裝（連線分層 → Repository → Service）、讀取快取、建表一次、log 設定、錯誤細節開關
 ├── tests/                       # pytest 行為與單元測試
 ├── docs/PROTOCOL.md             # 大跌行為協定全文（唯讀展示於「行為協定」頁）
+├── .streamlit/config.toml       # 預設隱藏錯誤細節（showErrorDetails = "none"）
 ├── .streamlit/secrets.toml.example  # 機密範本（Turso / OAuth / 允許 email）
 └── pyproject.toml               # 依賴與工具設定
 ```
@@ -172,7 +208,9 @@ pip-audit       # 依賴漏洞掃描
 - 財務資料完整存於 Turso；`secrets.toml` 內的 Turso 權杖等同資料庫密碼，外洩請立即至 Turso 後台 rotate。
 - app 部署於公開 URL，存取控制僅靠 `st.login()` 登入＋email 允許清單；非清單內帳號登入後即被擋下，看不到任何資料。
 - 「項目間轉移」功能已移除。過去轉移留下的歷史紀錄（含市值空白、只有淨投入的列）保留原值；活存／定存推算前期餘額時會跳過這類空白列。若要補錄市值，可從錄入頁「本月已存紀錄」表找出尚未填的月份。
-- 寫入失敗的友善訊息只涵蓋月度錄入與 CSV 匯入的寫入交易；讀取失敗與設定頁的單筆寫入出錯時，畫面仍可能顯示 Streamlit 預設的錯誤內容（含程式堆疊），已列為後續改善項目。
+- 未預期錯誤只顯示通用訊息、不露程式堆疊。例外：`app.py` 的 `st.set_option` 要執行到 `main()` 才生效，在那之前的錯誤（例如部署後某個依賴 import 失敗）只靠 `.streamlit/config.toml` 擋；若雲端以命令列參數或環境變數蓋掉這個設定，未登入訪客可能看到程式堆疊（內容是公開 repo 的程式碼與路徑，不含機密或財務資料）。
+- 讀取快取在本機與雲端各自獨立：在一處改過資料後，另一處最慢 5 分鐘才反映，可按側欄「重新讀取資料」立即重讀。月度錄入存檔沿用快取，若另一處在 5 分鐘內改過同一個月，這裡存檔可能用舊資料推算淨投入後覆蓋；跨裝置修改同一個月前，先按「重新讀取資料」。
+- 錯誤兜底依賴 `streamlit.errors.FragmentHandledException`（非文件化 API），升級 Streamlit 時以 `tests/test_error_boundary.py` 把關。
 - Turso 免費單庫，建議定期以「匯出 CSV」備份；匯入還原僅支援空庫（目標庫非空會被拒絕，避免污染既有資料）。
 - **已知環境事項**：`app.py` 開頭在 `import streamlit` 之前搶先設定 `os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")`，用意是規避 pyarrow 25 內建 mimalloc 配置器在 macOS arm64 的 thread-init segfault——顯示 DataFrame（`st.dataframe` / `st.data_editor`）觸發 pandas→Arrow 轉換時，曾實測整個 Python 進程 `EXC_BAD_ACCESS` 崩潰；停用 mimalloc、改用系統 malloc 後已驗證穩定。此設定必須早於 Streamlit（連帶 import pyarrow）之前才生效，故 import 順序看似不合慣例，維護者請勿因「風格統一」而移動或刪除這行。目前依賴已升級到 streamlit 1.66.1／pyarrow 26（上游已修此問題、streamlit 也排除 pyarrow 25），但尚未在 macOS arm64 實機驗證，設定先保留。
 - **本機開發踩坑**：未安裝 `watchdog` 套件時，修改 `views/*.py` 以外的模組（如 `src/asset_lab/` 下的檔案）後，僅重整瀏覽器不會生效——這些模組是被 `import` 進來、快取在 Python process 記憶體中，需重新啟動 `streamlit run app.py` 才會重新載入。建議開發時安裝 `watchdog`（`uv add --dev watchdog`）讓 Streamlit 自動偵測變更。
