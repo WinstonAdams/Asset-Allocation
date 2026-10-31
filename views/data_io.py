@@ -16,11 +16,12 @@ import logging
 import streamlit as st
 
 # ==== 專案內部 ====
+from asset_lab import bootstrap
 from asset_lab.bootstrap import Container
 from asset_lab.core.exceptions import AssetLabError, PersistenceError
 from asset_lab.repositories.csv_import_writer import write_import
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.data_io")
 
 
 def _container() -> Container:
@@ -67,7 +68,8 @@ def _render_import(*, container: Container) -> None:
     records_file = st.file_uploader("records.csv", type="csv", key="up_records")
     targets_file = st.file_uploader("targets.csv", type="csv", key="up_targets")
 
-    if not st.button("執行匯入"):
+    # 按下時先清快取（callback 在重跑前執行），空庫守門才讀得到最新資料
+    if not st.button("執行匯入", on_click=bootstrap.clear_read_cache):
         return
     if holdings_file is None or records_file is None or targets_file is None:
         st.error("請同時提供三份 CSV（holdings、records、targets）。")

@@ -6,8 +6,9 @@ CLI 參數，故不採 RPA 的 main.py + argparse 模型）。本檔職責限於
 1. 守門：未登入先顯示登入入口並停止；已登入則以純判定（evaluate_access）比對 st.user.email
    是否在允許清單，非本人即顯示拒絕並停止——前置於任何資料存取，確保非本人看不到任何
    財務資料。允許 email 與登入設定皆來自 st.secrets，不寫死。
-2. 組裝：放行後注入全站金額輸入框放大樣式（見 amount_widget.py），再取快取的依賴容器
-   （連線與 schema 已就緒；連線因閒置逾時失效時 `get_resilient_container()` 會自動清
+2. 組裝：放行後注入全站金額輸入框放大樣式（見 amount_widget.py），先渲染側欄（重新讀取資料、
+   登出，資料庫故障時仍可操作），再取快取的依賴容器
+   （連線已確認存活；連線因閒置逾時失效時 `verified_container()` 會自動清
    快取重連並重試一次，見 bootstrap.py），存入 session 供各頁取用。
 3. 路由：以 st.navigation 註冊多頁並執行當前頁。
 
@@ -38,15 +39,15 @@ import streamlit as st
 from asset_lab import bootstrap
 from asset_lab.amount_widget import inject_amount_input_style
 from asset_lab.core.access import AccessReason, evaluate_access
+from asset_lab.core.constants import ERROR_DETAILS, RERUN_KIND
+from asset_lab.error_boundary import error_boundary
+from asset_lab.rerun_runtime import rerun_scope, verified_container
 
 # 固定瀏覽器分頁標題與圖示：st.set_page_config 必須是整支腳本第一個 Streamlit 指令，
 # 且每次 rerun（包含切頁、登入前後）都會重新執行到這裡並帶入相同值，因此標題與圖示
 # 不會被登入畫面、拒絕畫面或 st.navigation／各頁的 st.Page(title=...) 覆蓋——後者只影響
 # 側邊欄導覽項目的顯示文字，不影響瀏覽器分頁標題。
 st.set_page_config(page_title="資產管理", page_icon="💰")
-
-# 放行後把組裝好的依賴容器存入 session，供各頁以同一容器取用，免每頁重組。
-CONTAINER_SESSION_KEY = "container"
 
 
 def _require_access() -> None:
@@ -80,31 +81,47 @@ def _require_access() -> None:
 
 
 def main() -> None:
-    """守門通過後組裝依賴並路由到當前頁面。"""
-    _require_access()
-
-    # 守門通過後、路由前呼叫一次，全站金額輸入框放大樣式即對所有頁面生效。
-    inject_amount_input_style()
-
-    st.session_state[CONTAINER_SESSION_KEY] = bootstrap.get_resilient_container()
-
-    with st.sidebar:
-        st.caption(f"已登入：{st.user.email}")
-        st.button("登出", on_click=st.logout)
-
-    navigation = st.navigation(
-        [
-            st.Page("views/overview.py", title="總覽", icon=":material/dashboard:", default=True),
-            st.Page("views/input.py", title="月度錄入", icon=":material/edit_note:"),
-            st.Page("views/allocation.py", title="資產配置", icon=":material/donut_large:"),
-            st.Page("views/returns.py", title="報酬率", icon=":material/trending_up:"),
-            st.Page("views/protocol.py", title="行為協定", icon=":material/menu_book:"),
-            st.Page("views/house.py", title="買房", icon=":material/home:"),
-            st.Page("views/settings.py", title="設定", icon=":material/settings:"),
-            st.Page("views/data_io.py", title="匯出入", icon=":material/import_export:"),
-        ]
+    """守門通過後組裝依賴並路由到當前頁面；整次執行包在計時區塊內，結束時記一行量測。"""
+    # 每次執行都以專案環境變數覆蓋 Streamlit 的錯誤細節設定：雲端不設環境變數即永遠隱藏，
+    # Streamlit 原生的 --client.showErrorDetails 不會讓細節露出。
+    st.set_option(
+        "client.showErrorDetails",
+        bootstrap.resolve_error_detail_mode(raw=os.environ.get(ERROR_DETAILS.ENV_VAR)),
     )
-    navigation.run()
+    bootstrap.ensure_logging_configured()
+
+    with (
+        rerun_scope(kind=RERUN_KIND.FULL, metrics=bootstrap.get_query_metrics()) as scope,
+        error_boundary(context="app"),
+    ):
+        _require_access()
+
+        # 守門通過後、路由前呼叫一次，全站金額輸入框放大樣式即對所有頁面生效。
+        inject_amount_input_style()
+
+        # 側欄在連線確認之前渲染：資料庫故障時使用者仍能重新讀取或登出。
+        with st.sidebar:
+            st.caption(f"已登入：{st.user.email}")
+            st.button("重新讀取資料", on_click=bootstrap.clear_read_cache)
+            st.button("登出", on_click=st.logout)
+
+        verified_container()
+
+        navigation = st.navigation(
+            [
+                # 單行：tests/test_overview.py 以 regex 掃描這個註冊式
+                st.Page("views/overview.py", title="總覽", icon=":material/dashboard:", default=True),  # noqa: E501
+                st.Page("views/input.py", title="月度錄入", icon=":material/edit_note:"),
+                st.Page("views/allocation.py", title="資產配置", icon=":material/donut_large:"),
+                st.Page("views/returns.py", title="報酬率", icon=":material/trending_up:"),
+                st.Page("views/protocol.py", title="行為協定", icon=":material/menu_book:"),
+                st.Page("views/house.py", title="買房", icon=":material/home:"),
+                st.Page("views/settings.py", title="設定", icon=":material/settings:"),
+                st.Page("views/data_io.py", title="匯出入", icon=":material/import_export:"),
+            ]
+        )
+        scope.page = navigation.title
+        navigation.run()
 
 
 main()

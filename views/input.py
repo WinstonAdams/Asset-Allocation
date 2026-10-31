@@ -37,12 +37,13 @@ from asset_lab.core.utils import (
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.repositories.record_repository import RecordRepository
+from asset_lab.rerun_runtime import rerun_fragment
 from asset_lab.services.balance_input_service import BalanceInputService
 from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.monthly_input_service import MonthlyInputService
 from asset_lab.services.period_service import today_in_timezone
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.input")
 
 # 年份下拉可選範圍：當年往前推 N 年到當年，不開放未來年份——月度錄入記的是已發生的市值/
 # 淨投入，未來月份無實際數據可記；往前 5 年已足夠涵蓋近年回溯修正需求。
@@ -112,22 +113,14 @@ def render() -> None:
             prefilled = input_service.prefill_from_previous(target_ym=target_ym)
             st.session_state["prefilled_records"] = [r.model_dump() for r in prefilled]
 
-        # 每輪只讀一次，表格與錄入框共用同一份資料來源
+        # 每輪只讀一次；編輯器是獨立的局部重跑區塊，自己另行讀取（走讀取快取）
         holdings = holding_repo.list_holdings()
         month_records = record_repo.read_month(year_month=target_ym)
 
         _render_month_records(
             input_service=input_service, holdings=holdings, month_records=month_records
         )
-        _render_record_editor(
-            input_service=input_service,
-            record_repo=record_repo,
-            cost_basis_service=container.cost_basis_service,
-            balance_service=container.balance_input_service,
-            holdings=holdings,
-            month_records=month_records,
-            target_ym=target_ym,
-        )
+        _render_record_editor(target_ym=target_ym)
     except AssetLabError as error:
         # Page 為唯一 catch 點：對使用者顯示友善訊息（含寫入失敗的 PersistenceError），
         # 技術細節進 log
@@ -208,21 +201,23 @@ def _select_target_year_month() -> str:
     return f"{selected_year:04d}-{selected_month:02d}"
 
 
-def _render_record_editor(
-    *,
-    input_service: MonthlyInputService,
-    record_repo: RecordRepository,
-    cost_basis_service: CostBasisService,
-    balance_service: BalanceInputService,
-    holdings: list[HoldingModel],
-    month_records: list[MonthlyRecordModel],
-    target_ym: str,
-) -> None:
+@rerun_fragment(label="月度錄入編輯器")
+def _render_record_editor(*, target_ym: str) -> None:
     """單列新增/編輯/刪除：依項目的錄入方式分派到對應編輯器。
 
+    本函式是局部重跑區塊：改金額欄只重跑這裡，所以容器與資料都在函式內自己取得，
+    不依賴整頁重跑時算好的物件。存檔或刪除成功後仍整頁重跑，讓表格與提示同步更新。
     年月沿用頁面上方「錄入年份／錄入月份」下拉選定值。錄入方式由 Service 解析；資產
     分類未指定時 Service 拒絕，這裡只顯示提示並不渲染任何錄入欄位，不默默當成某一種方式。
     """
+    container = _container()
+    input_service = container.monthly_input_service
+    record_repo = container.record_repo
+    cost_basis_service = container.cost_basis_service
+    balance_service = container.balance_input_service
+    holdings = container.holding_repo.list_holdings()
+    month_records = record_repo.read_month(year_month=target_ym)
+
     st.subheader("單列錄入")
     if not holdings:
         st.write("尚無持有項目，請先到「設定」頁建立主檔。")

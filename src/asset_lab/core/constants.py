@@ -339,3 +339,33 @@ class CSV_EXPORT:
         "category",
         "target_weight",
     )
+
+
+class READ_CACHE:
+    """讀取快取的時效：另一處的修改最慢在此秒數後的下一次操作反映。"""
+
+    TTL_SECONDS = 300
+
+
+class APP_LOGGING:
+    """App 的 log 設定。專案沒有 config.yml，運維參數集中於此。"""
+
+    LOGGER_NAMESPACE = "asset_lab"  # 專案 logger 共同前綴；頁面 logger 皆掛在其下
+    LEVEL = "INFO"
+    FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+class ERROR_DETAILS:
+    """錯誤細節顯示開關。SHOW/HIDE 為 Streamlit client.showErrorDetails 的值。"""
+
+    ENV_VAR = "ASSET_LAB_SHOW_ERROR_DETAILS"
+    ENABLED_VALUES = frozenset({"1", "true", "yes", "on"})  # 比對前先去空白、轉小寫
+    SHOW = "full"
+    HIDE = "none"
+
+
+class RERUN_KIND:
+    """重跑量測 log 的重跑類型。"""
+
+    FULL = "full"
+    FRAGMENT = "fragment"

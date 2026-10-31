@@ -16,12 +16,15 @@ import pytest
 # ==== 專案內部 ====
 from asset_lab import bootstrap
 from asset_lab.core.constants import HOUSE_PARAM_DEFAULTS, HOUSE_PARAM_KEY, HOUSE_TRIGGER
-from asset_lab.core.exceptions import DataValidationError
+from asset_lab.core.exceptions import DataValidationError, PersistenceError
 from asset_lab.models.house import HouseParamModel, HouseParams, SubjectiveTriggerModel
 from asset_lab.repositories.house_param_repository import HouseParamRepository
+from asset_lab.repositories.query_metrics import QueryMetrics
+from asset_lab.repositories.read_cache import ReadCache
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
 from asset_lab.services.house_service import HouseService
+from tests.flaky_connection import FlakyConnection
 
 
 @pytest.fixture
@@ -136,14 +139,22 @@ class TestHouseParamsPersistence:
     @pytest.mark.scenario("SC-054")
     def test_sc054_saved_params_persist_across_container_rebuild(self, conn):
         # 端到端：以 bootstrap 重新組裝容器（模擬 app 重啟）沿用同一底層連線，已存值仍在
-        first_container = bootstrap.build_container(conn=conn)
+        first_container = bootstrap.build_container(
+            conn=conn,
+            read_cache=ReadCache(ttl_seconds=300),
+            query_metrics=QueryMetrics(),
+        )
         first_container.house_param_repo.upsert_param(
             param=HouseParamModel(
                 param_key=HOUSE_PARAM_KEY.TARGET_TOTAL_PRICE, param_value=5_000_000.0
             )
         )
 
-        restarted_container = bootstrap.build_container(conn=conn)
+        restarted_container = bootstrap.build_container(
+            conn=conn,
+            read_cache=ReadCache(ttl_seconds=300),
+            query_metrics=QueryMetrics(),
+        )
         params = restarted_container.house_service.effective_params(
             stored=restarted_container.house_param_repo.read_params()
         )
@@ -283,12 +294,20 @@ class TestSubjectiveTriggerPersistence:
     @pytest.mark.scenario("SC-068")
     def test_sc068_checked_state_persists_across_container_rebuild(self, conn):
         # 端到端：模擬「關閉並重新開啟應用程式」——以 bootstrap 重新組裝容器沿用同一連線
-        first_container = bootstrap.build_container(conn=conn)
+        first_container = bootstrap.build_container(
+            conn=conn,
+            read_cache=ReadCache(ttl_seconds=300),
+            query_metrics=QueryMetrics(),
+        )
         first_container.subjective_trigger_repo.upsert_trigger(
             trigger=SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.ANCHOR, checked=True)
         )
 
-        restarted_container = bootstrap.build_container(conn=conn)
+        restarted_container = bootstrap.build_container(
+            conn=conn,
+            read_cache=ReadCache(ttl_seconds=300),
+            query_metrics=QueryMetrics(),
+        )
         reloaded = {
             t.trigger_key: t.checked
             for t in restarted_container.subjective_trigger_repo.read_triggers()
@@ -296,3 +315,56 @@ class TestSubjectiveTriggerPersistence:
 
         assert reloaded[HOUSE_TRIGGER.ANCHOR] is True
         assert HOUSE_TRIGGER.COGNITION not in reloaded
+
+
+def _stored_params(conn) -> dict[str, float]:
+    return {p.param_key: p.param_value for p in HouseParamRepository(conn=conn).read_params()}
+
+
+class TestBatchUpsertParams:
+    """買房參數九筆整批寫入同一交易（SC-128／SC-129）。"""
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_build_models_returns_nine_params(self, service):
+        models = service.build_param_models(params=_ALL_DEFAULTS)
+
+        assert len(models) == 9
+        assert len({m.param_key for m in models}) == 9
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_build_models_rejects_invalid_params(self, service):
+        with pytest.raises(DataValidationError):
+            service.build_param_models(params=_ALL_DEFAULTS.model_copy(update={"loan_years": 0}))
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_batch_upsert_writes_all_nine_together(self, conn, service):
+        HouseParamRepository(conn=conn).upsert_params(
+            params=service.build_param_models(params=_ALL_DEFAULTS)
+        )
+
+        assert len(_stored_params(conn)) == 9
+
+    @pytest.mark.scenario("SC-128")
+    def test_sc128_batch_upsert_empty_list_issues_no_write(self, conn):
+        flaky = FlakyConnection(conn, fail_at=1)
+
+        HouseParamRepository(conn=flaky).upsert_params(params=[])
+
+        assert _stored_params(conn) == {}
+
+    @pytest.mark.scenario("SC-129")
+    def test_sc129_failure_at_nth_row_keeps_all_original_values(self, conn, service):
+        HouseParamRepository(conn=conn).upsert_params(
+            params=service.build_param_models(params=_ALL_DEFAULTS)
+        )
+        before = _stored_params(conn)
+        changed = _ALL_DEFAULTS.model_copy(update={"loan_years": 20, "target_year": 2040})
+        flaky = FlakyConnection(conn, fail_at=5)
+
+        with pytest.raises(PersistenceError) as exc_info:
+            HouseParamRepository(conn=flaky).upsert_params(
+                params=service.build_param_models(params=changed)
+            )
+
+        assert str(exc_info.value) == "存檔失敗，資料未變更，請重試"
+        assert _stored_params(conn) == before

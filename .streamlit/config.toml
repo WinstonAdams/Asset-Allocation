@@ -1,0 +1,4 @@
+# 縱深防禦：腳本尚未執行到 st.set_option 之前（例如 import 失敗）也不對外露出堆疊。
+# 實際開關由 app.py 依環境變數 ASSET_LAB_SHOW_ERROR_DETAILS 每次執行時覆蓋。
+[client]
+showErrorDetails = "none"

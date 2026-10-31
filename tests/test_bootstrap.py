@@ -21,6 +21,8 @@ bootstrap 的 st.cache_resource 包裝與 st.secrets 讀取屬無法純測的 St
 
 # ==== 原生（標準庫） ====
 import ast
+import logging
+import sys
 import tomllib
 from pathlib import Path
 from unittest.mock import Mock
@@ -33,6 +35,7 @@ from streamlit.errors import StreamlitSecretNotFoundError
 # ==== 專案內部 ====
 from asset_lab import bootstrap
 from asset_lab.core.constants import (
+    APP_LOGGING,
     ASSET_CATEGORIES,
     BALANCE_INPUT,
     COST_BASIS_INPUT,
@@ -42,11 +45,16 @@ from asset_lab.core.constants import (
     INPUT_MODE,
     MONTHLY_RECORDS_TABLE,
     PREMIUM_INPUT,
+    READ_CACHE,
 )
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.record import MonthlyRecordModel
+from asset_lab.repositories.connection_layers import CachingConnection, CountingConnection
+from asset_lab.repositories.health_repository import ConnectionHealthRepository
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
+from asset_lab.repositories.query_metrics import QueryMetrics
+from asset_lab.repositories.read_cache import ReadCache
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.target_repository import TargetRepository
@@ -143,7 +151,11 @@ def test_build_container_wires_repositories_to_connection() -> None:
     """容器以注入的同一連線建立各 Repository，並由 DB schema 建表入口備妥。"""
     conn = _FakeConnection()
 
-    container = bootstrap.build_container(conn=conn)
+    container = bootstrap.build_container(
+        conn=conn,
+        read_cache=ReadCache(ttl_seconds=300),
+        query_metrics=QueryMetrics(),
+    )
 
     assert isinstance(container.holding_repo, HoldingRepository)
     assert isinstance(container.record_repo, RecordRepository)
@@ -151,20 +163,31 @@ def test_build_container_wires_repositories_to_connection() -> None:
     assert isinstance(container.schema_repo, SchemaRepository)
     assert isinstance(container.protocol_threshold_repo, ProtocolThresholdRepository)
     assert isinstance(container.transaction_repo, TransactionRepository)
-    # 所有 Repository 接上同一連線
-    assert container.holding_repo._conn is conn
-    assert container.record_repo._conn is conn
-    assert container.target_repo._conn is conn
-    assert container.schema_repo._conn is conn
-    assert container.protocol_threshold_repo._conn is conn
-    assert container.transaction_repo._conn is conn
+    # 連線分層：Repository 接快取層，快取層包計數層，計數層包住注入的連線
+    cached = container.holding_repo._conn
+    assert isinstance(cached, CachingConnection)
+    counted = cached._inner
+    assert isinstance(counted, CountingConnection)
+    assert counted._inner is conn
+    assert container.record_repo._conn is cached
+    assert container.target_repo._conn is cached
+    assert container.protocol_threshold_repo._conn is cached
+    assert container.transaction_repo._conn is cached
+    # 建表 Repository 不經快取，直接接計數層
+    assert container.schema_repo._conn is not cached
+    assert isinstance(container.schema_repo._conn, CountingConnection)
+    assert container.schema_repo._conn._inner is conn
 
 
 def test_build_container_wires_services() -> None:
     """容器組出各 Service；月度錄入服務接上主檔與紀錄 Repository（其餘為純運算無依賴）。"""
     conn = _FakeConnection()
 
-    container = bootstrap.build_container(conn=conn)
+    container = bootstrap.build_container(
+        conn=conn,
+        read_cache=ReadCache(ttl_seconds=300),
+        query_metrics=QueryMetrics(),
+    )
 
     assert isinstance(container.return_service, ReturnService)
     assert isinstance(container.allocation_service, AllocationService)
@@ -622,24 +645,24 @@ class TestMonthlyRecordsCashDividendMigration:
         assert repo.read_month(year_month="2026-05")[0].cash_dividend == 200.0
 
 
-class _FakeSchemaRepo:
-    """假 schema repo：ensure_schema 依建構時指定成功或拋指定例外，模擬連線存活探測。"""
+class _FakeHealthRepo:
+    """假 health repo：ping 依建構時指定成功或拋指定例外，模擬連線存活探測。"""
 
     def __init__(self, *, error: Exception | None = None) -> None:
         self._error = error
         self.call_count = 0
 
-    def ensure_schema(self) -> None:
+    def ping(self) -> None:
         self.call_count += 1
         if self._error is not None:
             raise self._error
 
 
 class _FakeResilientContainer:
-    """假容器：_with_reconnect_on_stale_stream 只用得到 schema_repo 這個欄位。"""
+    """假容器：_with_reconnect_on_stale_stream 只用得到 health_repo 這個欄位。"""
 
-    def __init__(self, schema_repo: _FakeSchemaRepo) -> None:
-        self.schema_repo = schema_repo
+    def __init__(self, health_repo: _FakeHealthRepo) -> None:
+        self.health_repo = health_repo
 
 
 def _make_get_container(*containers: _FakeResilientContainer):
@@ -654,92 +677,345 @@ def _make_get_container(*containers: _FakeResilientContainer):
     return _get_container
 
 
-@pytest.mark.scenario("SC-042")
-def test_with_reconnect_returns_container_when_connection_alive() -> None:
-    """連線存活（ensure_schema 成功）時直接回傳容器，不清任何快取、不重取。"""
-    container = _FakeResilientContainer(_FakeSchemaRepo())
-    get_container = _make_get_container(container)
-    clear_connection_cache = Mock()
-    clear_container_cache = Mock()
+def _reconnect_kwargs(get_container, **overrides):
+    """組出 _with_reconnect_on_stale_stream 的全部替身參數，個別測試再覆寫要觀察的那幾個。"""
+    kwargs = {
+        "get_container": get_container,
+        "ensure_schema_once": Mock(),
+        "clear_connection_cache": Mock(),
+        "clear_container_cache": Mock(),
+        "on_reconnect": Mock(),
+    }
+    kwargs.update(overrides)
+    return kwargs
 
-    result = bootstrap._with_reconnect_on_stale_stream(
-        get_container=get_container,
-        clear_connection_cache=clear_connection_cache,
-        clear_container_cache=clear_container_cache,
-    )
+
+_STALE_ERROR = ValueError(
+    'Hrana: `api error: `status=404 Not Found, body={"error":"stream not found: abc123"}``'
+)
+
+
+@pytest.mark.scenario("SC-042")
+@pytest.mark.scenario("SC-108")
+def test_with_reconnect_returns_container_when_connection_alive() -> None:
+    """連線存活（ping 成功）時直接回傳容器，只探測一次，不清任何快取、不重取。"""
+    container = _FakeResilientContainer(_FakeHealthRepo())
+    get_container = _make_get_container(container)
+    kwargs = _reconnect_kwargs(get_container)
+
+    result = bootstrap._with_reconnect_on_stale_stream(**kwargs)
 
     assert result is container
     assert get_container.call_count == 1
-    clear_connection_cache.assert_not_called()
-    clear_container_cache.assert_not_called()
+    assert container.health_repo.call_count == 1
+    kwargs["ensure_schema_once"].assert_called_once_with()
+    kwargs["clear_connection_cache"].assert_not_called()
+    kwargs["clear_container_cache"].assert_not_called()
+    kwargs["on_reconnect"].assert_not_called()
 
 
 @pytest.mark.scenario("SC-042")
+@pytest.mark.scenario("SC-109")
 def test_with_reconnect_recovers_from_stale_stream_error() -> None:
-    """首次查詢拋 stream-not-found 類失效時，清兩層快取重連後重試一次即成功。"""
-    stale_error = ValueError(
-        'Hrana: `api error: `status=404 Not Found, '
-        'body={"error":"stream not found: abc123"}``'
-    )
-    dead_container = _FakeResilientContainer(_FakeSchemaRepo(error=stale_error))
-    revived_container = _FakeResilientContainer(_FakeSchemaRepo())
+    """首次探測拋 stream-not-found 類失效時，清兩層快取重連後重試一次即成功。"""
+    dead_container = _FakeResilientContainer(_FakeHealthRepo(error=_STALE_ERROR))
+    revived_container = _FakeResilientContainer(_FakeHealthRepo())
     get_container = _make_get_container(dead_container, revived_container)
-    clear_connection_cache = Mock()
-    clear_container_cache = Mock()
+    kwargs = _reconnect_kwargs(get_container)
 
-    result = bootstrap._with_reconnect_on_stale_stream(
-        get_container=get_container,
-        clear_connection_cache=clear_connection_cache,
-        clear_container_cache=clear_container_cache,
-    )
+    result = bootstrap._with_reconnect_on_stale_stream(**kwargs)
 
     assert result is revived_container
     assert get_container.call_count == 2
-    clear_connection_cache.assert_called_once()
-    clear_container_cache.assert_called_once()
+    assert dead_container.health_repo.call_count == 1
+    assert revived_container.health_repo.call_count == 1
+    kwargs["clear_connection_cache"].assert_called_once()
+    kwargs["clear_container_cache"].assert_called_once()
+    kwargs["on_reconnect"].assert_called_once_with()
 
 
 @pytest.mark.scenario("SC-042")
+@pytest.mark.scenario("SC-110")
 def test_with_reconnect_reraises_non_stale_business_error() -> None:
-    """非連線失效的一般業務例外（如唯一性約束違反）原樣往上拋，不誤判為可重連。"""
+    """非連線失效的一般例外（如唯一性約束違反）原樣往上拋，不重連、不誤判。"""
     business_error = ValueError("UNIQUE constraint failed: holdings.name")
-    container = _FakeResilientContainer(_FakeSchemaRepo(error=business_error))
+    container = _FakeResilientContainer(_FakeHealthRepo(error=business_error))
     get_container = _make_get_container(container)
-    clear_connection_cache = Mock()
-    clear_container_cache = Mock()
+    kwargs = _reconnect_kwargs(get_container)
 
     with pytest.raises(ValueError, match="UNIQUE constraint failed"):
-        bootstrap._with_reconnect_on_stale_stream(
-            get_container=get_container,
-            clear_connection_cache=clear_connection_cache,
-            clear_container_cache=clear_container_cache,
-        )
+        bootstrap._with_reconnect_on_stale_stream(**kwargs)
 
     assert get_container.call_count == 1
-    clear_connection_cache.assert_not_called()
-    clear_container_cache.assert_not_called()
+    kwargs["clear_connection_cache"].assert_not_called()
+    kwargs["clear_container_cache"].assert_not_called()
+    kwargs["on_reconnect"].assert_not_called()
 
 
 @pytest.mark.scenario("SC-042")
+@pytest.mark.scenario("SC-110")
 def test_with_reconnect_gives_up_after_second_consecutive_failure() -> None:
-    """重連重試一次後仍失效，例外原樣浮出，不無限重連。"""
-    stale_error = ValueError('stream not found: abc123')
-    first_container = _FakeResilientContainer(_FakeSchemaRepo(error=stale_error))
-    second_container = _FakeResilientContainer(_FakeSchemaRepo(error=stale_error))
+    """重連重試一次後仍失效，例外原樣浮出，不無限重連（不第三次嘗試）。"""
+    first_container = _FakeResilientContainer(_FakeHealthRepo(error=_STALE_ERROR))
+    second_container = _FakeResilientContainer(_FakeHealthRepo(error=_STALE_ERROR))
     get_container = _make_get_container(first_container, second_container)
-    clear_connection_cache = Mock()
-    clear_container_cache = Mock()
+    kwargs = _reconnect_kwargs(get_container)
 
     with pytest.raises(ValueError, match="stream not found"):
-        bootstrap._with_reconnect_on_stale_stream(
-            get_container=get_container,
-            clear_connection_cache=clear_connection_cache,
-            clear_container_cache=clear_container_cache,
-        )
+        bootstrap._with_reconnect_on_stale_stream(**kwargs)
 
     assert get_container.call_count == 2
-    clear_connection_cache.assert_called_once()
-    clear_container_cache.assert_called_once()
+    assert first_container.health_repo.call_count == 1
+    assert second_container.health_repo.call_count == 1
+    kwargs["clear_connection_cache"].assert_called_once()
+    kwargs["clear_container_cache"].assert_called_once()
+
+
+@pytest.mark.scenario("SC-110")
+def test_with_reconnect_non_stale_error_from_ensure_schema_once_is_not_retried() -> None:
+    """建表階段遇到其他錯誤也不重連，直接往上拋。"""
+    container = _FakeResilientContainer(_FakeHealthRepo())
+    get_container = _make_get_container(container)
+    kwargs = _reconnect_kwargs(
+        get_container, ensure_schema_once=Mock(side_effect=ValueError("syntax error"))
+    )
+
+    with pytest.raises(ValueError, match="syntax error"):
+        bootstrap._with_reconnect_on_stale_stream(**kwargs)
+
+    assert get_container.call_count == 1
+    kwargs["clear_connection_cache"].assert_not_called()
+
+
+@pytest.mark.scenario("SC-109")
+def test_with_reconnect_does_not_clear_schema_once_cache() -> None:
+    """重連只清連線與容器兩層；建表一次的快取不在清除範圍（重連不重新建表）。"""
+    dead_container = _FakeResilientContainer(_FakeHealthRepo(error=_STALE_ERROR))
+    revived_container = _FakeResilientContainer(_FakeHealthRepo())
+    get_container = _make_get_container(dead_container, revived_container)
+    kwargs = _reconnect_kwargs(get_container)
+
+    bootstrap._with_reconnect_on_stale_stream(**kwargs)
+
+    # 建表入口是 cache_resource：重連後再叫一次只是命中快取，這裡的契約是不傳入任何清除它的 callable
+    assert set(kwargs) == {
+        "get_container",
+        "ensure_schema_once",
+        "clear_connection_cache",
+        "clear_container_cache",
+        "on_reconnect",
+    }
+
+
+class _RecordingConnection:
+    """包住真實 :memory: libsql 連線並記錄所有執行過的 SQL，用於斷言「重連不重新建表」。"""
+
+    def __init__(self, *, stale_on_select_1: bool = False) -> None:
+        self._inner = libsql.connect(":memory:")
+        self._stale_on_select_1 = stale_on_select_1
+        self.statements: list[str] = []
+
+    def cursor(self) -> "_RecordingCursor":
+        return _RecordingCursor(owner=self, inner=self._inner.cursor())
+
+    def commit(self) -> None:
+        self._inner.commit()
+
+    def rollback(self) -> None:
+        self._inner.rollback()
+
+
+class _RecordingCursor:
+    def __init__(self, *, owner: _RecordingConnection, inner) -> None:
+        self._owner = owner
+        self._inner = inner
+
+    def execute(self, sql: str, parameters=()):
+        self._owner.statements.append(sql)
+        if self._owner._stale_on_select_1 and sql.strip().upper() == "SELECT 1":
+            raise _STALE_ERROR
+        self._inner.execute(sql, parameters)
+        return self
+
+    def fetchall(self):
+        return self._inner.fetchall()
+
+    def fetchone(self):
+        return self._inner.fetchone()
+
+    @property
+    def lastrowid(self):
+        return self._inner.lastrowid
+
+
+@pytest.fixture
+def clean_bootstrap_caches():
+    """每個測試前後清掉 bootstrap 的 cache_resource，避免跨測試共用連線與容器。"""
+    caches = (
+        bootstrap.get_container,
+        bootstrap.ensure_schema_once,
+        bootstrap.get_read_cache,
+        bootstrap.get_query_metrics,
+    )
+    for cache in caches:
+        cache.clear()
+    yield
+    for cache in caches:
+        cache.clear()
+
+
+class _FakeConnectionFactory:
+    """取代 bootstrap.get_connection：依序回傳預先建好的連線，並提供 clear 以模擬重連。"""
+
+    def __init__(self, *connections: _RecordingConnection) -> None:
+        self._connections = list(connections)
+        self._index = 0
+        self.clear_count = 0
+
+    def __call__(self) -> _RecordingConnection:
+        return self._connections[self._index]
+
+    def clear(self) -> None:
+        self.clear_count += 1
+        self._index += 1
+
+
+def _create_table_statements(conn: _RecordingConnection) -> list[str]:
+    return [s for s in conn.statements if "CREATE TABLE" in s.upper()]
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_second_resilient_container_call_probes_once_and_does_not_rebuild_schema(
+    monkeypatch, clean_bootstrap_caches
+) -> None:
+    """程序內第二次取容器：不再建表、不再檢查資料表設定，只多一次 SELECT 1。"""
+    conn = _RecordingConnection()
+    monkeypatch.setattr(bootstrap, "get_connection", _FakeConnectionFactory(conn))
+    first = bootstrap.get_resilient_container()
+    after_first = len(conn.statements)
+    assert _create_table_statements(conn)  # 第一輪確實建了表
+
+    second = bootstrap.get_resilient_container()
+
+    assert second is first
+    assert conn.statements[after_first:] == ["SELECT 1"]
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_get_container_no_longer_runs_ensure_schema(
+    monkeypatch, clean_bootstrap_caches
+) -> None:
+    conn = _RecordingConnection()
+    monkeypatch.setattr(bootstrap, "get_connection", _FakeConnectionFactory(conn))
+
+    bootstrap.get_container()
+
+    assert conn.statements == []
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_ensure_schema_once_runs_once_per_process(
+    monkeypatch, clean_bootstrap_caches
+) -> None:
+    conn = _RecordingConnection()
+    monkeypatch.setattr(bootstrap, "get_connection", _FakeConnectionFactory(conn))
+
+    assert bootstrap.ensure_schema_once() is True
+    count = len(conn.statements)
+    assert bootstrap.ensure_schema_once() is True
+
+    assert len(conn.statements) == count
+
+
+@pytest.mark.scenario("SC-109")
+def test_sc109_stale_probe_reconnects_without_rebuilding_schema_and_logs_warning(
+    monkeypatch, clean_bootstrap_caches, caplog
+) -> None:
+    """連線失效：換新連線再探測，新連線上沒有任何 CREATE TABLE；記 WARNING 並標示已重連。"""
+    dead = _RecordingConnection(stale_on_select_1=True)
+    fresh = _RecordingConnection()
+    factory = _FakeConnectionFactory(dead, fresh)
+    monkeypatch.setattr(bootstrap, "get_connection", factory)
+    # 以真實 cache_resource 的 clear 取代連線層的清除，模擬 get_connection.clear 換連線
+    monkeypatch.setattr(bootstrap.get_connection, "clear", factory.clear, raising=False)
+    metrics = bootstrap.get_query_metrics()
+
+    with caplog.at_level(logging.WARNING, logger="asset_lab"):
+        container = bootstrap.get_resilient_container()
+
+    assert factory.clear_count == 1
+    assert _create_table_statements(fresh) == []
+    assert fresh.statements == ["SELECT 1"]
+    assert container.health_repo._conn._inner is fresh
+    assert metrics.take().reconnected is True
+    warnings = [
+        r for r in caplog.records if r.levelno == logging.WARNING and r.name.startswith("asset_lab")
+    ]
+    assert len(warnings) == 1
+    assert "連線失效已重連" in warnings[0].getMessage()
+
+
+@pytest.mark.scenario("SC-109")
+def test_sc109_reconnect_keeps_read_cache(monkeypatch, clean_bootstrap_caches) -> None:
+    dead = _RecordingConnection(stale_on_select_1=True)
+    fresh = _RecordingConnection()
+    factory = _FakeConnectionFactory(dead, fresh)
+    monkeypatch.setattr(bootstrap, "get_connection", factory)
+    monkeypatch.setattr(bootstrap.get_connection, "clear", factory.clear, raising=False)
+    cache = bootstrap.get_read_cache()
+    cache.put(("SELECT 1", ()), [(1,)], generation=cache.generation())
+
+    bootstrap.get_resilient_container()
+
+    assert cache.get(("SELECT 1", ())) == [(1,)]
+    assert bootstrap.get_read_cache() is cache
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_build_container_wires_health_repo_to_counted_layer_not_cached() -> None:
+    conn = _FakeConnection()
+
+    container = bootstrap.build_container(
+        conn=conn, read_cache=ReadCache(ttl_seconds=300), query_metrics=QueryMetrics()
+    )
+
+    assert isinstance(container.health_repo, ConnectionHealthRepository)
+    assert isinstance(container.health_repo._conn, CountingConnection)
+    assert container.health_repo._conn._inner is conn
+    assert container.health_repo._conn is container.schema_repo._conn
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_ping_executes_select_1_through_the_connection() -> None:
+    conn = _RecordingConnection()
+
+    ConnectionHealthRepository(conn=conn).ping()
+
+    assert conn.statements == ["SELECT 1"]
+
+
+@pytest.mark.scenario("SC-109")
+def test_sc109_ping_propagates_connection_error_unchanged() -> None:
+    conn = _RecordingConnection(stale_on_select_1=True)
+
+    with pytest.raises(ValueError, match="stream not found"):
+        ConnectionHealthRepository(conn=conn).ping()
+
+
+@pytest.mark.scenario("SC-108")
+def test_sc108_ping_is_never_served_from_cache() -> None:
+    """探測走計數層：即使快取裡有 SELECT 1，每次 ping 仍真的打到資料庫。"""
+    conn = _RecordingConnection()
+    metrics = QueryMetrics()
+    container = bootstrap.build_container(
+        conn=conn, read_cache=ReadCache(ttl_seconds=300), query_metrics=metrics
+    )
+
+    container.health_repo.ping()
+    container.health_repo.ping()
+
+    assert conn.statements == ["SELECT 1", "SELECT 1"]
+    assert metrics.take().db_roundtrips >= 2
 
 
 def test_is_stale_stream_error_matches_stream_not_found_message() -> None:
@@ -831,3 +1107,174 @@ def test_app_disables_pyarrow_mimalloc_before_importing_streamlit() -> None:
     assert call.args[1].value == "system", (
         "ARROW_DEFAULT_MEMORY_POOL 須設為 'system' 才會停用 mimalloc"
     )
+
+
+# === logging 設定與頁面 logger 命名 ===
+
+_VIEWS_DIR = APP_DIR / "views"
+
+
+@pytest.fixture
+def isolated_logger():
+    """測試專用 logger（不污染真正的 asset_lab）；結束後還原 handler 與 level。"""
+    name = "asset_lab_test_logging"
+    logger = logging.getLogger(name)
+    logger.handlers.clear()
+    logger.setLevel(logging.NOTSET)
+    yield logger
+    logger.handlers.clear()
+    logger.setLevel(logging.NOTSET)
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_configure_logging_attaches_stderr_handler_with_level_and_format(
+    isolated_logger,
+) -> None:
+    bootstrap.configure_logging(logger_name=isolated_logger.name, level="INFO", fmt="%(message)s")
+
+    assert len(isolated_logger.handlers) == 1
+    handler = isolated_logger.handlers[0]
+    assert isinstance(handler, logging.StreamHandler)
+    assert handler.stream is sys.stderr
+    assert handler.formatter._fmt == "%(message)s"
+    assert isolated_logger.level == logging.INFO
+    # 不動 root、維持 propagate（既有 caplog 型測試依賴）
+    assert isolated_logger.propagate is True
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_configure_logging_is_idempotent(isolated_logger) -> None:
+    for _ in range(3):
+        bootstrap.configure_logging(
+            logger_name=isolated_logger.name, level="INFO", fmt="%(message)s"
+        )
+
+    assert len(isolated_logger.handlers) == 1
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_repeated_configure_emits_each_line_once(isolated_logger, capsys) -> None:
+    for _ in range(3):
+        bootstrap.configure_logging(
+            logger_name=isolated_logger.name, level="INFO", fmt="%(message)s"
+        )
+    # handler 在 configure 時綁定 sys.stderr，capsys 已替換 → 可直接讀到輸出
+    isolated_logger.info("一行")
+
+    assert capsys.readouterr().err.count("一行") == 1
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_info_level_is_not_dropped_for_child_loggers(isolated_logger, capsys) -> None:
+    bootstrap.configure_logging(logger_name=isolated_logger.name, level="INFO", fmt="%(message)s")
+    child = logging.getLogger(f"{isolated_logger.name}.views.input")
+
+    child.info("資訊層級")
+
+    assert "資訊層級" in capsys.readouterr().err
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_ensure_logging_configured_uses_app_logging_constants() -> None:
+    logger = logging.getLogger(APP_LOGGING.LOGGER_NAMESPACE)
+    saved_handlers, saved_level = list(logger.handlers), logger.level
+    logger.handlers.clear()
+    try:
+        bootstrap.ensure_logging_configured()
+        bootstrap.ensure_logging_configured()
+
+        assert len(logger.handlers) == 1
+        assert logger.level == logging.getLevelName(APP_LOGGING.LEVEL)
+        assert logger.handlers[0].formatter._fmt == APP_LOGGING.FORMAT
+        assert logging.getLogger("asset_lab.views.input").isEnabledFor(logging.INFO)
+    finally:
+        logger.handlers[:] = saved_handlers
+        logger.setLevel(saved_level)
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_get_query_metrics_returns_one_shared_instance() -> None:
+    bootstrap.get_query_metrics.clear()
+    try:
+        assert bootstrap.get_query_metrics() is bootstrap.get_query_metrics()
+        assert isinstance(bootstrap.get_query_metrics(), QueryMetrics)
+    finally:
+        bootstrap.get_query_metrics.clear()
+
+
+def _module_level_logger_names(path: Path) -> list[str]:
+    """回傳頁面檔頂層 `logger = logging.getLogger("...")` 的名稱引數（字串常數才算）。"""
+    names: list[str] = []
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+            continue
+        target, call = node.targets[0], node.value
+        if not (isinstance(target, ast.Name) and target.id == "logger"):
+            continue
+        if isinstance(call, ast.Call) and call.args and isinstance(call.args[0], ast.Constant):
+            names.append(call.args[0].value)
+    return names
+
+
+@pytest.mark.scenario("SC-132")
+def test_sc132_every_view_logger_is_named_after_its_file_under_asset_lab_views() -> None:
+    view_files = sorted(_VIEWS_DIR.glob("*.py"))
+
+    assert len(view_files) == 8
+    for path in view_files:
+        assert _module_level_logger_names(path) == [f"asset_lab.views.{path.stem}"], path.name
+
+
+class TestSc116ClearReadCache:
+    """SC-116：clear_read_cache 立即清掉程序級快取並記一行 log。"""
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_clear_read_cache_empties_cache_and_logs(self, monkeypatch, caplog) -> None:
+        cache = ReadCache(ttl_seconds=300)
+        cache.put(("SELECT 1", ()), [(1,)], generation=cache.generation())
+        monkeypatch.setattr(bootstrap, "get_read_cache", lambda: cache)
+
+        with caplog.at_level(logging.INFO, logger="asset_lab"):
+            bootstrap.clear_read_cache()
+
+        assert cache.get(("SELECT 1", ())) is None
+        records = [r for r in caplog.records if r.name.startswith("asset_lab")]
+        assert len(records) == 1
+        assert "read_cache_cleared" in records[0].getMessage()
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_after_clear_next_read_comes_from_database(self) -> None:
+        conn = libsql.connect(":memory:")
+        SchemaRepository(conn=conn).ensure_schema()
+        cache = ReadCache(ttl_seconds=300)
+        container = bootstrap.build_container(
+            conn=conn, read_cache=cache, query_metrics=QueryMetrics()
+        )
+        assert container.holding_repo.list_holdings() == []
+        # 別處（另一條路徑）改了資料庫，這條連線的快取仍是舊的
+        HoldingRepository(conn=conn).add_holding(
+            holding=HoldingModel(
+                name="別處新增",
+                kind=HOLDING_KIND.ASSET,
+                category=ASSET_CATEGORIES.DEMAND_DEPOSIT,
+                initial_market_value=1.0,
+                initial_cost=1.0,
+            )
+        )
+        assert container.holding_repo.list_holdings() == []
+
+        cache.clear()
+
+        assert [h.name for h in container.holding_repo.list_holdings()] == ["別處新增"]
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_get_read_cache_uses_configured_ttl_and_survives_reconnect(self) -> None:
+        bootstrap.get_read_cache.clear()
+        first = bootstrap.get_read_cache()
+
+        bootstrap.get_connection.clear()
+        bootstrap.get_container.clear()
+
+        assert bootstrap.get_read_cache() is first
+        assert first._ttl_seconds == READ_CACHE.TTL_SECONDS
+        bootstrap.get_read_cache.clear()

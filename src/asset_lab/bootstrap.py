@@ -18,6 +18,8 @@ Repository/Service 不直接讀 st.secrets。
 """
 
 # ==== 原生（標準庫） ====
+import logging
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,17 +31,24 @@ from streamlit.errors import StreamlitSecretNotFoundError
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import (
+    APP_LOGGING,
     BALANCE_INPUT,
     COST_BASIS_INPUT,
+    ERROR_DETAILS,
     HOLDING_KIND,
     INPUT_MODE,
     PREMIUM_INPUT,
     PROTOCOL_DOC_RELATIVE_PATH,
+    READ_CACHE,
 )
+from asset_lab.repositories.connection_layers import CachingConnection, CountingConnection
+from asset_lab.repositories.health_repository import ConnectionHealthRepository
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.house_param_repository import HouseParamRepository
 from asset_lab.repositories.protocol_doc_repository import ProtocolDocRepository
 from asset_lab.repositories.protocol_threshold_repository import ProtocolThresholdRepository
+from asset_lab.repositories.query_metrics import QueryMetrics
+from asset_lab.repositories.read_cache import ReadCache
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.repositories.subjective_trigger_repository import SubjectiveTriggerRepository
@@ -58,6 +67,8 @@ from asset_lab.services.return_service import ReturnService
 
 if TYPE_CHECKING:
     from libsql import Connection
+
+logger = logging.getLogger(__name__)
 
 # st.secrets 內 Turso 連線設定的區段與鍵；值為機密，只存在於 secrets，不寫死於此。
 _SECRET_TURSO_SECTION = "turso"
@@ -85,6 +96,7 @@ class Container:
     record_repo: RecordRepository
     target_repo: TargetRepository
     schema_repo: SchemaRepository
+    health_repo: ConnectionHealthRepository
     protocol_threshold_repo: ProtocolThresholdRepository
     protocol_doc_repo: ProtocolDocRepository
     house_param_repo: HouseParamRepository
@@ -129,33 +141,49 @@ def parse_allowed_emails(raw: object) -> set[str]:
     return {email.strip().lower() for email in candidates if email.strip()}
 
 
-def build_container(*, conn: "Connection") -> Container:
+def build_container(
+    *, conn: "Connection", read_cache: ReadCache, query_metrics: QueryMetrics
+) -> Container:
     """以注入的連線組裝全部 Repository 與 Service（純組裝，無 I/O、無 st.*）。
 
     連線以 keyword args 注入各 Repository；需要 I/O 的 Service（月度錄入）再以 keyword
     args 接上對應 Repository；純運算 Service（報酬/配置/區間/CSV 整形）無依賴直接建立。
 
+    連線分兩層，是全專案唯一的組裝點：
+      counted = CountingConnection(inner=conn)          # 記錄真的打到資料庫的往返
+      cached  = CachingConnection(inner=counted)        # SELECT read-through 快取
+    建表與探測 Repository 接 counted（不經快取，才看得到資料庫的真實狀態；探測若命中快取
+    就永遠不會發現連線失效）；其餘 Repository 與
+    TransactionRepository 接 cached。Repository 本身看不出有快取：commit 成功才清快取，
+    讀到的內容與不經快取時完全相同，只是少了重複往返。
+
     Args:
         conn: libsql 連線；正式由 get_connection 提供，測試可注入假連線驗證接線。
+        read_cache: 程序級讀取快取；正式由 get_read_cache 提供。
+        query_metrics: 查詢量測累計器；正式由 get_query_metrics 提供。
 
     Returns:
         組裝完成的 Container。
     """
-    holding_repo = HoldingRepository(conn=conn)
-    record_repo = RecordRepository(conn=conn)
-    target_repo = TargetRepository(conn=conn)
-    schema_repo = SchemaRepository(conn=conn)
-    protocol_threshold_repo = ProtocolThresholdRepository(conn=conn)
+    counted = CountingConnection(inner=conn, metrics=query_metrics)
+    cached = CachingConnection(inner=counted, cache=read_cache, metrics=query_metrics)
+    holding_repo = HoldingRepository(conn=cached)
+    record_repo = RecordRepository(conn=cached)
+    target_repo = TargetRepository(conn=cached)
+    schema_repo = SchemaRepository(conn=counted)
+    health_repo = ConnectionHealthRepository(conn=counted)
+    protocol_threshold_repo = ProtocolThresholdRepository(conn=cached)
     protocol_doc_repo = ProtocolDocRepository(doc_path=_PROTOCOL_DOC_PATH)
-    house_param_repo = HouseParamRepository(conn=conn)
-    subjective_trigger_repo = SubjectiveTriggerRepository(conn=conn)
-    transaction_repo = TransactionRepository(conn=conn)
+    house_param_repo = HouseParamRepository(conn=cached)
+    subjective_trigger_repo = SubjectiveTriggerRepository(conn=cached)
+    transaction_repo = TransactionRepository(conn=cached)
 
     return Container(
         holding_repo=holding_repo,
         record_repo=record_repo,
         target_repo=target_repo,
         schema_repo=schema_repo,
+        health_repo=health_repo,
         protocol_threshold_repo=protocol_threshold_repo,
         protocol_doc_repo=protocol_doc_repo,
         house_param_repo=house_param_repo,
@@ -203,18 +231,57 @@ def get_connection() -> "Connection":
 
 
 @st.cache_resource
-def get_container() -> Container:
-    """組裝並快取依賴容器，且在首次組裝時確保資料表存在。
-
-    以快取的連線組出容器，並呼叫建表入口（if not exists，重複安全），使 app 首次啟動
-    即備妥三張表。跨 rerun 復用同一容器，避免重複建連線與建表。
+def get_read_cache() -> ReadCache:
+    """持有程序級的讀取快取；與連線脫鉤，重連時不清（資料是否有效跟連線無關）。
 
     Returns:
-        已組裝且 schema 就緒的 Container。
+        全程序共用的 ReadCache。
     """
-    container = build_container(conn=get_connection())
-    container.schema_repo.ensure_schema()
-    return container
+    return ReadCache(ttl_seconds=READ_CACHE.TTL_SECONDS)
+
+
+def clear_read_cache() -> None:
+    """立即清掉程序級讀取快取並記一行 log；供按鈕 on_click 使用（callback 在腳本主體之前執行）。"""
+    get_read_cache().clear()
+    logger.info("event=read_cache_cleared")
+
+
+@st.cache_resource
+def get_query_metrics() -> QueryMetrics:
+    """持有程序級的查詢量測累計器；與連線脫鉤，重連時不清。
+
+    Returns:
+        全程序共用的 QueryMetrics。
+    """
+    return QueryMetrics()
+
+
+@st.cache_resource
+def get_container() -> Container:
+    """組裝並快取依賴容器（純組裝，不碰資料庫）。
+
+    建表不在這裡做：重連會清掉本快取重建容器，若建表綁在這裡，每次重連都會重跑建表。
+    建表由程序級只做一次的 `ensure_schema_once()` 負責。
+
+    Returns:
+        已組裝的 Container。
+    """
+    return build_container(
+        conn=get_connection(),
+        read_cache=get_read_cache(),
+        query_metrics=get_query_metrics(),
+    )
+
+
+@st.cache_resource
+def ensure_schema_once() -> bool:
+    """確保資料表存在，每個程序只做一次；重連時不清，所以重連不會重新建表。
+
+    Returns:
+        固定 True（cache_resource 需要一個可快取的回傳值）。
+    """
+    get_container().schema_repo.ensure_schema()
+    return True
 
 
 # Turso Hrana stream 閒置逾時失效時，libsql 拋出的例外訊息固定含此關鍵字（依實測樣態
@@ -239,56 +306,69 @@ def _is_stale_stream_error(exc: Exception) -> bool:
 def _with_reconnect_on_stale_stream(
     *,
     get_container: Callable[[], Container],
+    ensure_schema_once: Callable[[], object],
     clear_connection_cache: Callable[[], None],
     clear_container_cache: Callable[[], None],
+    on_reconnect: Callable[[], None],
 ) -> Container:
-    """取容器並以 `ensure_schema()` 驗證連線存活；偵測到失效則清快取重連重試一次。
+    """取容器、確保資料表存在並以 `ping()` 驗證連線存活；失效則清快取重連重試一次。
 
-    `ensure_schema()` 是 idempotent 的 `CREATE TABLE IF NOT EXISTS`，順便當作連線存活
-    探測——若底層 Hrana stream 已失效，會在這裡先踩到，而非等使用者頁面查詢時才崩潰
-    （假設：同一條連線若 stream 已死，其上任何操作都會以同一樣態失敗，故此探測結果
-    可代表該連線本次 rerun 對所有 Repository 呼叫皆有效）。
+    探測只要一次 `SELECT 1`；建表交給程序級只做一次的 `ensure_schema_once`，兩者都在同
+    一個 try 內，所以連線失效不論先在哪一步踩到都會被偵測。
 
-    偵測到可重連的失效樣態時，依序清掉連線與容器兩層快取——`get_container()` 組裝的
-    各 Repository 在建構時就綁定了舊連線物件，只清連線快取不足以讓既有 Repository
-    改用新連線，必須連容器一起重建——重取一次並再驗證一次。非可重連例外（SQL 語法
-    錯、約束違反等業務例外）原樣往上拋，不誤判為可重連而吞掉。最多重試一次：第二次
-    仍失敗就讓例外原樣浮出，不無限重連。
+    偵測到可重連的失效樣態時，依序清掉連線與容器兩層快取——容器內各 Repository 在建構
+    時就綁定了舊連線物件，只清連線快取不足以讓既有 Repository 改用新連線——通知
+    `on_reconnect`，重取一次並再驗證一次。不清建表快取：資料表早已建好，重連不必重建。
+    非可重連例外（SQL 語法錯、約束違反等）原樣往上拋，不誤判為可重連而吞掉。最多重試
+    一次：第二次仍失敗就讓例外原樣浮出，不無限重連。
 
     Args:
         get_container: 取得（可能快取的）容器；重連後會再呼叫一次取得新容器。
+        ensure_schema_once: 確保資料表存在（程序級只做一次）。
         clear_connection_cache: 清除連線快取（`get_connection.clear`）。
         clear_container_cache: 清除容器快取（`get_container.clear`）。
+        on_reconnect: 偵測到連線失效、清完快取後呼叫（記 log、標記量測）。
 
     Returns:
         連線已驗證存活（或重連成功）的容器。
     """
     container = get_container()
     try:
-        container.schema_repo.ensure_schema()
+        ensure_schema_once()
+        container.health_repo.ping()
     except Exception as exc:
         if not _is_stale_stream_error(exc):
             raise
         clear_connection_cache()
         clear_container_cache()
+        on_reconnect()
         container = get_container()
-        container.schema_repo.ensure_schema()
+        ensure_schema_once()
+        container.health_repo.ping()
     return container
 
 
-def get_resilient_container() -> Container:
-    """app.py 實際取用容器的入口：確保連線存活，失效時自動清快取重連並重試一次。
+def _on_reconnect() -> None:
+    """連線失效已重連：記一行警告，並在本次執行的量測標記已重連。"""
+    get_query_metrics().mark_reconnected()
+    logger.warning("event=reconnected 連線失效已重連")
 
-    每次 rerun 都會呼叫（見 `_with_reconnect_on_stale_stream`），取代直接呼叫
-    `get_container()`——後者本身仍是單純的 cached 組裝，不含存活驗證與重連。
+
+def get_resilient_container() -> Container:
+    """取用容器的入口：確保連線存活，失效時自動清快取重連並重試一次。
+
+    由 `rerun_runtime.verified_container` 在每次執行第一次需要容器時呼叫；頁面與
+    app.py 不直接呼叫。後者本身仍是單純的 cached 組裝，不含存活驗證與重連。
 
     Returns:
         連線已驗證存活的容器。
     """
     return _with_reconnect_on_stale_stream(
         get_container=get_container,
+        ensure_schema_once=ensure_schema_once,
         clear_connection_cache=get_connection.clear,
         clear_container_cache=get_container.clear,
+        on_reconnect=_on_reconnect,
     )
 
 
@@ -307,3 +387,52 @@ def allowed_emails() -> set[str]:
     except StreamlitSecretNotFoundError:
         return set()
     return parse_allowed_emails(raw)
+
+
+# 以 handler 名稱判斷是否已掛過：Streamlit 每次重跑都會呼叫 ensure_logging_configured，
+# 且 logger 是程序級單例，沒有這個判斷會讓同一行 log 重複輸出。
+_LOG_HANDLER_NAME = "asset_lab_stderr"
+
+
+def configure_logging(*, logger_name: str, level: str, fmt: str) -> None:
+    """在指定 logger 上掛一個輸出到 stderr 的 handler 並設定 level（冪等）。
+
+    不動 root logger、propagate 維持預設 True（pytest caplog 掛在 root，才收得到）。
+    Streamlit 只設定自己的 streamlit logger，root 沒有 handler，不會重複輸出；雲端
+    Manage app → Logs 會收到 stderr。
+
+    Args:
+        logger_name: 要設定的 logger 名稱（專案命名空間）。
+        level: log level 名稱，例如 "INFO"。
+        fmt: log 格式字串。
+    """
+    target = logging.getLogger(logger_name)
+    target.setLevel(level)
+    if any(handler.get_name() == _LOG_HANDLER_NAME for handler in target.handlers):
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.set_name(_LOG_HANDLER_NAME)
+    handler.setFormatter(logging.Formatter(fmt))
+    target.addHandler(handler)
+
+
+def ensure_logging_configured() -> None:
+    """以 APP_LOGGING 常數設定專案 logger；app.py 每次執行呼叫，重複呼叫安全。"""
+    configure_logging(
+        logger_name=APP_LOGGING.LOGGER_NAMESPACE,
+        level=APP_LOGGING.LEVEL,
+        fmt=APP_LOGGING.FORMAT,
+    )
+
+
+def resolve_error_detail_mode(*, raw: str | None) -> str:
+    """環境變數原始值轉成 Streamlit 的錯誤細節模式（純函式）。
+
+    Args:
+        raw: 環境變數原始值，未設定為 None。
+
+    Returns:
+        值（去空白、轉小寫）在開啟集合內回 ERROR_DETAILS.SHOW，其餘一律 ERROR_DETAILS.HIDE。
+    """
+    normalized = (raw or "").strip().lower()
+    return ERROR_DETAILS.SHOW if normalized in ERROR_DETAILS.ENABLED_VALUES else ERROR_DETAILS.HIDE

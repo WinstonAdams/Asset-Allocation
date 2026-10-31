@@ -26,14 +26,11 @@ from asset_lab.core.constants import (
     ASSET_CATEGORIES,
     HOLDING_KIND,
     HOLDING_PURPOSE,
-    HOUSE_PARAM_KEY,
-    PROTOCOL_LEVEL_CODE,
 )
 from asset_lab.core.exceptions import AssetLabError
 from asset_lab.core.utils import parse_amount
 from asset_lab.models.holding import HoldingModel
-from asset_lab.models.house import HouseParamModel, HouseParams
-from asset_lab.models.protocol import ProtocolThresholdModel
+from asset_lab.models.house import HouseParams
 from asset_lab.models.target import TargetAllocationModel
 from asset_lab.repositories.holding_repository import HoldingRepository
 from asset_lab.repositories.house_param_repository import HouseParamRepository
@@ -42,7 +39,7 @@ from asset_lab.repositories.target_repository import TargetRepository
 from asset_lab.services.house_service import HouseService
 from asset_lab.services.protocol_service import ProtocolService
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.settings")
 
 # 內部值（HOLDING_KIND.ASSET/LIABILITY）供 DB 與業務判斷使用，不可異動；
 # 此對照僅供畫面顯示中文，不影響選取後取得的內部值。
@@ -292,15 +289,8 @@ def _render_protocol_thresholds(
     )
 
     if st.button("儲存門檻"):
-        protocol_service.validate_thresholds(l1=l1, l2=l2, l3=l3)
-        for level, value in (
-            (PROTOCOL_LEVEL_CODE.L1, l1),
-            (PROTOCOL_LEVEL_CODE.L2, l2),
-            (PROTOCOL_LEVEL_CODE.L3, l3),
-        ):
-            protocol_threshold_repo.upsert_threshold(
-                threshold=ProtocolThresholdModel(level=level, drawdown_threshold=value)
-            )
+        thresholds = protocol_service.build_threshold_models(l1=l1, l2=l2, l3=l3)
+        protocol_threshold_repo.upsert_thresholds(thresholds=thresholds)
         st.success("已儲存回撤門檻")
 
 
@@ -389,21 +379,8 @@ def _render_house_params(
             test_annual_rate=test_annual_rate,
             loan_years=int(loan_years),
         )
-        house_service.validate_params(params=candidate)
-        for key, value in (
-            (HOUSE_PARAM_KEY.TARGET_TOTAL_PRICE, candidate.target_total_price),
-            (HOUSE_PARAM_KEY.TARGET_YEAR, float(candidate.target_year)),
-            (HOUSE_PARAM_KEY.MONTHLY_AFTER_TAX_INCOME, candidate.monthly_after_tax_income),
-            (HOUSE_PARAM_KEY.INCOME_THRESHOLD, candidate.income_threshold),
-            (HOUSE_PARAM_KEY.CASH_FLOOR, candidate.cash_floor),
-            (HOUSE_PARAM_KEY.DOWN_PAYMENT_RATIO, candidate.down_payment_ratio),
-            (HOUSE_PARAM_KEY.PAYMENT_CAP_RATIO, candidate.payment_cap_ratio),
-            (HOUSE_PARAM_KEY.TEST_ANNUAL_RATE, candidate.test_annual_rate),
-            (HOUSE_PARAM_KEY.LOAN_YEARS, float(candidate.loan_years)),
-        ):
-            house_param_repo.upsert_param(
-                param=HouseParamModel(param_key=key, param_value=value)
-            )
+        params = house_service.build_param_models(params=candidate)
+        house_param_repo.upsert_params(params=params)
         st.success("已儲存買房參數")
 
 

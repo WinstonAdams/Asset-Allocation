@@ -38,6 +38,16 @@ STRANGER_EMAIL = "stranger@example.test"
 ALLOWED = frozenset({"owner@example.test"})
 
 
+@pytest.fixture(autouse=True)
+def _restore_error_details_option():
+    """app.py 每次執行都 st.set_option（程序全域），測試後還原以免污染其他測試。"""
+    import streamlit as st
+
+    original = st.get_option("client.showErrorDetails")
+    yield
+    st.set_option("client.showErrorDetails", original)
+
+
 class _CapturingRunner(LocalScriptRunner):
     """記錄每個被建立的 LocalScriptRunner 實例，供測試讀取其原始 ForwardMsg 佇列。"""
 

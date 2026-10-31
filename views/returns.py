@@ -23,7 +23,7 @@ from asset_lab.models.results import ReturnResult
 from asset_lab.repositories.record_repository import RecordRepository
 from asset_lab.services.period_service import PeriodService
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.returns")
 
 # MWR 無法收斂時的降級顯示文字（與資料層的 not_converged 狀態對應）。
 _MWR_UNAVAILABLE = "無法計算"

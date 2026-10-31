@@ -15,7 +15,7 @@ import streamlit as st
 from asset_lab.bootstrap import Container
 from asset_lab.core.exceptions import AssetLabError
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("asset_lab.views.protocol")
 
 
 def _container() -> Container:

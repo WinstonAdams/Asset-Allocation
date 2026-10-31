@@ -13,21 +13,27 @@ HouseParams/SubjectiveTriggerModel/AffordabilityResult 驗證，不連任何 DB�
 """
 
 # ==== 原生（標準庫） ====
+import logging
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 # ==== 第三方套件 ====
 import pandas as pd
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
 from asset_lab.core.constants import (
     ASSET_CATEGORIES,
+    ERROR_DETAILS,
     HOLDING_PURPOSE,
     HOUSE_PARAM_KEY,
     HOUSE_TRIGGER,
 )
+from asset_lab.core.exceptions import PersistenceError
+from asset_lab.error_boundary import UNEXPECTED_ERROR_MESSAGE
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.house import HouseParamModel, HouseParams, SubjectiveTriggerModel
 from asset_lab.models.record import MonthlyRecordModel
@@ -830,17 +836,52 @@ class _StubRecordRepo:
 
 
 class _StubSubjectiveTriggerRepo:
-    """主觀觸發替身：read_triggers 回傳已存勾選狀態；upsert_trigger 呼叫供斷言記錄。"""
+    """主觀觸發替身：read_triggers 回傳已存勾選狀態；upsert_trigger 呼叫供斷言記錄。
 
-    def __init__(self, triggers: list[SubjectiveTriggerModel]):
+    upsert_error 不為 None 時，upsert_trigger 改為拋出該例外（模擬寫入失敗）。
+    """
+
+    def __init__(
+        self, triggers: list[SubjectiveTriggerModel], *, upsert_error: Exception | None = None
+    ):
         self._triggers = list(triggers)
+        self._upsert_error = upsert_error
         self.upserted: list[SubjectiveTriggerModel] = []
 
     def read_triggers(self):
         return self._triggers
 
     def upsert_trigger(self, *, trigger):
+        if self._upsert_error is not None:
+            raise self._upsert_error
         self.upserted.append(trigger)
+
+
+@pytest.fixture(autouse=True)
+def callback_entry_probe():
+    """widget callback 入口會驗證連線並讀取快取；替換成回傳測試指定的容器。
+
+    state.calls 記錄探測次數；state.container 不為 None 時回傳它（模擬重連後的新容器），
+    否則回傳測試注入 session 的替身容器。
+    """
+    state = SimpleNamespace(calls=0, container=None)
+
+    def _probe():
+        state.calls += 1
+        return state.container or st.session_state["container"]
+
+    cache = SimpleNamespace(expire_if_stale=lambda: None)
+    with mock.patch("asset_lab.bootstrap.get_resilient_container", side_effect=_probe), \
+         mock.patch("asset_lab.bootstrap.get_read_cache", return_value=cache):
+        yield state
+
+
+@pytest.fixture(autouse=True)
+def restore_error_details_option():
+    """st.set_option 是程序全域設定，測試後還原。"""
+    original = st.get_option("client.showErrorDetails")
+    yield
+    st.set_option("client.showErrorDetails", original)
 
 
 def _house_page_params(**overrides: float) -> dict[str, float]:
@@ -909,6 +950,7 @@ def _run_house_page(
     holdings: list[HoldingModel],
     records_df: pd.DataFrame,
     triggers: list[SubjectiveTriggerModel],
+    trigger_repo: _StubSubjectiveTriggerRepo | None = None,
 ) -> AppTest:
     """以替身容器跑 views/house.py，回傳已 run() 完成的 AppTest。
 
@@ -920,7 +962,7 @@ def _run_house_page(
         house_param_repo=_StubHouseParamRepo(params),
         holding_repo=_StubHoldingRepo(holdings),
         record_repo=_StubRecordRepo(records_df),
-        subjective_trigger_repo=_StubSubjectiveTriggerRepo(triggers),
+        subjective_trigger_repo=trigger_repo or _StubSubjectiveTriggerRepo(triggers),
         affordability_service=AffordabilityService(),
         house_service=HouseService(),
     )
@@ -1064,3 +1106,81 @@ class TestHousePageAffordabilityMetricUnsetIncomeDisplay:
         )
         assert affordability_metric.value == "—"
         assert affordability_metric.value != "0 元"
+
+
+class TestHousePageCallbackReconnectAndErrors:
+    """SC-111／SC-127：勾選主觀觸發條件的 callback 自行驗證連線，失敗時頁面照常渲染。"""
+
+    @staticmethod
+    def _run(*, trigger_repo=None) -> AppTest:
+        return _run_house_page(
+            params=_house_page_params(),
+            holdings=_house_page_holdings(),
+            records_df=_house_page_records(),
+            triggers=[],
+            trigger_repo=trigger_repo,
+        )
+
+    @pytest.mark.scenario("SC-111")
+    def test_sc111_checkbox_writes_via_verified_container_probed_once(
+        self, callback_entry_probe
+    ):
+        at = self._run()
+        assert callback_entry_probe.calls == 0
+        # 重連後換了新容器：寫入須走驗證後的新容器，而非上一輪抓住的 repo
+        fresh_repo = _StubSubjectiveTriggerRepo([])
+        old_container = at.session_state["container"]
+        old_repo = old_container.subjective_trigger_repo
+        callback_entry_probe.container = SimpleNamespace(
+            **{**vars(old_container), "subjective_trigger_repo": fresh_repo}
+        )
+
+        at.checkbox(key=f"house_trigger_{HOUSE_TRIGGER.ANCHOR}").check().run()
+
+        assert not at.exception
+        assert not at.error
+        assert callback_entry_probe.calls == 1
+        assert fresh_repo.upserted == [
+            SubjectiveTriggerModel(trigger_key=HOUSE_TRIGGER.ANCHOR, checked=True)
+        ]
+        assert old_repo.upserted == []
+        assert at.checkbox(key=f"house_trigger_{HOUSE_TRIGGER.ANCHOR}").value is True
+
+    @pytest.mark.scenario("SC-127")
+    def test_sc127_unexpected_write_failure_shows_message_and_page_still_renders(
+        self, caplog
+    ):
+        st.set_option("client.showErrorDetails", ERROR_DETAILS.HIDE)
+        repo = _StubSubjectiveTriggerRepo(
+            [], upsert_error=RuntimeError("libsql native error at /srv/app/secret_path.py")
+        )
+        at = self._run(trigger_repo=repo)
+
+        with caplog.at_level(logging.ERROR, logger="asset_lab.error_boundary"):
+            at.checkbox(key=f"house_trigger_{HOUSE_TRIGGER.ANCHOR}").check().run()
+
+        assert not at.exception
+        assert [e.value for e in at.error] == [UNEXPECTED_ERROR_MESSAGE]
+        assert [s.value for s in at.subheader if s.value == "觸發條件檢核"] == ["觸發條件檢核"]
+        # 訊息在標題下方、其後的頁面內容之前
+        order = [el.type for el in at.main]
+        assert order.index("title") < order.index("error") < order.index("subheader")
+        details = [str(r.exc_info[1]) for r in caplog.records if r.exc_info]
+        assert any("libsql native error" in text for text in details)
+
+        # 訊息顯示一次後清除
+        at.run()
+        assert not at.error
+
+    @pytest.mark.scenario("SC-127")
+    def test_sc127_domain_write_failure_shows_original_message(self):
+        st.set_option("client.showErrorDetails", ERROR_DETAILS.HIDE)
+        repo = _StubSubjectiveTriggerRepo(
+            [], upsert_error=PersistenceError("存檔失敗，資料未變更，請重試")
+        )
+        at = self._run(trigger_repo=repo)
+
+        at.checkbox(key=f"house_trigger_{HOUSE_TRIGGER.COGNITION}").check().run()
+
+        assert not at.exception
+        assert [e.value for e in at.error] == ["存檔失敗，資料未變更，請重試"]

@@ -16,6 +16,8 @@ import pytest
 from asset_lab import bootstrap
 from asset_lab.core.exceptions import ProtocolDocError
 from asset_lab.repositories.protocol_doc_repository import ProtocolDocRepository
+from asset_lab.repositories.query_metrics import QueryMetrics
+from asset_lab.repositories.read_cache import ReadCache
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REAL_PROTOCOL_DOC_PATH = REPO_ROOT / "docs" / "PROTOCOL.md"
@@ -88,7 +90,11 @@ class TestBootstrapWiresRealProtocolDocPath:
 
     @pytest.mark.scenario("SC-048")
     def test_sc048_container_protocol_doc_repo_reads_real_file(self):
-        container = bootstrap.build_container(conn=_FakeConnection())
+        container = bootstrap.build_container(
+            conn=_FakeConnection(),
+            read_cache=ReadCache(ttl_seconds=300),
+            query_metrics=QueryMetrics(),
+        )
 
         text = container.protocol_doc_repo.read_protocol_markdown()
 

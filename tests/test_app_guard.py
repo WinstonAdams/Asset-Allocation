@@ -22,6 +22,9 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
+from asset_lab.core.constants import ERROR_DETAILS
+from asset_lab.error_boundary import UNEXPECTED_ERROR_MESSAGE
+
 # 注意：不在模組層級 import app.py——app.py 在載入時即呼叫 main()（觸發 secrets 讀取），
 # 只有透過 AppTest 在受控替身下執行才安全。守門放行後存依賴容器用的 session key 直接內聯
 # （與 app.CONTAINER_SESSION_KEY 對齊），避免 import 時副作用。
@@ -32,6 +35,16 @@ STRANGER_EMAIL = "stranger@example.test"
 ALLOWED = frozenset({OWNER_EMAIL})
 
 APP_DIR = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _restore_error_details_option():
+    """app.py 每次執行都 st.set_option（程序全域），測試後還原以免污染其他測試。"""
+    import streamlit as st
+
+    original = st.get_option("client.showErrorDetails")
+    yield
+    st.set_option("client.showErrorDetails", original)
 
 
 def _app() -> AppTest:
@@ -103,3 +116,138 @@ class TestSc034StrangerFailClosed:
             app = _app().run()
         assert [t.value for t in app.title] == ["無權限"]
         assert CONTAINER_SESSION_KEY not in app.session_state
+
+
+class TestSc116SidebarReloadButton:
+    """SC-116：側欄「重新讀取資料」在每頁可見，且在連線確認之前渲染。"""
+
+    @staticmethod
+    def _owner_user() -> SimpleNamespace:
+        return SimpleNamespace(is_logged_in=True, email=OWNER_EMAIL)
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_sidebar_buttons_render_even_when_database_is_down(self):
+        # 資料庫故障（取容器拋錯）時，重新讀取與登出仍在側欄，使用者還能登出
+        import streamlit as st
+
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", self._owner_user()), \
+             mock.patch(
+                 "asset_lab.bootstrap.get_resilient_container",
+                 side_effect=RuntimeError("db down"),
+             ):
+            app = _app().run()
+
+        labels = [b.label for b in app.sidebar.button]
+        assert "重新讀取資料" in labels
+        assert "登出" in labels
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_clicking_reload_runs_clear_read_cache_callback(self):
+        import streamlit as st
+
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", self._owner_user()), \
+             mock.patch(
+                 "asset_lab.bootstrap.get_resilient_container",
+                 side_effect=RuntimeError("db down"),
+             ), \
+             mock.patch("asset_lab.bootstrap.clear_read_cache") as clear:
+            app = _app().run()
+            next(b for b in app.sidebar.button if b.label == "重新讀取資料").click()
+            app.run()
+
+        clear.assert_called_once_with()
+
+    @pytest.mark.scenario("SC-116")
+    def test_sc116_reload_button_is_not_shown_to_logged_out_visitors(self):
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED):
+            app = _app().run()
+
+        assert "重新讀取資料" not in [b.label for b in app.sidebar.button]
+
+
+class TestSc108VerifiedContainerEntry:
+    """SC-108：守門先於連線確認；放行後整輪只經 verified_container 驗證一次。"""
+
+    @pytest.mark.scenario("SC-108")
+    def test_sc108_logged_out_visitor_never_triggers_connection_check(self):
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch("asset_lab.bootstrap.get_resilient_container") as probe:
+            _app().run()
+
+        probe.assert_not_called()
+
+    @pytest.mark.scenario("SC-108")
+    def test_sc108_stranger_never_triggers_connection_check(self):
+        import streamlit as st
+
+        stranger = SimpleNamespace(is_logged_in=True, email=STRANGER_EMAIL)
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", stranger), \
+             mock.patch("asset_lab.bootstrap.get_resilient_container") as probe:
+            _app().run()
+
+        probe.assert_not_called()
+
+    @pytest.mark.scenario("SC-108")
+    def test_sc108_owner_probe_runs_once_per_rerun_and_container_goes_to_session(self):
+        import streamlit as st
+
+        container = SimpleNamespace(name="fake-container")
+        owner = SimpleNamespace(is_logged_in=True, email=OWNER_EMAIL)
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", owner), \
+             mock.patch(
+                 "asset_lab.bootstrap.get_resilient_container", return_value=container
+             ) as probe, \
+             mock.patch("asset_lab.bootstrap.get_read_cache"):
+            app = _app().run()
+
+        probe.assert_called_once_with()
+        assert app.session_state[CONTAINER_SESSION_KEY] is container
+
+
+class TestSc123AppBoundary:
+    """SC-123：守門放行後的未預期錯誤只顯示通用訊息；守門的停止不被當成錯誤。"""
+
+    @staticmethod
+    def _run_owner_with_db_error(monkeypatch, env_value: str | None) -> AppTest:
+        import streamlit as st
+
+        if env_value is None:
+            monkeypatch.delenv(ERROR_DETAILS.ENV_VAR, raising=False)
+        else:
+            monkeypatch.setenv(ERROR_DETAILS.ENV_VAR, env_value)
+        owner = SimpleNamespace(is_logged_in=True, email=OWNER_EMAIL)
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED), \
+             mock.patch.object(st, "user", owner), \
+             mock.patch(
+                 "asset_lab.bootstrap.get_resilient_container",
+                 side_effect=RuntimeError("libsql native error at /srv/secret_path.py"),
+             ):
+            return _app().run()
+
+    @pytest.mark.scenario("SC-123")
+    def test_sc123_unexpected_error_after_login_shows_generic_message(self, monkeypatch):
+        app = self._run_owner_with_db_error(monkeypatch, None)
+
+        assert not app.exception
+        assert [e.value for e in app.error] == [UNEXPECTED_ERROR_MESSAGE]
+        # 側欄仍可操作，資料庫故障時使用者還能登出
+        assert "登出" in [b.label for b in app.sidebar.button]
+
+    @pytest.mark.scenario("SC-123")
+    def test_sc123_login_gate_stop_is_not_reported_as_error(self):
+        with mock.patch("asset_lab.bootstrap.allowed_emails", return_value=ALLOWED):
+            app = _app().run()
+
+        assert not app.exception
+        assert UNEXPECTED_ERROR_MESSAGE not in [e.value for e in app.error]
+
+    @pytest.mark.scenario("SC-125")
+    def test_sc125_enabled_switch_surfaces_the_original_error(self, monkeypatch):
+        app = self._run_owner_with_db_error(monkeypatch, "1")
+
+        assert len(app.exception) == 1
+        assert UNEXPECTED_ERROR_MESSAGE not in [e.value for e in app.error]

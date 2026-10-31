@@ -12,6 +12,7 @@ test_monthly_input.py）覆蓋，這裡用真正的純運算 Service 搭配 Repo
 """
 
 # ==== 原生（標準庫） ====
+import ast
 import logging
 from datetime import date
 from pathlib import Path
@@ -20,6 +21,7 @@ from unittest import mock
 
 # ==== 第三方套件 ====
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
@@ -134,6 +136,24 @@ class _StubRecordRepo:
         return list(self.month_records.get(year_month, []))
 
 
+@pytest.fixture(autouse=True)
+def fragment_entry_probe():
+    """編輯器 fragment 入口會驗證連線並讀取快取；替換成直接回傳測試注入的替身容器。
+
+    回傳的 SimpleNamespace.calls 記錄探測次數，供斷言「每次執行最多探測一次」。
+    """
+    state = SimpleNamespace(calls=0)
+
+    def _probe():
+        state.calls += 1
+        return st.session_state["container"]
+
+    cache = SimpleNamespace(expire_if_stale=lambda: None)
+    with mock.patch("asset_lab.bootstrap.get_resilient_container", side_effect=_probe), \
+         mock.patch("asset_lab.bootstrap.get_read_cache", return_value=cache):
+        yield state
+
+
 @pytest.fixture
 def record_repo():
     """每個測試獨立的記錄層替身。"""
@@ -225,6 +245,12 @@ def _keys(at: AppTest) -> set[str]:
 def _all_written_text(at: AppTest) -> set[str]:
     """彙總 markdown 輸出文字，供斷言預覽內容用。"""
     return {m.value for m in at.markdown}
+
+
+def _net_investment_of(texts: set[str]) -> int:
+    """從「推算本月淨投入：1,234」文字取出整數。"""
+    (text,) = texts
+    return int(text.split("：")[1].replace(",", ""))
 
 
 def _page_text(at: AppTest) -> str:
@@ -1072,3 +1098,123 @@ class TestMonthRecordsTable:
         after = at.dataframe[0].value.to_dict("records")[0]
         assert after["應繳金額"] == "28,000"
         assert after["提醒"] == ""
+
+
+class TestEditorIsFragment:
+    """月度錄入編輯器為局部重跑區塊（AppTest 觀察不到重跑範圍，以結構與本體行為間接驗證）。"""
+
+    @pytest.mark.scenario("SC-120")
+    def test_sc120_editor_function_is_decorated_with_rerun_fragment(self):
+        tree = ast.parse((APP_DIR / "views" / "input.py").read_text(encoding="utf-8"))
+        editor = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_render_record_editor"
+        )
+        decorators = [d for d in editor.decorator_list if isinstance(d, ast.Call)]
+        assert [d.func.id for d in decorators if isinstance(d.func, ast.Name)] == [
+            "rerun_fragment"
+        ]
+        label = next(kw.value for kw in decorators[0].keywords if kw.arg == "label")
+        assert isinstance(label, ast.Constant) and label.value == "月度錄入編輯器"
+
+    @pytest.mark.scenario("SC-120")
+    def test_sc120_editor_only_takes_the_stable_year_month_argument(self):
+        # fragment 單獨重跑沿用上一次整頁重跑傳入的參數，不能把容器或資料清單當參數
+        tree = ast.parse((APP_DIR / "views" / "input.py").read_text(encoding="utf-8"))
+        editor = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_render_record_editor"
+        )
+        assert [a.arg for a in editor.args.args] == []
+        assert [a.arg for a in editor.args.kwonlyargs] == ["target_ym"]
+
+    @pytest.mark.scenario("SC-120")
+    def test_sc120_editor_runs_and_preview_follows_amount_change(self, fragment_entry_probe):
+        at = _run_app(holding_id=_DEMAND_ID)
+        at.text_input(key="balance_amount").set_value("100000").run()
+        before = {t for t in _all_written_text(at) if t.startswith("推算本月淨投入")}
+        at.text_input(key="balance_amount").set_value("150000").run()
+        after = {t for t in _all_written_text(at) if t.startswith("推算本月淨投入")}
+
+        assert not at.exception
+        # 預覽隨金額即時更新：100,000 與 150,000 推算出的淨投入文字不同，且相差 50,000
+        assert len(before) == 1 and len(after) == 1
+        assert before != after
+        assert _net_investment_of(after) - _net_investment_of(before) == 50000
+        # 四次執行（載入、選項目、改金額欄兩次）各探測一次
+        assert fragment_entry_probe.calls == 4
+
+    @pytest.mark.scenario("SC-120")
+    @pytest.mark.scenario("SC-131")
+    def test_sc131_editor_run_is_logged_as_fragment(self, caplog):
+        with caplog.at_level(logging.INFO, logger="asset_lab.rerun_runtime"):
+            _run_app(holding_id=_DEMAND_ID)
+
+        lines = [r.getMessage() for r in caplog.records if "重跑量測" in r.getMessage()]
+        assert lines
+        assert all("kind=fragment page=月度錄入編輯器" in line for line in lines)
+
+    @pytest.mark.scenario("SC-121")
+    @pytest.mark.scenario("SC-131")
+    def test_sc121_save_success_reruns_whole_page_with_flash_and_new_table(
+        self, record_repo, caplog
+    ):
+        at = _run_app(record_repo=record_repo, holding_id=_DEMAND_ID)
+        at.text_input(key="balance_amount").set_value("400000").run()
+        record_repo.month_records["2026-05"] = [
+            _rec(_DEMAND_ID, "2026-05", market_value=400000.0, net_investment=0.0)
+        ]
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="asset_lab.rerun_runtime"):
+            _click(at, "儲存此列")
+
+        assert not at.exception
+        assert [s.value for s in at.success] == ["已儲存"]
+        assert len(at.dataframe) == 1
+        row = at.dataframe[0].value.to_dict("records")[0]
+        assert row["市值 / 餘額"] == "400,000"
+        lines = [r.getMessage() for r in caplog.records if "重跑量測" in r.getMessage()]
+        # 存檔那次被 st.rerun 中斷記一行，接著的整頁重跑再記一行
+        assert "interrupted=true" in lines[0]
+        assert len(lines) >= 2
+
+    @pytest.mark.scenario("SC-121")
+    def test_sc121_delete_success_reruns_whole_page_with_flash(self, record_repo):
+        record_repo.month_records["2026-05"] = [
+            _rec(_DEMAND_ID, "2026-05", market_value=400000.0, net_investment=0.0)
+        ]
+        original_delete = record_repo.delete_record_and_upsert
+
+        def _delete(*, holding_id, year_month, records):
+            original_delete(holding_id=holding_id, year_month=year_month, records=records)
+            record_repo.month_records[year_month] = [
+                r for r in record_repo.month_records[year_month] if r.holding_id != holding_id
+            ]
+
+        record_repo.delete_record_and_upsert = _delete
+        at = _run_app(record_repo=record_repo, holding_id=_DEMAND_ID)
+        assert len(at.dataframe) == 1
+
+        _click(at, "刪除此列")
+
+        assert [s.value for s in at.success] == ["已刪除"]
+        assert len(record_repo.deleted_and_upserted) == 1
+        # 整頁重跑後，該列從表格消失
+        assert len(at.dataframe) == 0
+        assert "本月尚無已存紀錄" in [c.value for c in at.caption]
+
+    @pytest.mark.scenario("SC-122")
+    def test_sc122_write_failure_inside_fragment_keeps_friendly_message(self, caplog):
+        record_repo = TestWriteFailureShowsFriendlyMessage._failing_repo()
+        at = _run_app(record_repo=record_repo, holding_id=_DEMAND_ID)
+        at.text_input(key="balance_amount").set_value("400000").run()
+        with caplog.at_level(logging.ERROR):
+            _click(at, "儲存此列")
+
+        assert not at.exception
+        assert [e.value for e in at.error] == [_FRIENDLY_WRITE_FAILURE]
+        assert "secret SQL detail" in caplog.text
+        assert "secret SQL" not in _page_text(at)
+        assert record_repo.batch_upserted == []
