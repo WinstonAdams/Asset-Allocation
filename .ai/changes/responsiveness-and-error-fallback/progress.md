@@ -31,7 +31,7 @@
 | 3-1 程式碼清理 | 完成 | 8 條發現；只修 SAFE 3 項（測試註解 SC 編號×2、多餘空行）；單筆 upsert 保留 |
 | 3-2 安全審查 | 完成 | 無 CRITICAL/HIGH；filelock 3.29.7→4.2.4（pip-audit 0）；set_option 時機記為已知限制＋上線目視 |
 | 3-3 規則符合度審查 | 完成 | 無 CRITICAL/HIGH；修 MEDIUM-1/2、LOW-1（import 空行、docstring、型別提示）；LOW-2 event= 鍵值格式保留 |
-| 3-4 行為對映審查 | 未開始 | AI 比對 SC 描述 vs test 內容 |
+| 3-4 行為對映審查 | 完成 | 25 SC／171 對映；補強 6 項斷言（SC-111/120/121×2/127/129），未變紅；review.md 重複段已去重 |
 | 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
 
 ## Phase 4：收尾

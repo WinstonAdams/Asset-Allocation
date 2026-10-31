@@ -1162,6 +1162,9 @@ class TestHousePageCallbackReconnectAndErrors:
         assert not at.exception
         assert [e.value for e in at.error] == [UNEXPECTED_ERROR_MESSAGE]
         assert [s.value for s in at.subheader if s.value == "觸發條件檢核"] == ["觸發條件檢核"]
+        # 訊息在標題下方、其後的頁面內容之前
+        order = [el.type for el in at.main]
+        assert order.index("title") < order.index("error") < order.index("subheader")
         details = [str(r.exc_info[1]) for r in caplog.records if r.exc_info]
         assert any("libsql native error" in text for text in details)
 

@@ -265,6 +265,23 @@ def test_sc108_verified_container_probes_once_per_execution(probe_env) -> None:
     probe_env.probe.assert_called_once_with()
 
 
+@pytest.mark.scenario("SC-111")
+def test_sc111_callback_probe_before_scope_is_reused_by_the_page_rerun(probe_env) -> None:
+    # 勾選 callback 在腳本主體之前執行（scope 之外）先探測；
+    # 接著頁面重跑進入最外層 scope 再取容器，同一輪合計只探測一次
+    from_callback = verified_container()
+    with _scope():
+        from_page = verified_container()
+        verified_container()
+
+    assert from_callback is from_page is probe_env.container
+    probe_env.probe.assert_called_once_with()
+    # 這一輪結束後暫存清掉，下一輪才重新探測
+    with _scope():
+        verified_container()
+    assert probe_env.probe.call_count == 2
+
+
 @pytest.mark.scenario("SC-108")
 def test_sc108_verified_container_writes_session_state_every_call(probe_env) -> None:
     with _scope():

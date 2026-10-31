@@ -247,6 +247,12 @@ def _all_written_text(at: AppTest) -> set[str]:
     return {m.value for m in at.markdown}
 
 
+def _net_investment_of(texts: set[str]) -> int:
+    """從「推算本月淨投入：1,234」文字取出整數。"""
+    (text,) = texts
+    return int(text.split("：")[1].replace(",", ""))
+
+
 def _page_text(at: AppTest) -> str:
     """彙總頁面上所有文字型元素，供斷言某段文字完全不出現。"""
     elements = [
@@ -1127,12 +1133,18 @@ class TestEditorIsFragment:
     @pytest.mark.scenario("SC-120")
     def test_sc120_editor_runs_and_preview_follows_amount_change(self, fragment_entry_probe):
         at = _run_app(holding_id=_DEMAND_ID)
+        at.text_input(key="balance_amount").set_value("100000").run()
+        before = {t for t in _all_written_text(at) if t.startswith("推算本月淨投入")}
         at.text_input(key="balance_amount").set_value("150000").run()
+        after = {t for t in _all_written_text(at) if t.startswith("推算本月淨投入")}
 
         assert not at.exception
-        assert any("推算本月淨投入" in text for text in _all_written_text(at))
-        # 三次執行（載入、選項目、改金額欄）各探測一次
-        assert fragment_entry_probe.calls == 3
+        # 預覽隨金額即時更新：100,000 與 150,000 推算出的淨投入文字不同，且相差 50,000
+        assert len(before) == 1 and len(after) == 1
+        assert before != after
+        assert _net_investment_of(after) - _net_investment_of(before) == 50000
+        # 四次執行（載入、選項目、改金額欄兩次）各探測一次
+        assert fragment_entry_probe.calls == 4
 
     @pytest.mark.scenario("SC-120")
     @pytest.mark.scenario("SC-131")
@@ -1161,6 +1173,8 @@ class TestEditorIsFragment:
         assert not at.exception
         assert [s.value for s in at.success] == ["已儲存"]
         assert len(at.dataframe) == 1
+        row = at.dataframe[0].value.to_dict("records")[0]
+        assert row["市值 / 餘額"] == "400,000"
         lines = [r.getMessage() for r in caplog.records if "重跑量測" in r.getMessage()]
         # 存檔那次被 st.rerun 中斷記一行，接著的整頁重跑再記一行
         assert "interrupted=true" in lines[0]
@@ -1168,11 +1182,28 @@ class TestEditorIsFragment:
 
     @pytest.mark.scenario("SC-121")
     def test_sc121_delete_success_reruns_whole_page_with_flash(self, record_repo):
+        record_repo.month_records["2026-05"] = [
+            _rec(_DEMAND_ID, "2026-05", market_value=400000.0, net_investment=0.0)
+        ]
+        original_delete = record_repo.delete_record_and_upsert
+
+        def _delete(*, holding_id, year_month, records):
+            original_delete(holding_id=holding_id, year_month=year_month, records=records)
+            record_repo.month_records[year_month] = [
+                r for r in record_repo.month_records[year_month] if r.holding_id != holding_id
+            ]
+
+        record_repo.delete_record_and_upsert = _delete
         at = _run_app(record_repo=record_repo, holding_id=_DEMAND_ID)
+        assert len(at.dataframe) == 1
+
         _click(at, "刪除此列")
 
         assert [s.value for s in at.success] == ["已刪除"]
         assert len(record_repo.deleted_and_upserted) == 1
+        # 整頁重跑後，該列從表格消失
+        assert len(at.dataframe) == 0
+        assert "本月尚無已存紀錄" in [c.value for c in at.caption]
 
     @pytest.mark.scenario("SC-122")
     def test_sc122_write_failure_inside_fragment_keeps_friendly_message(self, caplog):

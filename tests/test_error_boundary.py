@@ -216,8 +216,10 @@ def test_sc127_unexpected_callback_error_shows_generic_message_below_title(caplo
 
     assert not app.exception
     assert [e.value for e in app.error] == [UNEXPECTED_ERROR_MESSAGE]
-    # 頁面照常渲染，訊息在標題之後
+    # 頁面照常渲染，訊息在標題之後（以主區元素順序斷言）
     assert [m.value for m in app.markdown if m.value == "頁面已渲染"] == ["頁面已渲染"]
+    order = [el.type for el in app.main]
+    assert order.index("title") < order.index("error")
     assert all(RAW_SECRET_TEXT not in str(e.value) for e in app.error)
     records = [r for r in caplog.records if r.name == LOGGER_NAME]
     assert len(records) == 1

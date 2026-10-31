@@ -25,6 +25,7 @@ HOUSE="house"；純附加標記不受性質（資產/負債）分支限制，兩
 """
 
 # ==== 原生（標準庫） ====
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -677,11 +678,20 @@ def real_conn():
 _FRIENDLY_SAVE_FAILURE = "存檔失敗，資料未變更，請重試"
 
 
+def _assert_failure_details_only_in_log(caplog) -> None:
+    """畫面只有友善訊息（呼叫端已斷言 error 清單）；底層錯誤細節進 log、附完整例外。"""
+    records = [r for r in caplog.records if r.name == "asset_lab.views.settings"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert records[0].exc_info is not None
+    assert "模擬寫入中途失敗" in caplog.text
+
+
 class TestBatchSaveFailure:
     """SC-129：整批存檔中途失敗，全部維持原值、只顯示友善訊息。"""
 
     @pytest.mark.scenario("SC-129")
-    def test_sc129_threshold_failure_keeps_all_original_values(self, real_conn):
+    def test_sc129_threshold_failure_keeps_all_original_values(self, real_conn, caplog):
         ProtocolThresholdRepository(conn=real_conn).upsert_thresholds(
             thresholds=[
                 ProtocolThresholdModel(level="L1", drawdown_threshold=10.0),
@@ -694,7 +704,8 @@ class TestBatchSaveFailure:
         at.number_input(key="protocol_l2").set_value(25.0)
         at.number_input(key="protocol_l3").set_value(35.0).run()
 
-        _click(at, "儲存門檻")
+        with caplog.at_level(logging.ERROR, logger="asset_lab.views.settings"):
+            _click(at, "儲存門檻")
 
         stored = {
             t.level: t.drawdown_threshold
@@ -702,11 +713,12 @@ class TestBatchSaveFailure:
         }
         assert stored == {"L1": 10.0, "L2": 20.0, "L3": 30.0}
         assert [e.value for e in at.error] == [_FRIENDLY_SAVE_FAILURE]
+        _assert_failure_details_only_in_log(caplog)
         assert not at.exception
         assert not at.success
 
     @pytest.mark.scenario("SC-129")
-    def test_sc129_house_param_failure_keeps_all_original_values(self, real_conn):
+    def test_sc129_house_param_failure_keeps_all_original_values(self, real_conn, caplog):
         original = [
             HouseParamModel(param_key=key, param_value=value)
             for key, value in (
@@ -726,7 +738,8 @@ class TestBatchSaveFailure:
         at.number_input(key="house_loan_years").set_value(20)
         at.number_input(key="house_target_year").set_value(2050).run()
 
-        _click(at, "儲存買房參數")
+        with caplog.at_level(logging.ERROR, logger="asset_lab.views.settings"):
+            _click(at, "儲存買房參數")
 
         stored = {
             m.param_key: m.param_value
@@ -734,6 +747,7 @@ class TestBatchSaveFailure:
         }
         assert stored == {m.param_key: m.param_value for m in original}
         assert [e.value for e in at.error] == [_FRIENDLY_SAVE_FAILURE]
+        _assert_failure_details_only_in_log(caplog)
         assert not at.exception
 
     @pytest.mark.scenario("SC-129")
