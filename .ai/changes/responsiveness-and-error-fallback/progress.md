@@ -32,7 +32,7 @@
 | 3-2 安全審查 | 完成 | 無 CRITICAL/HIGH；filelock 3.29.7→4.2.4（pip-audit 0）；set_option 時機記為已知限制＋上線目視 |
 | 3-3 規則符合度審查 | 完成 | 無 CRITICAL/HIGH；修 MEDIUM-1/2、LOW-1（import 空行、docstring、型別提示）；LOW-2 event= 鍵值格式保留 |
 | 3-4 行為對映審查 | 完成 | 25 SC／171 對映；補強 6 項斷言（SC-111/120/121×2/127/129），未變紅；review.md 重複段已去重 |
-| 3-Z 最終驗證 | 完成 | pytest 869 passed、啟動 200；scenario-lint 127/127 SC 覆蓋，38 個既有孤兒 test 與 main 相同；耗時量測待使用者本機操作 |
+| 3-Z 最終驗證 | 完成 | pytest 869 passed、啟動 200；scenario-lint 127/127 SC 覆蓋，38 個既有孤兒 test 與 main 相同；耗時量測已完成（切頁 1934→220ms、往返 17→1 等，見 review.md §3-Z） |
 
 ## Phase 4：收尾
 
