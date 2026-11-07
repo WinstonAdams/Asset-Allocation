@@ -6,7 +6,7 @@
 |------|------|------|
 | 1-1 提案 | 完成 | 使用者確認 proposal；ROADMAP 第 4 節補城市總覽插入條目 |
 | 1-2a 技術選型 | 跳過 | 技術試做已驗證路線（見 spike-findings.md），最低版本由設計階段處理 |
-| 1-2b 架構分析 | 未開始 | 按需，architect 產 architecture-brief.md；不需要時改「跳過」|
+| 1-2b 架構分析 | 完成 | architecture-brief.md；使用者裁定 Q1–Q12，已寫回 proposal.md（BR-1/2/7/10/11 修正、新增 BR-13–15）|
 | 1-2 設計 | 未開始 | — |
 | 1-3 行為規格化 | 未開始 | scenario-author 產 scenarios/ 卡片 |
 | 1-4 任務拆解 | 未開始 | — |
