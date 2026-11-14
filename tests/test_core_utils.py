@@ -2,6 +2,7 @@
 from datetime import date
 
 # ==== 第三方套件 ====
+import pandas as pd
 import pytest
 
 # ==== 專案內部 ====
@@ -11,8 +12,10 @@ from asset_lab.core.utils import (
     format_amount,
     parse_amount,
     parse_year_month,
+    records_frame_to_models,
     year_month_add,
 )
+from asset_lab.models.record import MonthlyRecordModel
 
 
 class TestCurrentYearMonth:
@@ -223,3 +226,41 @@ class TestParseAmount:
     def test_sc082_accepts_explicit_zero_as_valid_input(self):
         # 使用者主動輸入 "0"（例如已實現收益維持系統預設值）視為合法，非清空
         assert parse_amount("0", field_label="已實現收益") == 0.0
+
+
+class TestRecordsFrameToModels:
+    """records_frame_to_models：月度紀錄 DataFrame 轉模型清單（NaN 市值轉 None）。"""
+
+    @staticmethod
+    def _frame(rows):
+        return pd.DataFrame(
+            rows, columns=["holding_id", "year_month", "market_value", "net_investment"]
+        )
+
+    @pytest.mark.scenario("SC-139")
+    def test_converts_each_row_in_order(self):
+        df = self._frame([(1, "2026-01", 100.0, 10.0), (2, "2026-02", 250.5, -5.0)])
+
+        models = records_frame_to_models(df)
+
+        assert [(m.holding_id, m.year_month, m.market_value, m.net_investment) for m in models] == [
+            (1, "2026-01", 100.0, 10.0),
+            (2, "2026-02", 250.5, -5.0),
+        ]
+        assert all(isinstance(m, MonthlyRecordModel) for m in models)
+
+    @pytest.mark.scenario("SC-139")
+    def test_nan_market_value_becomes_none(self):
+        df = self._frame([(1, "2026-01", float("nan"), 0.0)])
+
+        assert records_frame_to_models(df)[0].market_value is None
+
+    @pytest.mark.scenario("SC-139")
+    def test_zero_market_value_is_kept_not_none(self):
+        df = self._frame([(1, "2026-01", 0.0, -100.0)])
+
+        assert records_frame_to_models(df)[0].market_value == 0.0
+
+    @pytest.mark.scenario("SC-151")
+    def test_empty_frame_returns_empty_list(self):
+        assert records_frame_to_models(self._frame([])) == []

@@ -3,7 +3,7 @@
 # ==== 原生（標準庫） ====
 
 # ==== 第三方套件 ====
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # ==== 專案內部 ====
 # 無
@@ -268,3 +268,70 @@ class MonthRecordRow(BaseModel):
     realized_income: float | None
     market_value_missing: bool
     is_liability: bool
+
+
+
+class CityHolding(BaseModel):
+    """進版位的項目（非購屋用途、至少一筆月度紀錄）；月份之間不變的規格加各月數值。
+
+    month_values 有 key 代表該月有列，值為 None 代表有列但市值留空。
+    peak_value 為全歷史非空市值最大值；全部留空時為 0。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    holding_id: int
+    name: str
+    kind: str
+    category: str | None = None
+    peak_value: float
+    month_values: dict[str, float | None]
+
+
+class CityTimeline(BaseModel):
+    """整段歷史：月份清單（遞增，空清單代表無資料）、進版位的項目與兩個高度分母。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    months: list[str]
+    latest_month: str | None = None
+    holdings: list[CityHolding]
+    max_asset_value: float
+    max_liability_value: float
+
+
+class CityBuildingState(BaseModel):
+    """單一項目在選定月份的狀態；value 只有 present 才有值，delta 需本月與前一月皆 present。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    holding_id: int
+    status: str
+    value: float | None = None
+    previous_month: str | None = None
+    previous_status: str | None = None
+    delta: float | None = None
+    drift: DriftRow | None = None
+
+
+class CitySite(BaseModel):
+    """選定月份的購屋工地：bucket 進度與五條觸發條件。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    progress: BucketProgress
+    checklist: TriggerChecklist
+
+
+class CityFrame(BaseModel):
+    """選定月份的城市畫面資料；buildings 與 timeline.holdings 同順序、一對一。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    year_month: str
+    is_latest: bool
+    weather: ProtocolStatus
+    site: CitySite
+    buildings: list[CityBuildingState]
+    drift_rows: list[DriftRow]
+    house_purpose_categories: list[str]

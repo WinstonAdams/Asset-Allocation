@@ -36,15 +36,6 @@ from asset_lab.services.period_service import today_in_timezone
 
 logger = logging.getLogger("asset_lab.views.house")
 
-# 觸發條件鍵→中文標籤，供五條檢核清單與缺口清單顯示（HOUSE_TRIGGER.ALL 值域固定五條）。
-_TRIGGER_LABEL = {
-    HOUSE_TRIGGER.ANCHOR: "定錨",
-    HOUSE_TRIGGER.INCOME: "收入",
-    HOUSE_TRIGGER.DOWN_PAYMENT: "自備",
-    HOUSE_TRIGGER.PAYMENT: "月付",
-    HOUSE_TRIGGER.COGNITION: "認知",
-}
-
 # 客觀觸發條件的 actual/required 呈現單位：月付為百分比，收入/自備為金額（TWD）。
 _PERCENT_TRIGGERS = (HOUSE_TRIGGER.PAYMENT,)
 
@@ -170,7 +161,7 @@ def _render_triggers(
     checked_map = {row.trigger_key: row.checked for row in subjective}
 
     for condition in checklist.conditions:
-        label = _TRIGGER_LABEL[condition.key]
+        label = HOUSE_TRIGGER.LABEL[condition.key]
         if condition.kind == "subjective":
             _render_subjective_checkbox(
                 trigger_key=condition.key,
@@ -192,7 +183,7 @@ def _render_triggers(
     for condition in checklist.conditions:
         if condition.met:
             continue
-        label = _TRIGGER_LABEL[condition.key]
+        label = HOUSE_TRIGGER.LABEL[condition.key]
         if condition.kind == "subjective":
             st.write(f"- {label}（未勾選）")
         else:
