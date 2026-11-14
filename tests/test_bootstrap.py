@@ -39,12 +39,14 @@ from asset_lab.core.constants import (
     ASSET_CATEGORIES,
     BALANCE_INPUT,
     COST_BASIS_INPUT,
+    DEFAULT_REBALANCE_THRESHOLD,
     HOLDING_KIND,
     HOLDING_PURPOSE,
     HOLDINGS_TABLE,
     INPUT_MODE,
     MONTHLY_RECORDS_TABLE,
     PREMIUM_INPUT,
+    PROTOCOL_MIN_DATA_MONTHS,
     READ_CACHE,
 )
 from asset_lab.models.holding import HoldingModel
@@ -62,6 +64,7 @@ from asset_lab.repositories.transaction_repository import TransactionRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.balance_input_service import BalanceInputService
+from asset_lab.services.city_service import CityService
 from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.monthly_input_service import MonthlyInputService
@@ -213,6 +216,16 @@ def test_build_container_wires_services() -> None:
     # 活存/定存餘額推算服務的分類集合同樣注入自常數
     assert isinstance(container.balance_input_service, BalanceInputService)
     assert container.balance_input_service.balance_categories == BALANCE_INPUT.CATEGORIES
+    # 城市服務注入容器內同一批純運算 Service，業務參數取自常數
+    city = container.city_service
+    assert isinstance(city, CityService)
+    assert city._return_service is container.return_service
+    assert city._protocol_service is container.protocol_service
+    assert city._allocation_service is container.allocation_service
+    assert city._house_service is container.house_service
+    assert city._affordability_service is container.affordability_service
+    assert city._min_data_months == PROTOCOL_MIN_DATA_MONTHS
+    assert city._rebalance_threshold == DEFAULT_REBALANCE_THRESHOLD
 
 
 # === holdings 用途欄位加欄遷移：舊庫升級 / 新庫直建 / 重複啟動三路徑 ===

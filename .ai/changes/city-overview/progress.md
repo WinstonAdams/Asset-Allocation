@@ -19,7 +19,7 @@
 | t02 常數、例外、共用轉換、結果模型 | 完成 | 基礎型別；測試補掛 SC-139/146/147/148/151/152/163，本分支無新孤兒；pytest 889 passed |
 | t03 幾何純模組 | 完成 | SC-137, 138；常數與公式已對照 spike 原始碼，坑洞深度採試做公式 max(6, 44×√(v÷峰值))；pytest 935 passed |
 | t04 版位純模組 | 完成 | SC-152, 153, 154, 163；移植試做演算法、去模組級狀態、lru_cache；輸入檢查 ValueError 掛 SC-163 待 3-4 確認；pytest 968 passed |
-| t05 CityService.build_timeline＋DI | 未開始 | SC-133~136, 139~141, 144 |
+| t05 CityService.build_timeline＋DI | 完成 | SC-133~136, 139~141, 144（SC-144 只驗時間軸端，工地進度截斷過濾待 t06 補測）；pytest 986 passed |
 | t06 CityService.frame_at＋一致性 | 未開始 | SC-143, 145, 149, 150 |
 | t07 呈現純模組 | 未開始 | SC-142, 146~148, 157, 158 |
 | t08 Payload 與 JSON 契約 | 未開始 | SC-159 |
