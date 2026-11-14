@@ -6,11 +6,14 @@
 
 # ==== 原生（標準庫） ====
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 # ==== 第三方套件 ====
 import libsql
 import pandas as pd
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
@@ -210,7 +213,15 @@ def _run_overview(spy: _SpyConnection, *, with_cache: bool) -> AppTest:
         )
     at = AppTest.from_file(APP_DIR / "views" / "overview.py", default_timeout=15)
     at.session_state["container"] = container
-    at.run()
+    # 城市 fragment 入口會驗證連線；替換成直接回傳本測試組好的容器，量測仍用本測試的計數器
+    cache = SimpleNamespace(expire_if_stale=lambda: None)
+    with mock.patch(
+        "asset_lab.bootstrap.get_resilient_container",
+        side_effect=lambda: st.session_state["container"],
+    ), mock.patch("asset_lab.bootstrap.get_read_cache", return_value=cache), mock.patch(
+        "asset_lab.bootstrap.get_query_metrics", return_value=metrics
+    ):
+        at.run()
     assert not at.exception
     return at
 

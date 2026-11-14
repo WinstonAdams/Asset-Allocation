@@ -78,7 +78,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pyxirr", specifier = ">=0.10" },
     { name = "ruff", marker = "extra == 'dev'" },
-    { name = "streamlit", extras = ["auth"], specifier = ">=1.42" },
+    { name = "streamlit", extras = ["auth"], specifier = ">=1.66" },
 ]
 provides-extras = ["dev"]
 

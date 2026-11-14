@@ -15,10 +15,12 @@ import re
 from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 # ==== 第三方套件 ====
 import pandas as pd
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
@@ -40,6 +42,7 @@ from asset_lab.models.results import (
     TriggerCondition,
 )
 from asset_lab.overview_presentation import OverviewPresentation
+from asset_lab.repositories.query_metrics import QueryMetrics
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.house_service import HouseService
 
@@ -483,6 +486,19 @@ def _run_overview_page(
     )
     at.run()
     return at
+
+
+@pytest.fixture(autouse=True)
+def fragment_entry_probe():
+    """城市 fragment 入口會驗證連線並讀取快取；替換成直接回傳測試注入的替身容器。"""
+    cache = SimpleNamespace(expire_if_stale=lambda: None)
+    with mock.patch(
+        "asset_lab.bootstrap.get_resilient_container",
+        side_effect=lambda: st.session_state["container"],
+    ), mock.patch("asset_lab.bootstrap.get_read_cache", return_value=cache), mock.patch(
+        "asset_lab.bootstrap.get_query_metrics", return_value=QueryMetrics()
+    ):
+        yield
 
 
 class TestOverviewPageHouseSummary:

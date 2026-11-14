@@ -28,6 +28,7 @@ import streamlit as st
 # ==== 專案內部 ====
 from asset_lab import overview_presentation
 from asset_lab.bootstrap import Container
+from asset_lab.city.component import city_overview
 from asset_lab.core.constants import (
     EARLIEST_YEAR_MONTH_SENTINEL,
     PROTOCOL_LEVEL_CODE,
@@ -37,9 +38,15 @@ from asset_lab.core.constants import (
 from asset_lab.core.exceptions import AssetLabError
 from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.results import HouseSummary, ProtocolStatus
+from asset_lab.rerun_runtime import rerun_fragment
 from asset_lab.services.period_service import today_in_timezone
 
 logger = logging.getLogger("asset_lab.views.overview")
+
+_CITY_KEY = "city_overview"
+_CITY_MONTH_KEY = "city_month"
+# 骨架階段的暫代月份選項；接上真實月份清單時整段替換。
+_CITY_PLACEHOLDER_MONTHS = ("m1", "m2", "m3")
 
 # 燈號 emoji：對映等級代碼，供畫面上的等級指示（平時 → 深熊漸次升高警覺）。
 _SIGNAL_EMOJI = {
@@ -67,6 +74,7 @@ def _container() -> Container:
 def render() -> None:
     """渲染總覽頁：登入後預設落地頁。"""
     st.title("總覽")
+    _render_city()
     container = _container()
 
     try:
@@ -99,6 +107,19 @@ def render() -> None:
     except AssetLabError as error:
         logger.exception("總覽頁渲染失敗")
         st.error(str(error))
+
+
+@rerun_fragment(label="城市總覽")
+def _render_city() -> None:
+    """城市區塊（fragment）：拖滑桿與點擊只重跑此區塊，不影響下方數字卡。"""
+    slot = st.container()
+    month = st.select_slider(
+        "月份", options=_CITY_PLACEHOLDER_MONTHS, key=_CITY_MONTH_KEY
+    )
+    state = st.session_state.get(_CITY_KEY)
+    selected = state.get("selected") if hasattr(state, "get") else None
+    with slot:
+        city_overview(payload={"month": month, "selected": selected}, key=_CITY_KEY)
 
 
 def _compute_house_summary(container: Container) -> HouseSummary:
