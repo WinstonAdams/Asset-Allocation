@@ -20,7 +20,7 @@
 | t03 幾何純模組 | 完成 | SC-137, 138；常數與公式已對照 spike 原始碼，坑洞深度採試做公式 max(6, 44×√(v÷峰值))；pytest 935 passed |
 | t04 版位純模組 | 完成 | SC-152, 153, 154, 163；移植試做演算法、去模組級狀態、lru_cache；輸入檢查 ValueError 掛 SC-163 待 3-4 確認；pytest 968 passed |
 | t05 CityService.build_timeline＋DI | 完成 | SC-133~136, 139~141, 144（SC-144 只驗時間軸端，工地進度截斷過濾待 t06 補測）；pytest 986 passed |
-| t06 CityService.frame_at＋一致性 | 未開始 | SC-143, 145, 149, 150 |
+| t06 CityService.frame_at＋一致性 | 完成 | SC-143, 144（工地截斷過濾端補測完畢）, 145, 149, 150；另補建築逐月狀態測試（掛 SC-140）；pytest 1002 passed；design AD-3 補「第一筆紀錄月份用全量紀錄判斷」 |
 | t07 呈現純模組 | 未開始 | SC-142, 146~148, 157, 158 |
 | t08 Payload 與 JSON 契約 | 未開始 | SC-159 |
 | t09 前端 JS/CSS＋靜態掃描 | 未開始 | SC-155, 156, 166 |

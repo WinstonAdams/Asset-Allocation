@@ -92,7 +92,7 @@
   - `build_timeline(holdings, records_df)`：只依主檔與紀錄，產出月份清單、進版位的項目（含各月數值）、兩個高度分母。
   - `frame_at(year_month, timeline, holdings, records_df, thresholds, house_params, subjective, targets, current_year)`：只算選定月。做法（A3）：
     1. `records(≤m)`：紀錄截斷到 `year_month ≤ m`。
-    2. `holdings(m)`：從主檔排除「第一筆月度紀錄月份晚於 m」的項目。從未錄過紀錄的項目保留（沿用 HouseService「從無紀錄就以初始市值計」，即 BR-10 例外）。
+    2. `holdings(m)`：從主檔排除「第一筆月度紀錄月份晚於 m」的項目。從未錄過紀錄的項目保留（沿用 HouseService「從無紀錄就以初始市值計」，即 BR-10 例外）。**「第一筆月度紀錄月份」與「從未錄過紀錄」一律用全量紀錄判斷，不可用 `records(≤m)`**：用截斷後的紀錄判斷時，晚建立的購屋項目在早期月份看不到紀錄，會被誤當成「從未錄過紀錄」而以初始市值計入。bucket、現金預備金等計算本身仍只吃 `records(≤m)`。
     3. 天氣：`ReturnService.cumulative_twr_series(records(≤m), 全量 holdings)` → `ProtocolService.assess(..., thresholds, min_data_months)`。這裡**不用** `holdings(m)`：整體初始市值取自全量主檔，與總覽頁同口徑；前綴計算的性質保證結果等於全序列截斷到 m。
     4. 工地：`HouseService.bucket_value`、`cash_reserve_value` 吃 `records(≤m)` 與 `holdings(m)`；`AffordabilityService.payment_for_price` 吃目前參數；再 `bucket_progress`、`assess_triggers`。
     5. 偏離：`AllocationService.snapshot`（m 當月紀錄、全量 holdings、`by="category"`）→ `compute_drift(targets, rebalance_threshold)`。
@@ -534,6 +534,7 @@ class CityService:
 ```
 
 - `holdings`、`records_df` 是全量（含購屋用途項目、負債）；`thresholds`、`house_params` 由頁面先經 `effective_thresholds`、`effective_params` 合併預設。
+- `holdings(m)` 判斷各項目「第一筆紀錄月份」時用全量 `records_df`，先算好再截斷；截斷後的 `records(≤m)` 只用於 bucket、現金預備金、累積 TWR 等計算本身（AD-3 第 2 點）。
 - **一致性不變式**（必須有測試）：`year_month == timeline.latest_month` 時，`weather` 等於總覽頁的 `assess` 結果；`site.progress.progress_pct` 與 `site.checklist.met_count` 等於 `views/house.py` 同輸入的結果；`drift_rows` 等於資產配置頁對最新月的 `compute_drift` 結果。
 
 ### 6. 幾何（`city/geometry.py`，新增，純模組）
