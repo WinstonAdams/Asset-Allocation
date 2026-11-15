@@ -595,7 +595,7 @@ class TestOverviewPageHouseSummaryMatchesHousePage:
         assert overview_trigger_count == house_trigger_count
 
 
-# ---- 城市總覽整合（SC-151、160、161、162）
+# ---- 城市總覽整合
 _CITY_LABEL = "城市總覽"
 _CITY_KEY = "city_overview"
 _CITY_MONTH_KEY = "city_month"

@@ -28,7 +28,6 @@ HouseService 的 SC 測試保證。本頁只做委派、資料組裝與渲染，
 import logging
 
 # ==== 第三方套件 ====
-import pandas as pd
 import streamlit as st
 
 # ==== 專案內部 ====
@@ -46,7 +45,7 @@ from asset_lab.core.constants import (
     TIMEZONE,
 )
 from asset_lab.core.exceptions import AssetLabError
-from asset_lab.models.record import MonthlyRecordModel
+from asset_lab.core.utils import records_frame_to_models
 from asset_lab.models.results import CityFrame, CityTimeline, HouseSummary, ProtocolStatus
 from asset_lab.rerun_runtime import rerun_fragment
 from asset_lab.services.period_service import today_in_timezone
@@ -217,7 +216,7 @@ def _compute_house_summary(container: Container) -> HouseSummary:
 
     params = house_service.effective_params(stored=container.house_param_repo.read_params())
     holdings = container.holding_repo.list_holdings()
-    month_records = _to_month_records(container.record_repo.read_all())
+    month_records = records_frame_to_models(container.record_repo.read_all())
 
     bucket_value = house_service.bucket_value(month_records=month_records, holdings=holdings)
     cash_reserve_value = house_service.cash_reserve_value(
@@ -244,24 +243,6 @@ def _compute_house_summary(container: Container) -> HouseSummary:
         subjective=subjective,
     )
     return house_service.overview_summary(bucket_progress=progress, checklist=checklist)
-
-
-def _to_month_records(records_df: pd.DataFrame) -> list[MonthlyRecordModel]:
-    """把月度紀錄 DataFrame（RecordRepository.read_all 產出）轉為 HouseService 消費的模型清單。
-
-    HouseService 的 bucket/現金預備金口徑須橫跨全歷史月份（判定「是否曾有任何紀錄」，
-    見 HouseService._current_market_values），故取全量而非僅最新月（與 views/house.py
-    的同名輔助函式同邏輯，頁面各自編排的可接受重複，見 design 已知限制）。
-    """
-    return [
-        MonthlyRecordModel(
-            holding_id=row.holding_id,
-            year_month=row.year_month,
-            market_value=None if pd.isna(row.market_value) else row.market_value,
-            net_investment=row.net_investment,
-        )
-        for row in records_df.itertuples(index=False)
-    ]
 
 
 def _render(
