@@ -23,7 +23,7 @@
 | t06 CityService.frame_at＋一致性 | 完成 | SC-143, 144（工地截斷過濾端補測完畢）, 145, 149, 150；另補建築逐月狀態測試（掛 SC-140）；pytest 1002 passed；design AD-3 補「第一筆紀錄月份用全量紀錄判斷」 |
 | t07 呈現純模組 | 完成 | SC-142, 146~148, 157, 158；另驗 SC-143 小卡註記（t06 交接）；偏離列掛 SC-157 待 3-4 確認；pytest 1031 passed |
 | t08 Payload 與 JSON 契約 | 完成 | SC-159；其餘測試掛既有相關 SC；PLATE_* 常數留在 payload.py 待 3-3 判斷；pytest 1076 passed |
-| t09 前端 JS/CSS＋靜態掃描 | 未開始 | SC-155, 156, 166 |
+| t09 前端 JS/CSS＋靜態掃描 | 完成 | SC-155, 156, 166（＋SC-164 CSS）；人工目視清單併入 t10（使用者決定）；過渡別名 city_overview 待 t10 移除；工地名稱牌優先序維持最後（使用者決定）；pytest 1091 passed |
 | t10 總覽頁整合 | 未開始 | SC-151, 160~162, 165 |
 | 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
 
