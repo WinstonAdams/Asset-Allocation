@@ -71,7 +71,3 @@ def selected_in_session(*, key: str) -> object:
     if isinstance(state, dict):
         return state.get("selected")
     return getattr(state, "selected", None)
-
-
-# 總覽頁整合完成前的過渡別名，頁面改用 render_city 後移除
-city_overview = render_city

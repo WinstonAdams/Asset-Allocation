@@ -11,6 +11,12 @@
 已知限制），無月度紀錄時仍照常計算（bucket 可能以 initial_market_value 起始值計）。
 本頁為唯一 catch 點。
 
+頁面最上方是城市區塊（`_render_city`，以 `rerun_fragment` 包成 fragment）：依序為版位
+元件、月份滑桿、點選項目的小卡。拖滑桿與點擊只重跑此區塊，不影響其後的數字卡；數字卡
+（協定燈號、必做禁止、指標、買房摘要）在 fragment 之外，固定顯示最新月結。城市區塊的
+資料組裝全部委派 `CityService`，版位與小卡文字委派 `asset_lab.city` 呈現模組，本頁只
+讀取、串接與渲染。城市區塊出錯由 fragment 的錯誤兜底接住，不影響數字卡。
+
 等級判定與回撤計算的業務正確性由 ProtocolService 的 SC 測試保證；level_code 查表與
 狀態轉呈現資料的邏輯由 overview_presentation 的 SC 測試保證；買房摘要的業務正確性由
 HouseService 的 SC 測試保證。本頁只做委派、資料組裝與渲染，不算任何業務值（只消費
@@ -28,8 +34,12 @@ import streamlit as st
 # ==== 專案內部 ====
 from asset_lab import overview_presentation
 from asset_lab.bootstrap import Container
-from asset_lab.city.component import city_overview
+from asset_lab.city import payload as city_payload
+from asset_lab.city import presentation as city_presentation
+from asset_lab.city.component import render_city, selected_in_session
+from asset_lab.city.layout import layout_city
 from asset_lab.core.constants import (
+    CITY_TEXT,
     EARLIEST_YEAR_MONTH_SENTINEL,
     PROTOCOL_LEVEL_CODE,
     PROTOCOL_MIN_DATA_MONTHS,
@@ -37,7 +47,7 @@ from asset_lab.core.constants import (
 )
 from asset_lab.core.exceptions import AssetLabError
 from asset_lab.models.record import MonthlyRecordModel
-from asset_lab.models.results import HouseSummary, ProtocolStatus
+from asset_lab.models.results import CityFrame, CityTimeline, HouseSummary, ProtocolStatus
 from asset_lab.rerun_runtime import rerun_fragment
 from asset_lab.services.period_service import today_in_timezone
 
@@ -45,8 +55,6 @@ logger = logging.getLogger("asset_lab.views.overview")
 
 _CITY_KEY = "city_overview"
 _CITY_MONTH_KEY = "city_month"
-# 骨架階段的暫代月份選項；接上真實月份清單時整段替換。
-_CITY_PLACEHOLDER_MONTHS = ("m1", "m2", "m3")
 
 # 燈號 emoji：對映等級代碼，供畫面上的等級指示（平時 → 深熊漸次升高警覺）。
 _SIGNAL_EMOJI = {
@@ -111,15 +119,90 @@ def render() -> None:
 
 @rerun_fragment(label="城市總覽")
 def _render_city() -> None:
-    """城市區塊（fragment）：拖滑桿與點擊只重跑此區塊，不影響下方數字卡。"""
+    """城市區塊（fragment）：拖滑桿與點擊只重跑此區塊，不影響下方數字卡。
+
+    沒有任何月度紀錄時只顯示中性提示，不掛元件也不出滑桿；只有一個月份時不出滑桿，
+    直接用該月。
+    """
+    container = _container()
+    holdings = container.holding_repo.list_holdings()
+    records_df = container.record_repo.read_all()
+    city_service = container.city_service
+    timeline = city_service.build_timeline(holdings=holdings, records_df=records_df)
+    if not timeline.months:
+        st.info(overview_presentation.NO_DATA_MESSAGE)
+        return
+
+    # fragment 內的 widget 不能寫進 fragment 外建立的容器，所以元件先佔位、滑桿後建立
     slot = st.container()
-    month = st.select_slider(
-        "月份", options=_CITY_PLACEHOLDER_MONTHS, key=_CITY_MONTH_KEY
+    month = _select_month(timeline)
+
+    thresholds = container.protocol_service.effective_thresholds(
+        stored=container.protocol_threshold_repo.read_thresholds()
     )
-    state = st.session_state.get(_CITY_KEY)
-    selected = state.get("selected") if hasattr(state, "get") else None
+    frame = city_service.frame_at(
+        year_month=month,
+        timeline=timeline,
+        holdings=holdings,
+        records_df=records_df,
+        thresholds=thresholds,
+        house_params=container.house_service.effective_params(
+            stored=container.house_param_repo.read_params()
+        ),
+        subjective=container.subjective_trigger_repo.read_triggers(),
+        targets=container.target_repo.read_targets(),
+        current_year=today_in_timezone(TIMEZONE).year,
+    )
+    layout = layout_city(
+        specs=city_payload.build_specs(timeline=timeline), max_asset=timeline.max_asset_value
+    )
+    selected = city_payload.resolve_selection(
+        selected=selected_in_session(key=_CITY_KEY), timeline=timeline
+    )
     with slot:
-        city_overview(payload={"month": month, "selected": selected}, key=_CITY_KEY)
+        render_city(
+            payload=city_payload.build_payload(
+                layout=layout, timeline=timeline, frame=frame, selected=selected
+            ),
+            key=_CITY_KEY,
+        )
+    _render_card(timeline=timeline, frame=frame, selected=selected)
+
+
+def _select_month(timeline: CityTimeline) -> str:
+    """月份滑桿：預設最新月結；只有一個月份時不渲染滑桿。"""
+    months = timeline.months
+    if len(months) == 1:
+        # 單一選項的 select_slider 沒有可拖動的意義，直接用該月並清掉過時的 widget 狀態
+        st.session_state.pop(_CITY_MONTH_KEY, None)
+        return months[0]
+    if st.session_state.get(_CITY_MONTH_KEY) not in months:
+        # 資料被刪或換月後 widget 狀態不在選項內，會讓 select_slider 報錯，先重設為最新月
+        st.session_state[_CITY_MONTH_KEY] = timeline.latest_month
+    return st.select_slider(CITY_TEXT.MONTH_SLIDER_LABEL, options=months, key=_CITY_MONTH_KEY)
+
+
+def _render_card(*, timeline: CityTimeline, frame: CityFrame, selected: str | None) -> None:
+    """依選取渲染小卡；沒有選取時顯示操作提示。"""
+    if selected is None:
+        st.caption(CITY_TEXT.CARD_HINT)
+        return
+    if selected == city_payload.SITE_ID:
+        card = city_presentation.site_card(site=frame.site, is_latest=frame.is_latest)
+    else:
+        holding, state = next(
+            (h, s)
+            for h, s in zip(timeline.holdings, frame.buildings, strict=True)
+            if city_payload.building_id(holding_id=h.holding_id) == selected
+        )
+        card = city_presentation.building_card(holding=holding, state=state, frame=frame)
+    with st.container(border=True):
+        # 名稱是使用者輸入，用純文字渲染，不經 markdown 解析
+        st.text(card.title)
+        for label, value in card.rows:
+            st.text(f"{label}：{value}")
+        for note in card.notes:
+            st.caption(note)
 
 
 def _compute_house_summary(container: Container) -> HouseSummary:
