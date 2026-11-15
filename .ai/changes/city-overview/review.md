@@ -43,7 +43,89 @@ Baseline 命中：0 條
 
 ## 3-2 安全性審查
 
-<!-- security-reviewer subagent 產出（涉及認證/付款/個資時才執行） -->
+審查範圍：29 個檔案（`git diff main...HEAD` 中的 25 個 .py，加上 `city/city.js`、`city/city.css`、`pyproject.toml`、`uv.lock`）；另掃 `.ai/changes/city-overview/**`、`docs/ROADMAP.md` 是否含真實個資或財務數字（repo 公開）
+核准判定：有條件通過（無 CRITICAL／HIGH；1 條 MEDIUM 是既有的依賴 CVE，不是本分支引入，適用性分析見「發現」第 1 條）
+
+### 自動掃描
+
+Checker 命令：`python .claude/skills/spec-driven-flow/scripts/checkers/runner.py --phase 3-2 --project-dir . --diff-base origin/main --json --output .ai/changes/city-overview/.cache/checker_3_2.json`
+總違規：0 條（CRITICAL: 0 / HIGH: 0 / MEDIUM: 0 / LOW: 0）
+Baseline 命中：0 條
+完整報告：`.ai/changes/city-overview/.cache/checker_3_2.json`
+
+Checker 只掃 .py，沒有涵蓋 `city.js`、`city.css`、`uv.lock`；這三個檔案與各維度的語意風險由下方人工審查補上。
+
+### 依賴掃描
+
+- `pip-audit`（.venv，與 uv.lock 一致；`uv lock --check` 通過）：3 個套件共 12 條已知漏洞，版本與 main 的 uv.lock 完全相同。本分支的 uv.lock 只改了 streamlit 下限的 specifier，沒有換任何套件版本，所以這些漏洞都是既有的，不是本分支引入。
+  - `authlib 1.7.2`：9 條（PYSEC-2026-4354～4360、CVE-2026-96760、CVE-2026-116672），修補版本 1.9.1（最新 1.9.6）
+  - `joserfc 1.7.3`：2 條（CVE-2026-119283、CVE-2026-119284），修補版本 1.7.6（最新 1.8.0）
+  - `msgpack 1.2.1`：1 條（CVE-2026-114613），修補版本 1.2.3；依賴鏈是 pip-audit → cachecontrol，只出現在 dev 依賴，不進正式環境
+- `uv pip list --outdated`：streamlit 1.66.1 → 1.67.0 等一般小版本落後，沒有其他已知 CVE。
+
+### 發現
+
+- [MEDIUM] A06 — `uv.lock`（既有，非本分支引入）— 認證鏈的 `authlib 1.7.2`、`joserfc 1.7.3` 有已知 CVE，修補版本已釋出
+  問題：`streamlit[auth]` 的 `st.login` 經由 authlib（OIDC 用戶端）與 joserfc（Streamlit 自簽的 provider token，HS256）運作，兩個套件都落在修補版本以下。pip-audit 沒有提供 CVSS 分數。從描述看，其中幾條屬於簽章繞過或 token 偽造等級（例如 4355、4356、96760），一般評級可能在 High 以上。
+  適用性（逐條對照 `.venv` 內 streamlit 1.66.1 的原始碼）：
+  - Streamlit 走 authorization code flow，有 PKCE（S256）時會啟用（`starlette_auth_routes.py` 的 `authorize_access_token`）。4357（nonce 綁定繞過）的描述明寫 code flow 不受影響。
+  - 4358、4359、4360、116672 都是 OAuth **授權伺服器端**的 grant 或端點；本專案是用戶端（RP），用不到這些功能。
+  - 96760 是 `JsonWebSignature.deserialize_json` 的問題；authlib 的 `jwt.decode` 走的是 `deserialize_compact`，碰不到。
+  - 4355、4356 是 authlib `OctKey` 的問題。Streamlit 簽 provider token 時優先用 joserfc，只有 joserfc 不存在時才退回 authlib；`cookie_secret` 由 secrets 設定，不會是空字串。
+  - 4354（is_secure_transport）要求攻擊者能提供 URL；本專案的 `server_metadata_url` 由營運者設定。
+  - joserfc 119284：未登入的請求可以把超大 provider token 送進 `/auth/login`，會造成約 1.1 倍的記憶體放大，屬於有上限的輕度 DoS。119283 是 JWE `decrypt_json` 的問題，本專案沒有使用。
+  修復：另開 chore commit 或 PR，執行 `uv lock --upgrade-package authlib --upgrade-package joserfc`（必要時一併升 `msgpack`），然後在本機實測 Google 登入、登出與白名單拒絕三條路徑。main 合併後會自動部署到共用正式庫，所以建議不要跟城市總覽混在同一個 commit，否則 revert 時兩者會連動。
+  影響：以現行設定與程式路徑判斷不可利用，殘餘風險是 provider token 端點的輕度 DoS。但認證層長期停在有 CVE 的版本，日後 Streamlit 改用受影響的 API 時會直接暴露。
+  Checker 對應：checker 未報出（checker 不掃依賴）
+
+- [LOW] A03（縱深防禦）— `tests/test_city_static.py` — `city.js` 危險 API 靜態掃描的 regex 還可以補幾條
+  問題：目前禁用 `innerHTML|outerHTML|insertAdjacentHTML|document.write|DOMParser|createContextualFragment|eval(|new Function`，已涵蓋主要的 HTML 注入 sink。CCv2 inline 元件跑在主頁同源的 shadow DOM 裡（`getRootNode().host`），不受 iframe 隔離保護，所以這道靜態掃描是防 XSS 的主要護欄。目前缺的是 `setAttribute('on…')`、`.src=`／`.href=`／`srcdoc`、字串形式的 `setTimeout`／`setInterval`。
+  修復：在既有 regex 補上 `|setAttribute\s*\(\s*['"]on|\.(src|href|srcdoc)\s*=|set(Timeout|Interval)\s*\(\s*['"\x60]`；現行 `city.js` 都沒有用到這些寫法，補上後測試仍會綠燈。
+  影響：目前沒有可利用點。補上的效果是防止日後改 JS 時把使用者輸入的名稱帶進新的 sink。
+  Checker 對應：checker 未報出
+
+### 已確認無問題的維度（人工逐項）
+
+- **A03 注入／XSS**：持有項目名稱（使用者輸入）在前端只透過 canvas `fillText`、`textContent`、`createTextNode` 輸出；小卡在 Python 端用 `st.text` 輸出，不經 markdown；`st.caption` 只輸出 `CITY_TEXT` 常數。`city.js` 裡唯一的 `setAttribute` 是 `aria-label`，值取自常數。`const GEOM = …` 是唯一拼進 JS 原始碼的內容，來源是 `GEOMETRY` 常數的 `json.dumps`，不含使用者資料；payload 走 CCv2 的 `data` 通道做 JSON 傳輸，不會拼成程式碼。建築 id 都是 `holding-<int>` 或 `site`，沒有 prototype pollution 的可能。JS／CSS 沒有任何外部 URL、`fetch`、storage 或 cookie 存取。BR-4、BR-6 由 `test_city_static.py` 守住。
+- **A01 存取控制**：元件透過 `setStateValue` 回報的選取值會先經 `payload.resolve_selection` 檢查型別必須是 str，再比對白名單（本時間軸的建築 id 加上 `site`），不在白名單就靜默清除；月份值在 `_select_month` 先比對選項清單，`frame_at` 再擋一次。`rerun_fragment` 單獨重跑時不會經過 `app.py` 的登入守門，但 fragment 是每個 session 各自登記，只有守門通過、`render()` 執行過才存在，所以不構成繞過。這個模式和既有的 `views/input.py` 相同。
+- **A02／A09 資料保護與日誌**：送到瀏覽器的 payload 只有已登入使用者本來就看得到的名稱與金額。新增程式碼沒有任何 logger 呼叫；fragment 的錯誤兜底只記 context 標籤和 traceback；`_validated_lots`、`frame_at` 的 ValueError 訊息只帶 `holding-N` id 和年月，不帶名稱或金額。`ERROR_DETAILS` 關閉時，使用者只會看到通用訊息。
+- **A04／可用性**：`layout_city` 的迭代上限是 16、`lru_cache(maxsize=8)` 有上限；城市區塊出錯時由 fragment 兜底接住，下方的數字卡照常顯示。
+- **A05 環境與密鑰**：本次 diff 沒有任何密鑰、email、Turso URL 或 token；`.streamlit/secrets.toml`、`.env`、`*.env` 都在 `.gitignore` 裡。`git log --all` 查過 `*.env`、`*.pem`、`*.key`，從未被提交；`*secrets*` 的歷史只有 `secrets.toml.example`，內容全是佔位值。
+- **敏感資料（repo 公開）**：SC 卡片、design、spike-findings、測試 fixture 的項目名稱都是虛構命名（甲乙丙丁戊己庚、「範例活存」「虛構貸款」），金額都是整數示意值，沒有找到真實持有項目或財務數字。
+
+### 範圍外觀察（不列入判定）
+
+- `.devcontainer/devcontainer.json` 的 `postAttachCommand` 以 `--server.enableCORS false --server.enableXsrfProtection false` 啟動。這是既有檔案（Codespaces 預設範本），不在本次 diff 裡，只影響 Codespaces 開發環境，不影響 Community Cloud。如果不用 Codespaces，可以另案刪除或改掉這兩個旗標。
+
+### 修正結果（第二段）
+
+使用者決定兩條都在本分支修，分成兩個 commit。
+
+- **MEDIUM（依賴升級）**：使用者決定不用剛發布的 authlib 1.9.6、joserfc 1.8.0（前者 2026-11-14 發布，當時距今 1 天），改鎖較早而且已含全部修補的版本。執行 `uv lock --upgrade-package authlib==1.9.5 --upgrade-package joserfc==1.7.7`，再 `uv sync --extra dev`。msgpack 不在範圍內。
+  - `uv.lock` 相對 main 只改了兩個套件，加上本分支原本就有的 streamlit 下限那一行，沒有連帶升級其他套件，兩者的相依清單（cryptography、joserfc）也沒變。`uv lock --check` 通過。
+    - `authlib` 1.7.2 → 1.9.5（2026-11-05 發布，最低修補版本是 1.9.1）
+    - `joserfc` 1.7.3 → 1.7.7（2026-10-19 發布，最低修補版本是 1.7.6）
+  - `pyproject.toml` 不用改：streamlit 對 authlib 的要求是 `>=1.3.2`。
+  - 再跑一次 pip-audit：authlib 與 joserfc 的 11 條都已清除，只剩 msgpack 1.2.1 一條（dev 依賴，不在範圍內）。
+  - 相容性檢查（實際鎖定版本）：
+    - Streamlit 1.66.1 的 OIDC 路由模組可以正常 import。authlib 1.9.x 會印一條 `AuthlibDeprecationWarning`（httpx 模組改名），1.7.2 沒有，只是警告。
+    - Streamlit 依賴的 session state key 格式 `_state_{provider}_{state}` 沒有改變。
+    - provider token 用 joserfc 1.7.7 簽發、驗證可以往返，竄改過的 token 會被拒絕。
+    - 「同一 provider 只保留最新一筆登入 state」在 1.9.5 仍然存在。但我比對了 authlib 1.7.2 的原始碼，`set_state_data` 的寫法完全相同，所以這是既有行為，**不是升級帶來的差異**。上一輪說它是「新版行為差異」是誤判，在此更正。
+  - 未驗：Google 登入、登出、白名單拒絕三條路徑要由使用者在本機實測。
+- **LOW（靜態掃描補強）**：在 `tests/test_city_static.py` 新增 `_SCRIPT_SINK_API`，掃描以下寫法：
+  - `setAttribute('on…'／'src'／'href'／'srcdoc')`
+  - `.src=`、`.href=`、`.srcdoc=`（不含 `==`、`===` 比較）
+  - 字串形式的 `setTimeout`／`setInterval`
+
+  新增三個測試，都掛 `SC-155`：
+  - `test_sc155_js_never_loads_strings_as_script_or_url`：現行 `city.js` 沒有這些寫法。
+  - `test_sc155_script_sink_scan_catches_each_forbidden_form`：8 個違規樣本逐一都要被抓到，避免 regex 寫錯而形同虛設。
+  - `test_sc155_script_sink_scan_allows_safe_attributes_and_timers`：`aria-label`、比較運算子、函式型計時器不會誤報。
+- **驗證**：
+  - pytest 1114 passed（原本 1104，新增 10 個）。
+  - `ruff check` 全綠，新檔通過 `ruff format --check`。
+  - scenario_lint 結果和修正前相同：160/161 覆蓋，SC-165 是人工量測 WARN；孤兒 test 38 個都是既有的，`test_city_static.py` 沒有新增孤兒。
 
 ## 3-3 規則符合度審查
 

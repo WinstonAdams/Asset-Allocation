@@ -72,6 +72,23 @@ _MARKUP_API = re.compile(
     r"innerHTML|outerHTML|insertAdjacentHTML|document\.write|DOMParser|createContextualFragment"
     r"|\beval\s*\(|new\s+Function"
 )
+# 會把字串當成程式或網址載入的寫法：事件屬性、src／href／srcdoc、字串形式的計時器
+_SCRIPT_SINK_API = re.compile(
+    r"setAttribute\s*\(\s*['\"`](?:on|src\b|href\b|srcdoc\b)"
+    r"|\.(?:src|href|srcdoc)\s*=(?!=)"
+    r"|\bset(?:Timeout|Interval)\s*\(\s*['\"`]",
+    re.IGNORECASE,
+)
+_SCRIPT_SINK_SAMPLES = (
+    "el.setAttribute('onclick', name)",
+    'el.setAttribute("ONERROR", name)',
+    "img.setAttribute('src', url)",
+    "img.src = url",
+    "a.href = url",
+    "frame.srcdoc = html",
+    "setTimeout('run()', 10)",
+    "setInterval(`tick()`, 10)",
+)
 _GEOM_NAMES = r"TW|TH|HMAX|UX|VY|LAB|FR|EPS|FLAG_[A-Z_]+|SC_MAX|NARROW|OVERLAY|SIDE|SOIL"
 _REDECLARED_GEOM = re.compile(rf"\b(?:const|let|var)\s+(?:{_GEOM_NAMES})\b")
 _FORBIDDEN_CITY_REFERENCES = (
@@ -117,6 +134,27 @@ def _imported_roots(path: Path) -> set[str]:
 @pytest.mark.scenario("SC-155")
 def test_sc155_js_never_parses_markup():
     assert _MARKUP_API.search(_js_code()) is None
+
+
+@pytest.mark.scenario("SC-155")
+def test_sc155_js_never_loads_strings_as_script_or_url():
+    assert _SCRIPT_SINK_API.search(_js_code()) is None
+
+
+@pytest.mark.scenario("SC-155")
+@pytest.mark.parametrize("sample", _SCRIPT_SINK_SAMPLES)
+def test_sc155_script_sink_scan_catches_each_forbidden_form(sample):
+    assert _SCRIPT_SINK_API.search(sample) is not None
+
+
+@pytest.mark.scenario("SC-155")
+def test_sc155_script_sink_scan_allows_safe_attributes_and_timers():
+    for sample in (
+        "canvas.setAttribute('aria-label', label)",
+        "if (a.src === b.src) run()",
+        "setTimeout(() => run(), 10)",
+    ):
+        assert _SCRIPT_SINK_API.search(sample) is None, sample
 
 
 @pytest.mark.scenario("SC-155")

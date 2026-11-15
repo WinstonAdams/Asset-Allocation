@@ -32,7 +32,7 @@
 | 步驟 | 狀態 | 備註 |
 |------|------|------|
 | 3-1 程式碼清理 | 完成 | views 改用共用 records_frame_to_models、刪私有 _to_month_records；測試註解去 SC 編號；layout.py 與 test_city_service.py 超長交 3-3 判斷；pytest 1104 passed |
-| 3-2 安全審查 | 未開始 | 涉及認證/付款/個資時才執行 |
+| 3-2 安全審查 | 完成 | 有條件通過→已修：authlib 1.9.5、joserfc 1.7.7 升級（獨立 commit，使用者本機登入實測通過）；補 JS script sink 靜態掃描；msgpack dev 依賴 CVE 未處理；pytest 1114 passed |
 | 3-3 規則符合度審查 | 未開始 | 工程準則全面符合度檢查 |
 | 3-4 行為對映審查 | 未開始 | AI 比對 SC 描述 vs test 內容 |
 | 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
