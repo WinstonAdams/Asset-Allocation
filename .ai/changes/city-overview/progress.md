@@ -25,7 +25,7 @@
 | t08 Payload 與 JSON 契約 | 完成 | SC-159；其餘測試掛既有相關 SC；PLATE_* 常數留在 payload.py 待 3-3 判斷；pytest 1076 passed |
 | t09 前端 JS/CSS＋靜態掃描 | 完成 | SC-155, 156, 166（＋SC-164 CSS）；人工目視清單併入 t10（使用者決定）；過渡別名 city_overview 待 t10 移除；工地名稱牌優先序維持最後（使用者決定）；pytest 1091 passed |
 | t10 總覽頁整合 | 完成 | SC-151, 160~162；t09＋t10 目視使用者確認通過（高度動畫需關閉系統減少動態才看得到）；單一月份不顯示滑桿；SC-165 切頁耗時留 3-Z 量（使用者決定）；pytest 1104 passed |
-| 2-Z 整合驗證 | 未開始 | scenario-lint + pytest + 啟動驗證（fail-fast 順序）|
+| 2-Z 整合驗證 | 完成 | scenario_lint 160/161 覆蓋（SC-165 人工量測 WARN），本分支無新孤兒（既有 38 個技術債不計）；pytest 1104 passed；啟動驗證以使用者 t10 本機目視啟動代替（使用者決定）|
 
 ## Phase 3：審查
 
