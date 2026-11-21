@@ -9,6 +9,7 @@ import pytest
 
 # ==== 專案內部 ====
 from asset_lab.city import payload as pl
+from asset_lab.city import presentation
 from asset_lab.city.geometry import GEOMETRY
 from asset_lab.city.layout import CityLayout, layout_city
 from asset_lab.core.constants import (
@@ -189,6 +190,32 @@ class TestSelection:
         bid = pl.building_id(holding_id=2)
         assert pl.resolve_selection(selected=bid, timeline=timeline) == bid
         assert pl.resolve_selection(selected=pl.SITE_ID, timeline=timeline) == pl.SITE_ID
+
+    @pytest.mark.scenario("SC-157")
+    def test_sc157_card_for_building_matches_its_holding_and_state(self):
+        timeline = _timeline()
+        frame = _frame(timeline)
+        holding, state = timeline.holdings[1], frame.buildings[1]
+        card = pl.card_for(
+            selected=pl.building_id(holding_id=holding.holding_id), timeline=timeline, frame=frame
+        )
+        assert card == presentation.building_card(holding=holding, state=state, frame=frame)
+        assert card.title == holding.name
+
+    @pytest.mark.scenario("SC-158")
+    def test_sc158_card_for_site_is_site_card(self):
+        timeline = _timeline()
+        frame = _frame(timeline)
+        card = pl.card_for(selected=pl.SITE_ID, timeline=timeline, frame=frame)
+        assert card == presentation.site_card(site=frame.site, is_latest=frame.is_latest)
+
+    @pytest.mark.scenario("SC-159")
+    def test_sc159_card_for_unknown_selection_is_program_error(self):
+        timeline = _timeline()
+        with pytest.raises(ValueError, match="找不到選取的項目"):
+            pl.card_for(
+                selected=pl.building_id(holding_id=999), timeline=timeline, frame=_frame(timeline)
+            )
 
     @pytest.mark.scenario("SC-159")
     def test_sc159_payload_selected_is_passed_through_or_null(self):

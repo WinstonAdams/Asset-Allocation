@@ -1,5 +1,8 @@
 """城市總覽的資料組裝（純運算）。"""
 
+# ==== 原生（標準庫） ====
+# 無
+
 # ==== 第三方套件 ====
 import pandas as pd
 
@@ -41,6 +44,17 @@ class CityService:
         min_data_months: int,
         rebalance_threshold: float,
     ) -> None:
+        """注入重用的 Service 與兩個配置值。
+
+        Args:
+            return_service: 報酬率服務。
+            protocol_service: 大跌協定服務。
+            allocation_service: 配置偏離服務。
+            house_service: 買房服務。
+            affordability_service: 負擔能力服務。
+            min_data_months: 協定判定所需最少資料月數。
+            rebalance_threshold: 再平衡偏離門檻。
+        """
         self._return_service = return_service
         self._protocol_service = protocol_service
         self._allocation_service = allocation_service
@@ -70,8 +84,7 @@ class CityService:
         city_holdings = [
             self._to_city_holding(holding, values_by_holding[holding.holding_id])
             for holding in sorted(holdings, key=lambda h: h.holding_id)
-            if holding.purpose != HOLDING_PURPOSE.HOUSE
-            and holding.holding_id in values_by_holding
+            if holding.purpose != HOLDING_PURPOSE.HOUSE and holding.holding_id in values_by_holding
         ]
         return CityTimeline(
             months=months,
@@ -131,9 +144,7 @@ class CityService:
             subjective=subjective,
             current_year=current_year,
         )
-        month_models = records_frame_to_models(
-            records_df[records_df["year_month"] == year_month]
-        )
+        month_models = records_frame_to_models(records_df[records_df["year_month"] == year_month])
         snapshot = self._allocation_service.snapshot(
             month_records=month_models, holdings=holdings, by="category"
         )

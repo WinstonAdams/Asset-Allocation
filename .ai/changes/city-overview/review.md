@@ -134,3 +134,82 @@ Checker 只掃 .py，沒有涵蓋 `city.js`、`city.css`、`uv.lock`；這三個
 ## 3-4 行為對映審查
 
 <!-- scenario-mapper subagent 產出（AI 比對 SC 描述 vs test 內容，分「不對齊」「對齊」兩類）-->
+
+## 3-3 規則符合度審查
+
+審查範圍：80 個檔案（含 src 14、views 2、tests 15），main...HEAD（相對 main；本機 origin/main 與 main 一致）
+核准判定：阻擋（僅 1 條 HIGH，無需使用者決策，修正範圍小）
+
+### 自動掃描
+
+Checker 命令：`python .claude/skills/spec-driven-flow/scripts/checkers/runner.py --phase 3-3 --project-dir . --diff-base main --json`
+總違規：904 條（CRITICAL: 0 / HIGH: 363 / MEDIUM: 63 / LOW: 478）
+Baseline 命中：未計（本次未提供 baseline）
+完整報告：`.ai/changes/city-overview/.cache/checker_3_3.json`
+
+逐類復核（HIGH 的 363 條絕大多數為偽陽性或專案既有慣例）：
+- `root_main_exists`、`src_project_layout_missing`（各 1）— 偽陽性。專案入口是 `app.py` + `bootstrap.py`，views 即 Controller 層（architecture-brief 附錄）。
+- `no_runtime_constants_access`／`service_no_runtime_constants`（328 條，含 tests 236）— 判定不違規。命中的都是「列舉鍵、文案、標籤」（`CITY_ZONE`、`CITY_SHAPE`、`CITY_BUILDING_STATUS`、`HOLDING_KIND`、`HOLDING_PURPOSE`），不是 runtime 可調配置值。真正的可調值（`min_data_months`、`rebalance_threshold`）已由 bootstrap 注入 CityService。既有 `house_service` 同寫法，design 亦明載「呈現模組在函式內直接引用列舉與文案」為既有慣例。`bootstrap.py:226-227` 是組裝根，本來就該讀常數。不建議大量補 noqa。
+- `no_module_level_constants_alias`（`city/layout.py:39` `_ZONE_TIE_ORDER`）— 見下方 LOW-2。
+- `import_block_format`（14 條）— 區塊名稱「專案內部」與既有 `house_service` 等一致，checker 要求的「AsiaYo 專案內部」是偽陽性；但 `city_service.py` 確實缺「原生」區塊，見 MEDIUM-3。
+- `docstring_returns_section`（63 條）— 屬實，見 MEDIUM-2。
+- `docstring_required`（243 條，tests 239）— src 內 4 條屬實（見 MEDIUM-3）；tests 內測試函式無 docstring 為專案既有做法，忽略。
+- `model_naming_convention`（`Cityxxx` 5 條）— 偽陽性。`results.py` 既有 `HouseSummary`、`BucketProgress`、`ProtocolStatus` 等同樣不帶 `Result` 後綴。
+- `ANN001/ANN201/ANN202/ANN003/ANN205`（230 條，皆 tests）— 專案 ruff 未啟用 ANN；僅 class-based 測試（`test_city_foundation.py` 等）缺 `-> None`，LOW，不處理。
+
+### 規則審查發現
+
+- [HIGH-1] `views/overview.py` — `_render_card` 在 Controller 層對資料結構做篩選
+  `next((h, s) for h, s in zip(timeline.holdings, frame.buildings, strict=True) if city_payload.building_id(...) == selected)` 是依 id 查找項目與狀態的篩選／欄位存取，並順手決定「工地或建築」分支與卡片選擇。
+  依據：02-architecture §4 Controller 合約（禁止篩選、欄位存取）；design 與模組 docstring 自述「本頁只讀取、串接與渲染」。
+  建議：把「選取 id → CityCard」搬進 `city/presentation.py`（或 `city/payload.py`）的純函式，例如 `card_for(selected, timeline, frame)`；view 只呼叫它並渲染。
+  Checker 對應：checker 未報出。
+
+- [MEDIUM-1] `city/payload.py:40-42` — `PLATE_NORMAL`／`PLATE_FADED`／`PLATE_HIDDEN` 應放進 `core/constants.py`（交接事項 3 的判斷）
+  這三個字串是 Python 與 `city.js` 共用的契約值（JS 以 `it.mode === 'faded'`、`'hidden'`、`'normal'` 比對），屬業務固定常數，不是模組私有實作細節。同一份契約的 `CITY_ZONE`、`CITY_SHAPE`、`CITY_BUILDING_STATUS` 都在 constants.py，放這裡不一致，且 AD-7 要求「契約鍵由 Python 單一來源」。
+  依據：01-coding-style §1 魔法字串；03-data-config §1/§2（業務固定常數入 constants.py）。
+  建議：新增 `class CITY_PLATE_MODE: NORMAL / FADED / HIDDEN` 並把 `_PLATE_MODE_BY_STATUS` 改引用它。同理 `layout.py` 的 `SPEC_KIND_*` 與 `payload.SITE_ID` 屬 Python 內部或單點契約，維持原位即可（JS 不比對 `SPEC_KIND_*`；`site: true` 另有旗標，`SITE_ID` 屬 id，無需動）。
+  Checker 對應：checker 未報出。
+
+- [MEDIUM-2] 新增 public 函式 docstring 缺 `Returns:` 區塊
+  範圍：`city/geometry.py`（`geometry_json`、`project`、`asset_height`、`pit_depth`、`text_width`、`wrap_name`、`plate_size`、`flag_rect`、`plate_rect`、`obstacles`、`fit_scale`）、`city/presentation.py`（`zone_for`、`shape_for`、`amount_text`、`plate_sub`、`site_sub`、`weather_display`、`building_tip`、`site_tip`、`building_card`、`site_card`）、`city/payload.py`（`building_id`、`resolve_selection`、`build_specs`）、`city/component.py`（`component_script`、`selected_in_session`）、`views/overview.py:_select_month`。既有 `main` 的 service、charts 等 public 函式有 Returns/Args 區塊。
+  依據：01-coding-style §3 文件規範（public 函式含 Args/Returns）。
+  Checker 對應：`docstring_returns_section`（checker 已標）。
+  私有 helper（`_` 開頭，約 35 條，含 layout.py 內全部）屬單行 docstring 已說清楚的內部函式，列 LOW，不要求補。
+
+- [MEDIUM-3] 缺 docstring 與 import 區塊
+  - `services/city_service.py:33` `CityService.__init__` 缺 docstring（既有 Service 皆有，如 `HouseService.__init__`）。
+  - `city/presentation.py:37,45` `CityWeatherDisplay`、`CityCard` 兩個 public dataclass 缺 docstring。
+  - `city/__init__.py` 空檔，沿用既有套件空 `__init__` 慣例，忽略。
+  - `services/city_service.py` import 只有「第三方」「專案內部」，缺「原生（標準庫）」區塊（規則：無導入也要寫 `# 無`）。
+  依據：01-coding-style §2、§3。
+  Checker 對應：`docstring_required`、`import_block_format`（checker 已標，其中區塊名稱一項為偽陽性）。
+
+- [LOW-1] `city/geometry.py`、`layout.py`、`payload.py`、`presentation.py` — 「第三方套件 / # 無」與「專案內部」之間沒有空行，區塊間應留空行。ruff 不抓。
+  Checker 對應：checker 未報出。
+
+- [LOW-2] `city/layout.py:39` `_ZONE_TIE_ORDER` 模組頂層引用 `CITY_ZONE.*`（checker 標 `no_module_level_constants_alias`）。內容是列舉鍵 tuple，不是 runtime 配置值，與上述慣例一致，判定可接受。若要讓 checker 安靜，可補 `# checker:noqa no_module_level_constants_alias`；不補也不影響判定。
+
+- [LOW-3] 超長檔案（交接事項 2）— 判定不拆。
+  - `city/layout.py`（713 行）：`py/` 工程準則內沒有檔案行數上限條文（僅 3-1 checker 的 500 行提示），不構成規則違規。內容是單一演算法（候選產生、間距規則、列距規則、組裝、驗證），內部已用分節註解切開，函式之間高度耦合共用內部型別 `_Obj/_Proto/_Draft`；拆檔會把私有型別變成跨檔 public，得不償失。且這是從試做移植的演算法，拆檔增加驗證風險。
+  - `tests/test_city_service.py`（751 行）：同樣無規則依據。若使用者想拆，可依 timeline／frame 分兩檔，純屬偏好，不列為必修。
+  Checker 對應：`file_too_long`（3-1 checker 已標）。
+
+- [通過項] 其餘逐條人工檢視均符合：
+  - 分層：CityService 是純運算類別、不做 I/O、不 log、不攔例外；`city/*.py` 呈現純模組不碰 st（僅 `component.py`），並有靜態掃描測試；`CityLayoutError` 繼承 `AssetLabError`，由 fragment 兜底處理。
+  - DI（交接事項 1）：CityService 建構子注入 5 個 Service 與 2 個配置值，全部 keyword args，bootstrap 組裝時共用同一份 Service 實例；AD-2 偏離 house-dashboard AD-3 的理由合理，Service 內無跨 Service 隱藏建構，與 02 §5 不衝突。
+  - Logging（交接事項 4）：新程式碼無 logger，也無 f-string log；`views/overview.py` 既有 stdlib `logging` 沿用專案慣例（附錄已說明），不要求 structlog。
+  - Model：`results.py` 新增 `City*` 皆為純資料、frozen，無業務邏輯；`core/utils.records_frame_to_models` 為純函式、無 I/O，符合 02 §8，且已收斂兩份私有重複。
+  - 敏感資料：無寫死密鑰；`city.js` 以 textContent、靜態掃描驗證。
+  - 魔法字串：除 MEDIUM-1 外，文案、天氣、單位、分區、外形皆在 constants.py。
+  - ruff 全綠。
+
+### 第二段修正結果
+
+- HIGH-1：新增 `city/payload.py:card_for(selected, timeline, frame)`，`views/overview.py:_render_card` 改呼叫它，並移除不再使用的 `city_presentation` import。新增 3 個單元測試（`tests/test_city_payload.py`，掛 SC-157／158／159）。
+- MEDIUM-1：新增 `core/constants.py:CITY_PLATE_MODE`（NORMAL／FADED／HIDDEN），`payload.py` 的 `PLATE_*` 常數已刪並改引用。
+- MEDIUM-2：geometry、presentation、payload、component 與 `views/overview._select_month` 的 public 函式補 `Returns:`（私有 helper 不動）。
+- MEDIUM-3：`CityService.__init__` 補 docstring、`presentation.py` 兩個 dataclass 補 docstring、`city_service.py` 補「原生（標準庫）/ # 無」區塊。
+- LOW-1：改動後 ruff isort（I001）會要求「# 無」與下一個區塊標題之間不留空行，與專案 ruff 設定衝突，已還原，以 ruff 為準，不再處理。
+- LOW-2 不加 noqa；兩個超長檔不拆（依使用者決定）。
+- 驗證：pytest 1117 passed（原 1114＋新增 3 個測試），ruff check 全綠，動到的檔案已 ruff format；scenario_lint 孤兒仍為既有 38 個、無 city 相關。

@@ -34,7 +34,11 @@ COMPONENT_HTML = """
 
 
 def component_script() -> str:
-    """送進元件的 JS：幾何常數前置行加上 city.js 原文。"""
+    """送進元件的 JS：幾何常數前置行加上 city.js 原文。
+
+    Returns:
+        完整 JS 字串。
+    """
     body = (_ASSET_DIR / "city.js").read_text(encoding="utf-8")
     return f"const GEOM = {geometry_json()};\n{body}"
 
@@ -64,7 +68,11 @@ def render_city(*, payload: dict[str, object], key: str) -> None:
 
 
 def selected_in_session(*, key: str) -> object:
-    """讀元件上一次回報的選取值；尚無時為 None。原樣回傳，由 payload.resolve_selection 驗證。"""
+    """讀元件上一次回報的選取值；尚無時為 None。原樣回傳，由 payload.resolve_selection 驗證。
+
+    Returns:
+        選取 id（未驗證），尚無時為 None。
+    """
     state = st.session_state.get(key)
     if state is None:
         return None

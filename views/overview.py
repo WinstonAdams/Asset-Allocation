@@ -34,7 +34,6 @@ import streamlit as st
 from asset_lab import overview_presentation
 from asset_lab.bootstrap import Container
 from asset_lab.city import payload as city_payload
-from asset_lab.city import presentation as city_presentation
 from asset_lab.city.component import render_city, selected_in_session
 from asset_lab.city.layout import layout_city
 from asset_lab.core.constants import (
@@ -169,7 +168,11 @@ def _render_city() -> None:
 
 
 def _select_month(timeline: CityTimeline) -> str:
-    """月份滑桿：預設最新月結；只有一個月份時不渲染滑桿。"""
+    """月份滑桿：預設最新月結；只有一個月份時不渲染滑桿。
+
+    Returns:
+        選定的年月字串。
+    """
     months = timeline.months
     if len(months) == 1:
         # 單一選項的 select_slider 沒有可拖動的意義，直接用該月並清掉過時的 widget 狀態
@@ -186,15 +189,7 @@ def _render_card(*, timeline: CityTimeline, frame: CityFrame, selected: str | No
     if selected is None:
         st.caption(CITY_TEXT.CARD_HINT)
         return
-    if selected == city_payload.SITE_ID:
-        card = city_presentation.site_card(site=frame.site, is_latest=frame.is_latest)
-    else:
-        holding, state = next(
-            (h, s)
-            for h, s in zip(timeline.holdings, frame.buildings, strict=True)
-            if city_payload.building_id(holding_id=h.holding_id) == selected
-        )
-        card = city_presentation.building_card(holding=holding, state=state, frame=frame)
+    card = city_payload.card_for(selected=selected, timeline=timeline, frame=frame)
     with st.container(border=True):
         # 名稱是使用者輸入，用純文字渲染，不經 markdown 解析
         st.text(card.title)

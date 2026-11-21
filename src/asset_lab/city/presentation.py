@@ -35,6 +35,8 @@ _PERCENT_MULTIPLIER = 100
 
 @dataclass(frozen=True)
 class CityWeatherDisplay:
+    """天氣面板顯示資料：視覺代碼、嚴重度、標題與副標。"""
+
     sky: str
     severity: str
     title: str
@@ -43,30 +45,48 @@ class CityWeatherDisplay:
 
 @dataclass(frozen=True)
 class CityCard:
+    """小卡內容：標題、(標籤, 值) 列與註記。"""
+
     title: str
     rows: tuple[tuple[str, str], ...]
     notes: tuple[str, ...]
 
 
 def zone_for(*, kind: str, category: str | None) -> str:
-    """項目的分區鍵；負債一律歸負債分區，資產依類別查表。"""
+    """項目的分區鍵；負債一律歸負債分區，資產依類別查表。
+
+    Returns:
+        分區鍵。
+    """
     if kind == HOLDING_KIND.LIABILITY:
         return CITY_ZONE.LIABILITY
     return CITY_ZONE.BY_CATEGORY[category]
 
 
 def shape_for(*, zone: str) -> str:
-    """分區的建築外形鍵；工地沒有外形，回空字串。"""
+    """分區的建築外形鍵；工地沒有外形，回空字串。
+
+    Returns:
+        外形鍵；工地為空字串。
+    """
     return CITY_SHAPE.BY_ZONE.get(zone, "")
 
 
 def amount_text(*, value: float) -> str:
-    """金額以萬為單位、千分位、一位小數，例如「1,234.5 萬」。"""
+    """金額以萬為單位、千分位、一位小數，例如「1,234.5 萬」。
+
+    Returns:
+        金額文字。
+    """
     return f"{value / CITY_AMOUNT.DIVISOR:,.1f} {CITY_AMOUNT.UNIT}"
 
 
 def plate_sub(*, kind: str, value: float) -> str:
-    """名稱牌第二行；負債加「應繳」前綴。"""
+    """名稱牌第二行；負債加「應繳」前綴。
+
+    Returns:
+        名稱牌第二行文字。
+    """
     text = amount_text(value=value)
     if kind == HOLDING_KIND.LIABILITY:
         return f"{CITY_TEXT.LIABILITY_PREFIX} {text}"
@@ -74,12 +94,20 @@ def plate_sub(*, kind: str, value: float) -> str:
 
 
 def site_sub(*, bucket_value: float) -> str:
-    """工地名稱牌第二行。"""
+    """工地名稱牌第二行。
+
+    Returns:
+        工地名稱牌第二行文字。
+    """
     return f"{CITY_TEXT.SITE_AMOUNT_PREFIX} {amount_text(value=bucket_value)}"
 
 
 def weather_display(*, status: ProtocolStatus) -> CityWeatherDisplay:
-    """協定判定結果轉天氣面板；資料不足時用中性呈現與現行資料不足文案。"""
+    """協定判定結果轉天氣面板；資料不足時用中性呈現與現行資料不足文案。
+
+    Returns:
+        天氣面板顯示資料。
+    """
     presentation = resolve_presentation(status)
     if presentation.neutral_message is not None:
         spec = CITY_WEATHER.NEUTRAL
@@ -119,7 +147,11 @@ def _compare_text(*, state: CityBuildingState) -> str | None:
 
 
 def building_tip(*, holding: CityHolding, state: CityBuildingState) -> tuple[str, ...]:
-    """建築 hover 提示；未填月份不畫建築，也沒有提示。"""
+    """建築 hover 提示；未填月份不畫建築，也沒有提示。
+
+    Returns:
+        提示文字行；未填月份為空 tuple。
+    """
     if state.status == CITY_BUILDING_STATUS.UNFILLED:
         return ()
     if state.status == CITY_BUILDING_STATUS.ABSENT or state.value is None:
@@ -132,7 +164,11 @@ def building_tip(*, holding: CityHolding, state: CityBuildingState) -> tuple[str
 
 
 def site_tip(*, site: CitySite) -> tuple[str, ...]:
-    """工地 hover 提示。"""
+    """工地 hover 提示。
+
+    Returns:
+        提示文字行。
+    """
     checklist = site.checklist
     return (
         CITY_TEXT.SITE_NAME,
@@ -142,7 +178,11 @@ def site_tip(*, site: CitySite) -> tuple[str, ...]:
 
 
 def building_card(*, holding: CityHolding, state: CityBuildingState, frame: CityFrame) -> CityCard:
-    """建築小卡：名稱、類別、該月市值、與前一月相比，另依狀態與月份加註記。"""
+    """建築小卡：名稱、類別、該月市值、與前一月相比，另依狀態與月份加註記。
+
+    Returns:
+        建築小卡。
+    """
     category = (
         CITY_ZONE.ZONE_LABEL[CITY_ZONE.DEBT]
         if holding.kind == HOLDING_KIND.LIABILITY
@@ -179,7 +219,11 @@ def building_card(*, holding: CityHolding, state: CityBuildingState, frame: City
 
 
 def site_card(*, site: CitySite, is_latest: bool) -> CityCard:
-    """工地小卡：自備款、目標、進度與五條條件；不含以今天計算的達標年數與每年累積額。"""
+    """工地小卡：自備款、目標、進度與五條條件；不含以今天計算的達標年數與每年累積額。
+
+    Returns:
+        工地小卡。
+    """
     progress = site.progress
     rows: list[tuple[str, str]] = [
         (CITY_TEXT.CARD_LABEL_SITE_AMOUNT, amount_text(value=progress.bucket_value))

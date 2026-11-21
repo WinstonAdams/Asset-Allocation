@@ -424,6 +424,14 @@ class CITY_BUILDING_STATUS:
     VACANT = frozenset({UNFILLED, ABSENT})
 
 
+class CITY_PLATE_MODE:
+    """名稱牌三種畫法（city.js 依此決定畫法）：一般、淡化（沒有此項目）、隱藏（市值留空）。"""
+
+    NORMAL = "normal"
+    FADED = "faded"
+    HIDDEN = "hidden"
+
+
 @dataclass(frozen=True)
 class CityWeatherSpec:
     """一種天氣的顯示規格：視覺代碼給 city.js 選畫法，名稱與嚴重度給天氣面板。"""

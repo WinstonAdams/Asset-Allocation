@@ -19,6 +19,7 @@ from asset_lab.city.layout import (
 )
 from asset_lab.core.constants import (
     CITY_BUILDING_STATUS,
+    CITY_PLATE_MODE,
     CITY_TEXT,
     CITY_ZONE,
     HOUSE_TRIGGER,
@@ -36,25 +37,28 @@ SITE_ID = "site"
 _BUILDING_ID_PREFIX = "holding-"
 _PERCENT_DIVISOR = 100.0
 
-# 名稱牌三種畫法：一般、淡化（沒有此項目）、隱藏（市值留空）
-PLATE_NORMAL = "normal"
-PLATE_FADED = "faded"
-PLATE_HIDDEN = "hidden"
-
 _PLATE_MODE_BY_STATUS = {
-    CITY_BUILDING_STATUS.PRESENT: PLATE_NORMAL,
-    CITY_BUILDING_STATUS.ABSENT: PLATE_FADED,
-    CITY_BUILDING_STATUS.UNFILLED: PLATE_HIDDEN,
+    CITY_BUILDING_STATUS.PRESENT: CITY_PLATE_MODE.NORMAL,
+    CITY_BUILDING_STATUS.ABSENT: CITY_PLATE_MODE.FADED,
+    CITY_BUILDING_STATUS.UNFILLED: CITY_PLATE_MODE.HIDDEN,
 }
 
 
 def building_id(*, holding_id: int) -> str:
-    """建築在版位與 payload 的識別字串。"""
+    """建築在版位與 payload 的識別字串。
+
+    Returns:
+        建築 id 字串。
+    """
     return f"{_BUILDING_ID_PREFIX}{holding_id}"
 
 
 def resolve_selection(*, selected: object, timeline: CityTimeline) -> str | None:
-    """session 裡的選取值若是現存建築或工地的 id 就原樣回傳，否則回 None（靜默清除）。"""
+    """session 裡的選取值若是現存建築或工地的 id 就原樣回傳，否則回 None（靜默清除）。
+
+    Returns:
+        有效的選取 id，無效為 None。
+    """
     if not isinstance(selected, str):
         return None
     valid = {building_id(holding_id=h.holding_id) for h in timeline.holdings}
@@ -62,8 +66,34 @@ def resolve_selection(*, selected: object, timeline: CityTimeline) -> str | None
     return selected if selected in valid else None
 
 
+def card_for(*, selected: str, timeline: CityTimeline, frame: CityFrame) -> presentation.CityCard:
+    """依已驗證的選取 id 組出小卡；工地走工地小卡，建築依 id 找到項目與當月狀態。
+
+    Args:
+        selected: 已通過 resolve_selection 的選取 id。
+        timeline: 整段歷史（提供項目清單）。
+        frame: 選定月份的畫面資料，buildings 與 timeline.holdings 同順序、一對一。
+
+    Returns:
+        對應的小卡內容。
+
+    Raises:
+        ValueError: selected 不是工地也不是現存建築（屬程式錯誤，呼叫端應先驗證）。
+    """
+    if selected == SITE_ID:
+        return presentation.site_card(site=frame.site, is_latest=frame.is_latest)
+    for holding, state in zip(timeline.holdings, frame.buildings, strict=True):
+        if building_id(holding_id=holding.holding_id) == selected:
+            return presentation.building_card(holding=holding, state=state, frame=frame)
+    raise ValueError(f"找不到選取的項目：{selected}")
+
+
 def build_specs(*, timeline: CityTimeline) -> tuple[CitySpec, ...]:
-    """把進版位的項目與購屋工地轉為版位規格（分區、外形、名稱牌最寬參考文字）。"""
+    """把進版位的項目與購屋工地轉為版位規格（分區、外形、名稱牌最寬參考文字）。
+
+    Returns:
+        版位規格 tuple（建築、坑洞與工地）。
+    """
     specs = [
         CitySpec(
             id=building_id(holding_id=holding.holding_id),

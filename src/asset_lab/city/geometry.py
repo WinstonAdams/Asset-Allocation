@@ -84,12 +84,20 @@ _FLAG_FRONT_OFFSET = 0.2
 
 
 def geometry_json() -> str:
-    """GEOMETRY 的 JSON 字串（給 component 產生 `const GEOM = ...;` 前置行）。"""
+    """GEOMETRY 的 JSON 字串（給 component 產生 `const GEOM = ...;` 前置行）。
+
+    Returns:
+        序列化後的 JSON 字串（鍵排序）。
+    """
     return json.dumps(dataclasses.asdict(GEOMETRY), sort_keys=True)
 
 
 def project(*, i: float, j: float, scale: float) -> Point:
-    """等角格點投影到螢幕座標（city.js `proj`）。"""
+    """等角格點投影到螢幕座標（city.js `proj`）。
+
+    Returns:
+        螢幕座標 (x, y)。
+    """
     return (
         (i - j) * GEOMETRY.ux * scale,
         (i + j) * GEOMETRY.vy * scale,
@@ -110,6 +118,9 @@ def asset_height(*, value: float, max_asset: float) -> float:
     """建築高度：h_top × √(value ÷ max_asset)，下限 h_min；max_asset ≤ 0 時回 h_min。
 
     對應 city.js `assetHeight`。
+
+    Returns:
+        建築高度（px）。
     """
     if max_asset <= 0:
         return GEOMETRY.h_min
@@ -121,6 +132,9 @@ def pit_depth(*, value: float, max_liability: float) -> float:
 
     分母是負債自己的歷史最高值，不與資產高度分母混用；max_liability ≤ 0 時回 pit_min_depth。
     對應 city.js `targetH`（負債分支）。
+
+    Returns:
+        坑洞深度（px）。
     """
     if max_liability <= 0:
         return GEOMETRY.pit_min_depth
@@ -147,6 +161,9 @@ def text_width(*, text: str, px: float) -> float:
     """保守估算字寬（略大於實際）；前端實量若超過就縮字，所以底板尺寸一律以此為準。
 
     對應 city.js `textW`。
+
+    Returns:
+        文字寬度（px）。
     """
     return sum(_char_em(c) for c in text) * px
 
@@ -157,7 +174,11 @@ def _fits(text: str) -> bool:
 
 
 def wrap_name(*, name: str) -> tuple[str, ...]:
-    """名稱最多折成兩行；過長時第二行以「…」截斷（city.js `wrapName`）。"""
+    """名稱最多折成兩行；過長時第二行以「…」截斷（city.js `wrapName`）。
+
+    Returns:
+        換行後的名稱行（最多兩行）。
+    """
     if _fits(name):
         return (name,)
     if " " in name:
@@ -175,7 +196,11 @@ def wrap_name(*, name: str) -> tuple[str, ...]:
 
 
 def plate_size(*, lines: tuple[str, ...], sub: str | None) -> tuple[int, int]:
-    """名稱牌寬高（px）；sub 為 None 時是只有名稱的精簡牌（city.js `plateSize`）。"""
+    """名稱牌寬高（px）；sub 為 None 時是只有名稱的精簡牌（city.js `plateSize`）。
+
+    Returns:
+        名稱牌尺寸與換行結果。
+    """
     subs = [] if sub is None else [sub]
     widest = max(
         [text_width(text=t, px=GEOMETRY.name_px) for t in lines]
@@ -192,7 +217,11 @@ def plate_size(*, lines: tuple[str, ...], sub: str | None) -> tuple[int, int]:
 
 
 def flag_rect(*, lot: Lot, scale: float) -> Rect:
-    """五根旗桿列的外框，位於工地前緣正前方（city.js `flagGeom`、`drawFlags`）。"""
+    """五根旗桿列的外框，位於工地前緣正前方（city.js `flagGeom`、`drawFlags`）。
+
+    Returns:
+        旗桿列矩形。
+    """
     i, j, w, d = lot
     font_scale = max(scale, _FLAG_FONT_MIN_SCALE)
     pole_h = GEOMETRY.flag_k * max(_FLAG_POLE_MIN_H, _FLAG_POLE_BASE_H * scale)
@@ -220,6 +249,9 @@ def plate_rect(*, kind: str, lot: Lot, width: float, height: float, scale: float
     """名稱牌外框：水平置中於地塊中心，頂邊在底座前緣下 lab_gap（工地則在旗桿列之下）。
 
     對應 city.js `plateRect`。
+
+    Returns:
+        名稱牌矩形。
     """
     i, j, w, d = lot
     pad = {CITY_SHAPE.PIT: GEOMETRY.pit_pad, CITY_ZONE.SITE: 0.0}.get(kind, GEOMETRY.pad)
@@ -278,7 +310,11 @@ def _site_obstacles(lot: Lot, scale: float) -> list[tuple[str, list[Point]]]:
 def obstacles(
     *, kind: str, lot: Lot, height: float, roof: float, scale: float
 ) -> list[tuple[str, list[Point]]]:
-    """名稱牌不可碰的形狀（city.js `obstacles`）；地面陰影不是建築，不列入。"""
+    """名稱牌不可碰的形狀（city.js `obstacles`）；地面陰影不是建築，不列入。
+
+    Returns:
+        障礙物多邊形清單。
+    """
     if kind == CITY_SHAPE.PIT:
         return _pit_obstacles(lot, scale)
     if kind == CITY_ZONE.SITE:
@@ -298,6 +334,10 @@ def obstacles(
 
 
 def fit_scale(*, ground_i: int, ground_j: int, canvas_w: float) -> float:
-    """整塊菱形地盤塞進畫布寬度的縮放，上限 sc_max（city.js `fitScale`）。"""
+    """整塊菱形地盤塞進畫布寬度的縮放，上限 sc_max（city.js `fitScale`）。
+
+    Returns:
+        整塊地盤塞進畫布寬的縮放值。
+    """
     usable = canvas_w - 2 * GEOMETRY.side_m
     return min(GEOMETRY.sc_max, usable / ((ground_i + ground_j) * GEOMETRY.ux))
