@@ -265,6 +265,20 @@ class TestSpecs:
         assert str(f"{GEOMETRY.site_reference_amount / 10000:,.1f}") in site.sub_reference
 
 
+class TestZeroPeakReference:
+    @pytest.mark.scenario("SC-141")
+    def test_sc141_all_blank_holding_plate_width_is_estimated_with_zero_wan(self):
+        timeline = _timeline()
+        blank = _city_holding(
+            (6, "全空乙", HOLDING_KIND.ASSET, ASSET_CATEGORIES.DEMAND_DEPOSIT, 1, 1)
+        ).model_copy(update={"month_values": {_CUR: None}, "peak_value": 0.0})
+        timeline = timeline.model_copy(update={"holdings": [*timeline.holdings, blank]})
+
+        specs = {s.id: s for s in pl.build_specs(timeline=timeline)}
+
+        assert specs[pl.building_id(holding_id=6)].sub_reference == "0.0 萬"
+
+
 class TestContract:
     @pytest.mark.scenario("SC-152")
     def test_sc152_payload_is_json_serializable_and_roundtrips(self):
@@ -323,7 +337,7 @@ class TestContract:
         assert entry["tip"][0] == "台股甲"
         assert entry["warn"] is False
 
-    @pytest.mark.scenario("SC-139")
+    @pytest.mark.scenario("SC-138")
     def test_sc139_liability_sub_has_prefix(self):
         entry = _by_id(_build(), 4)
         assert entry["kind"] == "liability"

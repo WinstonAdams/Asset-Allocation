@@ -255,7 +255,7 @@ def test_sc156_component_html_has_no_text_or_diagnostics():
     assert "dbg" not in component.COMPONENT_HTML
 
 
-@pytest.mark.scenario("SC-164")
+@pytest.mark.scenario("SC-148")
 def test_sc164_css_defines_neutral_weather_severity_without_diagnostics():
     css = (CITY_DIR / "city.css").read_text(encoding="utf-8")
 

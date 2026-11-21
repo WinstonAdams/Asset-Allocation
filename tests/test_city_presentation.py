@@ -114,7 +114,7 @@ def _flat(card: p.CityCard) -> str:
 
 
 class TestZoneShapeAmount:
-    @pytest.mark.scenario("SC-157")
+    @pytest.mark.scenario("SC-152")
     def test_zone_for_asset_and_liability(self):
         assert (
             p.zone_for(kind=HOLDING_KIND.ASSET, category=ASSET_CATEGORIES.US_STOCK)
@@ -122,7 +122,7 @@ class TestZoneShapeAmount:
         )
         assert p.zone_for(kind=HOLDING_KIND.LIABILITY, category=None) == CITY_ZONE.DEBT
 
-    @pytest.mark.scenario("SC-157")
+    @pytest.mark.scenario("SC-152")
     def test_shape_for_zone(self):
         assert p.shape_for(zone=CITY_ZONE.INSURANCE) == CITY_SHAPE.STATION
         assert p.shape_for(zone=CITY_ZONE.DEBT) == CITY_SHAPE.PIT
@@ -133,7 +133,7 @@ class TestZoneShapeAmount:
         assert p.amount_text(value=12_345_000) == "1,234.5 萬"
         assert p.amount_text(value=0) == "0.0 萬"
 
-    @pytest.mark.scenario("SC-157")
+    @pytest.mark.scenario("SC-138")
     def test_plate_sub_liability_has_prefix(self):
         assert p.plate_sub(kind=HOLDING_KIND.ASSET, value=1_300_000) == "130.0 萬"
         assert p.plate_sub(kind=HOLDING_KIND.LIABILITY, value=500_000) == (
@@ -266,7 +266,7 @@ class TestBuildingCard:
         assert CITY_TEXT.CARD_LABEL_VALUE not in labels
         assert CITY_TEXT.CARD_LABEL_COMPARE not in labels
 
-    @pytest.mark.scenario("SC-157")
+    @pytest.mark.scenario("SC-150")
     def test_drift_row_and_notes_by_frame(self):
         drift = DriftRow(
             category=ASSET_CATEGORIES.TW_STOCK,
@@ -289,7 +289,8 @@ class TestBuildingCard:
         assert CITY_TEXT.BY_CURRENT_SETTINGS not in latest.notes
         assert CITY_TEXT.INCLUDES_HOUSE_PURPOSE not in latest.notes
 
-    @pytest.mark.scenario("SC-157")
+    @pytest.mark.scenario("SC-139")
+    @pytest.mark.scenario("SC-140")
     def test_building_tip(self):
         tip = p.building_tip(holding=_holding(), state=_state())
         assert tip[0] == "台股ETF甲" and "130.0 萬" in tip[1]

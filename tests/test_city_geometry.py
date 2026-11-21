@@ -104,7 +104,7 @@ class TestGeometryConstants:
         with pytest.raises(AttributeError):
             GEOMETRY.h_top = 1.0  # type: ignore[misc]
 
-    @pytest.mark.scenario("SC-152")
+    @pytest.mark.scenario("SC-138")
     def test_pit_depth_constants_are_ordered(self):
         assert 0 < GEOMETRY.pit_min_depth < GEOMETRY.pit_max_depth
 
@@ -152,7 +152,7 @@ class TestFitScale:
 
 
 class TestTextAndPlate:
-    @pytest.mark.scenario("SC-154")
+    @pytest.mark.scenario("SC-152")
     def test_text_width_by_character_class(self):
         assert geometry.text_width(text="中", px=10) == pytest.approx(10.0)
         assert geometry.text_width(text="1", px=10) == pytest.approx(6.0)
@@ -160,26 +160,26 @@ class TestTextAndPlate:
         assert geometry.text_width(text=" ", px=10) == pytest.approx(3.0)
         assert geometry.text_width(text="a", px=10) == pytest.approx(6.0)
 
-    @pytest.mark.scenario("SC-154")
+    @pytest.mark.scenario("SC-152")
     def test_text_width_empty_string_is_zero(self):
         assert geometry.text_width(text="", px=11) == 0
 
-    @pytest.mark.scenario("SC-154")
+    @pytest.mark.scenario("SC-152")
     def test_short_name_stays_one_line(self):
         assert geometry.wrap_name(name="活存") == ("活存",)
 
-    @pytest.mark.scenario("SC-154")
+    @pytest.mark.scenario("SC-152")
     def test_long_name_wraps_at_space(self):
         lines = geometry.wrap_name(name="Total World Index")
         assert lines == ("Total World", "Index")
 
-    @pytest.mark.scenario("SC-154")
+    @pytest.mark.scenario("SC-152")
     def test_long_name_without_space_hard_cuts(self):
         lines = geometry.wrap_name(name="很長很長很長很長很長很長很長很長")
         assert len(lines) == 2
         assert "".join(lines) == "很長很長很長很長很長很長很長很長"
 
-    @pytest.mark.scenario("SC-154")
+    @pytest.mark.scenario("SC-152")
     def test_very_long_name_truncates_second_line_with_ellipsis(self):
         lines = geometry.wrap_name(name="極長" * 20)
         assert len(lines) == 2
@@ -188,7 +188,7 @@ class TestTextAndPlate:
             width = geometry.text_width(text=line, px=GEOMETRY.name_px)
             assert width <= GEOMETRY.name_max_w
 
-    @pytest.mark.scenario("SC-154")
+    @pytest.mark.scenario("SC-152")
     def test_empty_name_gives_single_empty_line(self):
         assert geometry.wrap_name(name="") == ("",)
 
@@ -201,7 +201,7 @@ class TestTextAndPlate:
             geometry.text_width(text="活存", px=GEOMETRY.name_px) + GEOMETRY.pad_l + GEOMETRY.pad_r
         )
 
-    @pytest.mark.scenario("SC-154")
+    @pytest.mark.scenario("SC-152")
     def test_plate_size_with_sub_is_taller_and_wide_enough(self):
         compact = geometry.plate_size(lines=("活存",), sub=None)
         full = geometry.plate_size(lines=("活存",), sub="1,234.5 萬")
@@ -209,7 +209,7 @@ class TestTextAndPlate:
         sub_w = geometry.text_width(text="1,234.5 萬", px=GEOMETRY.sub_px)
         assert full[0] >= sub_w + GEOMETRY.pad_l + GEOMETRY.pad_r
 
-    @pytest.mark.scenario("SC-154")
+    @pytest.mark.scenario("SC-152")
     def test_plate_size_two_lines_adds_line_gap(self):
         one = geometry.plate_size(lines=("甲",), sub=None)
         two = geometry.plate_size(lines=("甲", "乙"), sub=None)

@@ -39,6 +39,7 @@ from asset_lab.core.constants import (
     PROTOCOL_LEVELS,
     PROTOCOL_MIN_DATA_MONTHS,
 )
+from asset_lab.core.exceptions import CityLayoutError
 from asset_lab.error_boundary import UNEXPECTED_ERROR_MESSAGE
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.house import HouseParamModel, SubjectiveTriggerModel
@@ -744,15 +745,15 @@ class TestOverviewCityLayoutOrder:
         assert _metric_value(at, "目前淨值") == latest_net_worth
         assert latest_net_worth == "502,000"
 
-    @pytest.mark.scenario("SC-160")
-    def test_sc160_card_shows_hint_without_selection(self):
+    @pytest.mark.scenario("SC-159")
+    def test_sc159_card_shows_hint_without_selection(self):
         at = _run_city_page(_seeded_container(_CITY_MONTHS))
 
         assert not at.exception
         assert any(CITY_TEXT.CARD_HINT in c.value for c in at.caption)
 
-    @pytest.mark.scenario("SC-160")
-    def test_sc160_selected_site_shows_site_card(self):
+    @pytest.mark.scenario("SC-158")
+    def test_sc158_selected_site_shows_site_card(self):
         at = _run_city_page(
             _seeded_container(_CITY_MONTHS), preset={_CITY_KEY: {"selected": "site"}}
         )
@@ -761,8 +762,8 @@ class TestOverviewCityLayoutOrder:
         assert not any(CITY_TEXT.CARD_HINT in c.value for c in at.caption)
         assert any(CITY_TEXT.SITE_NAME in t.value for t in at.text)
 
-    @pytest.mark.scenario("SC-160")
-    def test_sc160_stale_selection_is_ignored(self):
+    @pytest.mark.scenario("SC-159")
+    def test_sc159_stale_selection_is_ignored(self):
         at = _run_city_page(
             _seeded_container(_CITY_MONTHS), preset={_CITY_KEY: {"selected": "holding-999"}}
         )
@@ -849,3 +850,25 @@ class TestOverviewCityErrorIsolation:
         assert _metric_value(at, "目前淨值") != "—"
         assert _metric_value(at, "買房 bucket 進度") is not None
         assert any(f"context={_CITY_LABEL}" in r.getMessage() for r in caplog.records)
+
+
+class TestOverviewCityLayoutFailure:
+    """版位無法排出時顯示中性訊息、記錄 log，數字卡照常顯示（SC-163）。"""
+
+    @pytest.mark.scenario("SC-163")
+    def test_sc163_layout_failure_shows_message_and_keeps_number_cards(self, caplog):
+        container = _seeded_container(_CITY_MONTHS)
+
+        with (
+            mock.patch(
+                "asset_lab.city.layout.layout_city",
+                side_effect=CityLayoutError(CITY_TEXT.LAYOUT_FAILED),
+            ),
+            caplog.at_level(logging.ERROR),
+        ):
+            at = _run_city_page(container)
+
+        assert [e.value for e in at.error] == [CITY_TEXT.LAYOUT_FAILED]
+        assert any(f"context={_CITY_LABEL}" in r.getMessage() for r in caplog.records)
+        assert _metric_value(at, "目前淨值") == "502,000"
+        assert _metric_value(at, "買房 bucket 進度") is not None

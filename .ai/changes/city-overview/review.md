@@ -133,7 +133,137 @@ Checker 只掃 .py，沒有涵蓋 `city.js`、`city.css`、`uv.lock`；這三個
 
 ## 3-4 行為對映審查
 
-<!-- scenario-mapper subagent 產出（AI 比對 SC 描述 vs test 內容，分「不對齊」「對齊」兩類）-->
+審查範圍：33 個 SC（SC-133～166，SC-165 無 marker 屬人工量測）× 217 個 test 掛載（pytest 函式，以 AST 解析 marker）
+核准判定：通過（第一段為有條件通過；使用者裁定 3 項、第二段修正完成後無未解不對齊，見「使用者裁定與第二段修正結果」）
+
+### 不對齊
+
+A. marker 掛錯 SC，且有更貼切的 SC（第二段改掛，不刪 marker，避免孤兒 FAIL）
+- test_city_geometry.py::test_pit_depth_constants_are_ordered（掛 SC-152）— 驗坑洞深度常數大小，屬 SC-138。改掛 SC-138。
+- test_city_geometry.py::test_text_width_by_character_class、test_text_width_empty_string_is_zero、test_short_name_stays_one_line、test_long_name_wraps_at_space、test_long_name_without_space_hard_cuts、test_very_long_name_truncates_second_line_with_ellipsis、test_empty_name_gives_single_empty_line、test_plate_size_with_sub_is_taller_and_wide_enough、test_plate_size_two_lines_adds_line_gap（掛 SC-154）— 驗字寬估算、換行、牌高公式；SC-154 只講「項目數超過 12 只寫名稱」。這些支撐的是 SC-152「名稱牌彼此不重疊、不擋建築」。改掛 SC-152。`test_plate_size_compact_has_name_only` 對齊 SC-154，保留。
+- test_city_presentation.py::test_plate_sub_liability_has_prefix（掛 SC-157）— 驗「應繳」前綴，屬 SC-138。改掛 SC-138。
+- test_city_payload.py::test_sc139_liability_sub_has_prefix（掛 SC-139）— 同上，屬 SC-138。改掛 SC-138。
+- test_city_presentation.py::test_zone_for_asset_and_liability、test_shape_for_zone（掛 SC-157）— 分區與外形對映，屬 SC-152（同分區、負債分區）。改掛 SC-152。
+- test_city_presentation.py::test_drift_row_and_notes_by_frame（掛 SC-157）— 驗偏離列、「依目前設定判定」、「含購屋用途金額」註記；SC-157 完全沒提，這是 SC-150 的邊界。改掛 SC-150。
+- test_city_presentation.py::test_building_tip（掛 SC-157）— 驗滑過提示：未填無提示、無此項目有註記；屬 SC-140／SC-139。改掛 SC-139 與 SC-140（疊兩個 marker）。
+- test_city_static.py::test_sc164_css_defines_neutral_weather_severity_without_diagnostics（掛 SC-164）— 驗中性天氣的 CSS 狀態，與版本下限／打包無關，屬 SC-148。改掛 SC-148。
+- test_overview.py::test_sc160_card_shows_hint_without_selection、test_sc160_selected_site_shows_site_card、test_sc160_stale_selection_is_ignored（掛 SC-160）— SC-160 只講版面順序與數字卡固定最新月；這三個驗的是 SC-159（提示、失效選取靜默清除）與 SC-158（點工地小卡）。改掛 SC-159／SC-158（SC-160 其餘兩個測試保留）。
+
+B. 數值／邊界與 SC 不一致
+- tests/test_city_layout.py::test_sc153_thirty_buildings_cold_start_within_50ms
+  SC 描述：「30 棟項目的冷啟動版位計算在 50ms 內」
+  test 內容：`_many_specs(29)`＋工地＝30 個物件，實際只有 29 棟
+  判斷：差 1 棟。改為 `_many_specs(30)`（跑完確認仍 < 50ms；試做量到 30 棟約 25～28ms，餘裕足）。
+- tests/test_city_layout.py::test_sc154_not_compact_at_threshold／test_sc154_compact_above_threshold（SC-154）
+  SC 描述：「項目數超過精簡門檻（12 個）」
+  test／實作：`len(specs) > GEOMETRY.compact_n`，specs 含工地。12 個持有項目＋工地＝13 個物件 → 已精簡；SC 字面「12 個項目」不算超過。test 用常數而非字面 12，與實作一致但與 SC 字面差 1。
+  判斷：SC 與實作口徑不一致，見下方「需使用者確認」第 1 項。
+
+C. SC 行為有條件未被任何 test 驗證（覆蓋缺口，第二段補測）
+- SC-163：THEN「顯示『城市版位暫時無法排出，請參考下方數字』、記 log、數字卡照常顯示」沒有任何 test。`test_city_layout.py::test_sc163_*` 只驗 `layout_city` 拋 CityLayoutError，沒驗訊息文字，`test_overview.py` 也沒有版位失敗的整頁測試（SC-162 的兜底測試用 RuntimeError）。第二段補一個 overview 測試：讓排版拋 CityLayoutError，斷言 st.error 為該文案、log 有紀錄、數字卡 metric 仍在。
+- SC-141 AND 子句：「留空月份的天氣、自備款（視為 0）、配置偏離照既有口徑」沒有 test（現有 3 個 test 只驗峰值與分母）。邊界「全部月份留空：名稱牌寬度以『0.0 萬』估算」也沒有 payload 層斷言（只有 layout 驗 peak=0 能排版）。第二段補測。
+- SC-142 AND 子句：「比較基準是滑桿上前一個月份，不是日曆上的上個月」。現有 service 測資月份連續（06/07/08），presentation 測試只驗字串不含 2026-08。第二段補一個 frame_at 測試：月份清單 06/07/09，選 09，previous_month 應為 07。
+
+D. 勉強掛載，無更貼切 SC（不阻擋；列為需使用者確認或接受現狀）
+- test_city_foundation.py::test_weather_spec_is_frozen（SC-147）、test_building_state_optional_fields_default_none（SC-139）、test_timeline_is_frozen_and_latest_defaults_none（SC-151）；test_city_geometry.py::test_geometry_json_round_trips_every_field、test_geometry_is_immutable（SC-152）；test_core_utils.py::test_converts_each_row_in_order（SC-139）：純型別不可變／預設值／轉換順序，SC 沒寫這些行為。
+- test_city_service.py::test_frame_at_rejects_month_not_in_timeline（SC-143）：月份不在清單的 ValueError，SC-143 沒涵蓋。
+- test_city_layout.py::test_sc163_specs_without_site_are_rejected、test_sc163_multiple_sites_are_rejected、test_sc163_duplicate_ids_are_rejected（SC-163）：輸入檢查 ValueError，SC-163 只講「無法收斂」，其邊界反而說地塊重疊／出界屬程式錯誤。
+- test_city_payload.py::test_sc139_frame_not_aligned_with_timeline_raises_value_error（SC-139）、test_sc152_overlapping_lots／lot_outside_ground／missing_lot（SC-152）：程式錯誤防線；後三者接近 SC-163 邊界「地塊重疊或出界屬程式錯誤」。
+- test_overview.py::test_sc161_page_no_longer_exports_transition_alias（SC-161）：檢查 component.py 沒有舊別名字串，是清理驗證，不是 SC-161 行為。
+- test_city_static.py::test_sc156_js_reports_selection_only_as_state_value、…keeps_instances_in_weakmap_without_diagnostic_leftovers、…follows_payload_state_contract、…reads_geometry_from_injected_constant_only、…js_has_no_business_text_outside_comments、…component_script_prefixes_geometry_constant、…component_html_has_no_text_or_diagnostics（SC-156）：驗設計決策（AD-7）與實作慣例，SC-156 只要求不依賴身分／機密／資料庫、payload 只含顯示欄位。其餘 SC-156 測試對齊。
+- 以上沒有更貼切的 SC，若改為不掛 marker，scenario_lint 會把它們列為孤兒 FAIL。
+
+### 需使用者確認（不擅自改 SC）
+1. SC-154 門檻口徑：「項目數超過 12 個」的「項目」是否含工地？實作與 test 含工地（12 個持有項目＋工地即精簡）。若不含，要改 `layout.py` 的判斷與 test；若含，要把 SC-154 改成「物件數（含工地）超過 12」。
+2. D 類無 SC 可掛的測試：接受為「勉強掛載」維持現狀，還是補 SC-PENDING（例如「輸入不合法時視為程式錯誤」「結果模型不可變」）把它們收編？
+3. SC-163 的 ValueError 輸入檢查（3 個）：是否在 SC-163 邊界補一句「版位輸入不合法（沒有工地、多個工地、id 重複）屬程式錯誤」？補了這三個測試才真正對齊。
+
+### 對齊
+
+| SC | test 函式（代表） | 判斷依據 |
+|----|----------|---------|
+| SC-133 | test_sc133_assets_and_liability_with_records_enter_layout 等 3 個 | 資產、負債（含只有留空列者）都進版位，id 順序確定 |
+| SC-134 | test_sc134_* 3 個 | 購屋用途不進版位、不進分母；標記雙向變更後即時反映 |
+| SC-135 | test_sc135_* 2 個 | 無紀錄項目不進版位；首筆紀錄後早期月份無 key（空地） |
+| SC-136 | test_sc136_* 2 個 | 月份遞增、最新月含僅負債／購屋月份；無紀錄為空時間軸 |
+| SC-137 | test_city_geometry.py::test_sc137_* 7 個＋payload 分母 0 | 400 萬／100 萬／25 萬 → 0.5／0.25，與 SC 數值一致；下限、分母 0、非正值皆驗 |
+| SC-138 | test_city_geometry.py::test_sc138_* 5 個＋payload 坑洞規格 | 分母為負債自己的峰值、無峰值或 0 畫最淺 |
+| SC-139 | test_city_service.py::test_sc139_*、payload 空地／淡化／保留地塊 | 有值／未填（None）／無此項目（無 key）三態與名稱牌模式 |
+| SC-140 | test_sc140_* 4 個＋payload 未填隱藏 | 留空為 None、不沿用前值；未填無名稱牌、無提示、不可點 |
+| SC-141 | test_sc141_* 3 個（僅峰值與分母部分） | 留空不入峰值與分母；全空項目峰值 0；資產與負債分母分開（AND 子句見 C） |
+| SC-142 | test_sc142_* 6 個 | 130.0 萬、較 2026-07 增加 30.0 萬；減少／持平／最早月／前月無此項目／前月未填／本月未填 文案齊備 |
+| SC-143 | test_sc143_* 3 個（service）＋小卡註記 | 歷史月 100 萬約 33%、最新月 180 萬 60%；歷史小卡註明「依目前設定判定」且不含年數與累積 |
+| SC-144 | test_sc144_* 3 個 | 從未錄紀錄以初始值每月計入；晚建立項目早期月份不計，08 起計入（60 萬＋90 萬） |
+| SC-145 | test_sc145_latest_month_matches_existing_page_results | 以既有 Service 獨立重算天氣、買房進度與條件數、偏離，與城市結果相等 |
+| SC-146 | test_sc146_* 4 個 | 五旗固定順序、達成／未達成狀態、目標未設定 |
+| SC-147 | test_sc147_* 與 payload 對映 | L0～L3 對晴、多雲、暴雨、颱風；標題含等級名稱；副標回撤 22.0% |
+| SC-148 | test_sc148_* 3 個 | 資料不足為中性天空與中性名稱，副標含「資料」文案不含回撤 |
+| SC-149 | test_sc149_* 2 個 | 06 月 -5%／L0、09 月 -25%／L2；少於 3 個月為中性 |
+| SC-150 | test_sc150_* 6 個＋payload warn | 只標超標類別的建築；僅購屋類別不標；無此項目／未填不掛；含購屋用途註記；歷史月用當月比重 |
+| SC-151 | test_overview.py::test_sc151_* | 無紀錄：無元件、無滑桿、有「尚無資料」提示、數字卡照常 |
+| SC-152 | test_city_layout.py::test_sc152_* 12 個＋geometry 投影／縮放／名稱牌／障礙物＋payload 規格 | 分區街段、台股美股同街段、1280 寬等多寬度無衝突、落在畫布內 |
+| SC-153 | test_sc153_* 其餘 4 個 | 重複排版結果相同、不同輸入互不影響、多執行緒結果一致；50ms 見 B |
+| SC-154 | test_sc154_*（版位端旗標）＋test_plate_size_compact_has_name_only | 精簡旗標與只寫名稱；其餘為人工目視（SC 已註明）；門檻口徑見 B |
+| SC-155 | test_city_static.py::test_sc155_* 6 個 | 靜態掃描禁用標記解析與字串載入 API；對比檢查程式碼存在（SC 邊界註明實際對比以人工目視） |
+| SC-156 | test_city_static.py 前四項（相依、僅 component 引用 streamlit、payload 只含顯示欄位） | 與 SC 描述一致 |
+| SC-157 | test_sc157_* 4 個 | 名稱、類別（含負債類別顯示「負債」）、130.0 萬、無此項目註記 |
+| SC-158 | test_sc158_* 與 site_sub／site_tip | 180.0 萬／300.0 萬／60%，進度四捨五入，五條條件狀態 |
+| SC-159 | test_sc159_*（除 hint 文案為常數對照外皆為行為） | 提示文案；非 id 與失效選取靜默為 None；有效選取保留 |
+| SC-160 | test_sc160_city_component_precedes…、test_sc160_number_cards_stay_on_latest… | 城市在協定燈號與指標之前；滑桿拖到 2026-06 數字卡仍為最新月（淨值 502,000） |
+| SC-161 | test_sc161_* 其餘 5 個 | 滑桿預設最新月、單月無滑桿、fragment 無參數且數字卡在外、重跑 log 標 kind=fragment；實際重跑範圍 SC 註明為人工量測 |
+| SC-162 | test_sc162_city_failure_shows_fallback_and_keeps_number_cards | 兜底訊息、數字卡仍在、log 有 context=城市總覽 |
+| SC-163 | test_sc163_non_convergence_raises_city_layout_error、test_sc163_failure_is_not_cached | 無法收斂拋專屬錯誤且不快取；顯示端見 C |
+| SC-164 | test_sc164_* 前四個 | 版本下限 ≥ 1.66、資源檔存在、相依集合不變、無外部資源；打包以 uv build 人工核對（SC 已註明） |
+| SC-165 | 無 marker | SC 註明人工量測，留 3-Z（使用者決定） |
+| SC-166 | test_sc166_js_honors_reduced_motion_preference | 僅確認 JS 含 prefers-reduced-motion 字串，不驗行為；SC 註明以人工目視驗收，使用者已目視通過 |
+
+### 已向使用者確認過的項目判定
+- t02（基礎型別補掛）：D 類列出的 6 個勉強；SC-163 CityLayoutError 訊息可顯示、SC-139 留空為 None、SC-152 分區涵蓋、SC-146 條件標籤、SC-148 中性天氣常數則對齊。
+- t03（幾何公式掛 SC-152／154）：投影、縮放、名稱牌位置、障礙物對齊 SC-152；字寬／換行／牌高改掛 SC-152（見 A）。
+- t04（ValueError 掛 SC-163）：不對齊，列 D 與需確認第 3 項。
+- t06（建築逐月狀態掛 SC-140、frame_at 月份不在清單掛 SC-143）：前者可接受（含 SC-140 未填狀態，其 previous／delta 部分屬 SC-142）；後者不對齊，列 D。
+- t07（偏離列掛 SC-157）：不對齊，改掛 SC-150（見 A）。
+- SC-144 分兩段驗：t05 驗時間軸端（購屋項目不進版位與分母）、t06 驗工地進度端，兩段合起來覆蓋 GIVEN／THEN／邊界，認可。
+- SC-154／161／166 視覺部分與 SC-165：依使用者目視與決定，不再追。
+
+### 使用者裁定與第二段修正結果
+
+使用者裁定：
+1. SC-154：改 SC 文字為「物件數（含購屋工地）超過精簡門檻（12 個）」，程式不動。現在 SC、實作、test 三者口徑一致，B 類第二項已解。
+2. D 類勉強掛載：維持現狀，不補 SC-PENDING。清單與理由見下。
+3. SC-163：SC 邊界新增「版位輸入不合法（沒有工地、多個工地、id 重複）屬程式錯誤，不屬本場景」。
+
+**D 類維持現狀清單（約 20 個）與理由**
+理由共通：這些測試守的是程式錯誤防線、型別不可變或設計決策（AD-7），不對應使用者可見的業務行為，沒有 SC 可收編；改成不掛 marker 會讓 scenario_lint 報孤兒 FAIL，所以維持掛在最接近的 SC，使用者同意不補 SC-PENDING。
+- 型別不可變／預設值／轉換：`test_weather_spec_is_frozen`（SC-147）、`test_building_state_optional_fields_default_none`（SC-139）、`test_timeline_is_frozen_and_latest_defaults_none`（SC-151）、`test_geometry_json_round_trips_every_field`、`test_geometry_is_immutable`（SC-152）、`test_converts_each_row_in_order`（SC-139）。
+- 輸入防線：`test_frame_at_rejects_month_not_in_timeline`（SC-143）、`test_sc139_frame_not_aligned_with_timeline_raises_value_error`（SC-139）、`test_sc152_overlapping_lots_raise_value_error`、`test_sc152_lot_outside_ground_raises_value_error`、`test_sc152_missing_lot_for_building_raises_value_error`（SC-152）。
+- 清理驗證：`test_sc161_page_no_longer_exports_transition_alias`（SC-161）。
+- JS／元件實作慣例（SC-156）：`test_sc156_js_reports_selection_only_as_state_value`、`…keeps_instances_in_weakmap_without_diagnostic_leftovers`、`…follows_payload_state_contract`、`…reads_geometry_from_injected_constant_only`、`…js_has_no_business_text_outside_comments`、`…component_script_prefixes_geometry_constant`、`…component_html_has_no_text_or_diagnostics`。
+- SC-163 三個輸入檢查：見下方判斷。
+
+**SC-163 三個輸入檢查測試是否已對齊：沒有**
+`test_sc163_specs_without_site_are_rejected`、`test_sc163_multiple_sites_are_rejected`、`test_sc163_duplicate_ids_are_rejected` 驗的行為正是新邊界寫的「版位輸入不合法……不屬本場景」。SC 補完後，這三個測試的行為被 SC 明確劃在 SC-163 之外：行為內容有出處（程式錯誤），但掛 SC-163 與該句字面相反。同理，SC-163 原邊界「地塊重疊或出界屬程式錯誤，不屬本場景」使 SC-152 下三個 payload 地塊驗證測試也屬同類。措辭本身沒有問題，問題是這些測試沒有可掛的 SC。依使用者裁定維持現狀（掛 SC-163／SC-152 只為避免孤兒）。**已回報主 AI，未改 SC。**
+
+**第二段改動**
+- marker 改掛（不刪 marker）：
+  - SC-138：`test_pit_depth_constants_are_ordered`、`test_plate_sub_liability_has_prefix`、`test_sc139_liability_sub_has_prefix`。
+  - SC-152：`test_city_geometry.py` 字寬／換行／牌高 9 個測試、`test_zone_for_asset_and_liability`、`test_shape_for_zone`。
+  - SC-150：`test_drift_row_and_notes_by_frame`。
+  - SC-139＋SC-140：`test_building_tip`。
+  - SC-148：`test_sc164_css_defines_neutral_weather_severity_without_diagnostics`。
+  - SC-159：overview 兩個測試，改名為 `test_sc159_card_shows_hint_without_selection`、`test_sc159_stale_selection_is_ignored`。
+  - SC-158：改名為 `test_sc158_selected_site_shows_site_card`。
+- SC-153：`test_sc153_thirty_buildings_cold_start_within_50ms` 改為 30 棟項目＋工地（`_many_specs(30)`，31 個物件）。實測 7 次共 0.23 秒（單次約 33ms），三輪皆通過，仍小於 50ms。
+- 補測：
+  - SC-141：`test_city_service.py::test_sc141_blank_month_keeps_existing_weather_house_and_drift_rules`（留空月份累積報酬沿用前值、購屋項目留空視為 0、留空項目不貢獻佔比且建築不掛偏離）、`test_city_payload.py::test_sc141_all_blank_holding_plate_width_is_estimated_with_zero_wan`（全空項目名稱牌以「0.0 萬」估算）。
+  - SC-142：`test_city_service.py::test_sc142_previous_month_is_previous_on_slider_not_calendar`（月份 06／07／09 選 09，previous_month 為 07，delta 30.0）。
+  - SC-163：`test_overview.py::test_sc163_layout_failure_shows_message_and_keeps_number_cards`（排版拋 CityLayoutError → st.error 為「城市版位暫時無法排出，請參考下方數字」、log 含 context=城市總覽、數字卡淨值 502,000 與買房 bucket 仍在）。
+
+**驗證**
+- pytest：1121 passed（原 1117，新增 4 個測試）。
+- ruff check：全綠；ruff format 只對動到的 7 個測試檔執行（1 個被重排）。
+- scenario_lint：孤兒仍為既有 38 個、無 city 相關；覆蓋 160／161，SC-165 為人工量測 WARN。
+
 
 ## 3-3 規則符合度審查
 

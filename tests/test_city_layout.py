@@ -231,8 +231,8 @@ class TestDeterminismAndCache:
 
     @pytest.mark.scenario("SC-153")
     def test_sc153_thirty_buildings_cold_start_within_50ms(self):
-        specs = _many_specs(29)
-        assert len(specs) == 30
+        specs = _many_specs(30)
+        assert len(specs) == 31  # 30 棟項目＋購屋工地
         best = float("inf")
         for _ in range(7):
             layout_city.cache_clear()

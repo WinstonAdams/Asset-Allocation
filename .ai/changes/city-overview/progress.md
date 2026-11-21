@@ -34,7 +34,7 @@
 | 3-1 程式碼清理 | 完成 | views 改用共用 records_frame_to_models、刪私有 _to_month_records；測試註解去 SC 編號；layout.py 與 test_city_service.py 超長交 3-3 判斷；pytest 1104 passed |
 | 3-2 安全審查 | 完成 | 有條件通過→已修：authlib 1.9.5、joserfc 1.7.7 升級（獨立 commit，使用者本機登入實測通過）；補 JS script sink 靜態掃描；msgpack dev 依賴 CVE 未處理；pytest 1114 passed |
 | 3-3 規則符合度審查 | 完成 | 阻擋→已修：小卡篩選移出 views（payload.card_for）、CITY_PLATE_MODE 移入 constants、public 函式補 Returns 與 docstring；LOW-1 與 ruff isort 衝突不改；AD-2 偏離判定合理；超長檔不拆；pytest 1117 passed |
-| 3-4 行為對映審查 | 未開始 | AI 比對 SC 描述 vs test 內容 |
+| 3-4 行為對映審查 | 完成 | 有條件通過→已修：marker 改掛約 20 個、SC-153 改真 30 棟、補 SC-141/142/163 測試；SC-154 門檻改「含工地」、SC-163 邊界補輸入錯誤句；約 20 個技術防線測試維持勉強掛載（使用者決定，記於 review.md）；pytest 1121 passed |
 | 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
 
 ## Phase 4：收尾

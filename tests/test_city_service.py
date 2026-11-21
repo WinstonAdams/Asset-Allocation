@@ -438,9 +438,7 @@ def test_sc143_target_always_uses_current_params() -> None:
         _asset(1, "台股ETF甲"),
         _asset(4, "定存丁", category=ASSET_CATEGORIES.TIME_DEPOSIT, purpose=HOLDING_PURPOSE.HOUSE),
     ]
-    records = _records(
-        [(1, "2026-06", 50.0), (4, "2026-06", 1_000_000.0), (1, "2026-09", 60.0)]
-    )
+    records = _records([(1, "2026-06", 50.0), (4, "2026-06", 1_000_000.0), (1, "2026-09", 60.0)])
 
     historical = _frame(holdings, records, "2026-06")
     latest = _frame(holdings, records, "2026-09")
@@ -749,3 +747,47 @@ def test_frame_at_rejects_month_not_in_timeline() -> None:
 
     with pytest.raises(ValueError):
         _frame(holdings, records, "2030-01")
+
+
+@pytest.mark.scenario("SC-141")
+def test_sc141_blank_month_keeps_existing_weather_house_and_drift_rules() -> None:
+    holdings = [
+        _asset(1, "台股ETF甲"),
+        _asset(2, "美股ETF辛", category=ASSET_CATEGORIES.US_STOCK),
+        _asset(4, "定存丁", category=ASSET_CATEGORIES.TIME_DEPOSIT, purpose=HOLDING_PURPOSE.HOUSE),
+    ]
+    rows: list[tuple[int, str, float | None]] = []
+    for ym, tw in (("2026-01", 100.0), ("2026-02", 120.0), ("2026-03", 150.0), ("2026-04", None)):
+        rows += [(1, ym, tw), (2, ym, 100.0), (4, ym, 900_000.0 if ym != "2026-04" else None)]
+    records = _records(rows)
+
+    march = _frame(holdings, records, "2026-03", targets=_DRIFT_TARGETS)
+    april = _frame(holdings, records, "2026-04", targets=_DRIFT_TARGETS)
+
+    # 天氣：累積報酬沿用前值，留空月份判定與前一月相同
+    assert april.weather.status == "ok"
+    assert april.weather.current_cumulative_twr == march.weather.current_cumulative_twr
+    assert april.weather.data_month_count == march.weather.data_month_count + 1
+    # 工地：購屋項目該月留空視為 0
+    assert march.site.progress.bucket_value == 900_000.0
+    assert april.site.progress.bucket_value == 0
+    # 偏離：留空的台股不貢獻佔比，美股獨佔 100%；留空的建築不掛偏離
+    tw_row = next(r for r in april.drift_rows if r.category == ASSET_CATEGORIES.TW_STOCK)
+    us_row = next(r for r in april.drift_rows if r.category == ASSET_CATEGORIES.US_STOCK)
+    assert tw_row.current_weight == 0
+    assert us_row.current_weight == pytest.approx(100.0)
+    assert _building(april, 1).status == CITY_BUILDING_STATUS.UNFILLED
+    assert _building(april, 1).drift is None
+
+
+@pytest.mark.scenario("SC-142")
+def test_sc142_previous_month_is_previous_on_slider_not_calendar() -> None:
+    holdings = [_asset(1, "台股ETF甲")]
+    records = _records([(1, "2026-06", 90.0), (1, "2026-07", 100.0), (1, "2026-09", 130.0)])
+
+    september = _frame(holdings, records, "2026-09")
+
+    building = _building(september, 1)
+    assert building.previous_month == "2026-07"
+    assert building.previous_status == CITY_BUILDING_STATUS.PRESENT
+    assert building.delta == 30.0
