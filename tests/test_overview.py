@@ -11,28 +11,39 @@ app.py 原始碼掃描驗證，比照 test_navigation_guard/test_page_config 的
 """
 
 # ==== 原生（標準庫） ====
+import ast
+import logging
 import re
 from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 # ==== 第三方套件 ====
+import libsql
 import pandas as pd
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 # ==== 專案內部 ====
-from asset_lab import overview_presentation
+from asset_lab import bootstrap, overview_presentation
 from asset_lab.core.constants import (
     ASSET_CATEGORIES,
+    CITY_TEXT,
+    DEFAULT_REBALANCE_THRESHOLD,
     HOLDING_PURPOSE,
     HOUSE_PARAM_KEY,
     HOUSE_TRIGGER,
     PROTOCOL_LEVEL_CODE,
     PROTOCOL_LEVELS,
+    PROTOCOL_MIN_DATA_MONTHS,
 )
+from asset_lab.core.exceptions import CityLayoutError
+from asset_lab.error_boundary import UNEXPECTED_ERROR_MESSAGE
 from asset_lab.models.holding import HoldingModel
 from asset_lab.models.house import HouseParamModel, SubjectiveTriggerModel
+from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.results import (
     BucketProgress,
     ProtocolStatus,
@@ -40,8 +51,15 @@ from asset_lab.models.results import (
     TriggerCondition,
 )
 from asset_lab.overview_presentation import OverviewPresentation
+from asset_lab.repositories.query_metrics import QueryMetrics
+from asset_lab.repositories.read_cache import ReadCache
+from asset_lab.repositories.schema_repository import SchemaRepository
 from asset_lab.services.affordability_service import AffordabilityService
+from asset_lab.services.allocation_service import AllocationService
+from asset_lab.services.city_service import CityService
 from asset_lab.services.house_service import HouseService
+from asset_lab.services.protocol_service import ProtocolService
+from asset_lab.services.return_service import ReturnService
 
 APP_DIR = Path(__file__).resolve().parent.parent
 APP_PY = APP_DIR / "app.py"
@@ -315,8 +333,7 @@ def _bucket_progress(progress_pct: float | None) -> BucketProgress:
 def _checklist(met_count: int, total: int = 5) -> TriggerChecklist:
     """組出測試用 TriggerChecklist（前 met_count 條 met=True，恰 total 條）。"""
     conditions = [
-        TriggerCondition(key=f"cond_{i}", kind="objective", met=i < met_count)
-        for i in range(total)
+        TriggerCondition(key=f"cond_{i}", kind="objective", met=i < met_count) for i in range(total)
     ]
     return TriggerChecklist(conditions=conditions, met_count=met_count, all_met=met_count == total)
 
@@ -461,6 +478,7 @@ def _house_summary_container(
         subjective_trigger_repo=_StubSubjectiveTriggerRepo(triggers),
         house_service=HouseService(),
         affordability_service=AffordabilityService(),
+        city_service=_city_service(),
     )
 
 
@@ -483,6 +501,21 @@ def _run_overview_page(
     )
     at.run()
     return at
+
+
+@pytest.fixture(autouse=True)
+def fragment_entry_probe():
+    """城市 fragment 入口會驗證連線並讀取快取；替換成直接回傳測試注入的替身容器。"""
+    cache = SimpleNamespace(expire_if_stale=lambda: None)
+    with (
+        mock.patch(
+            "asset_lab.bootstrap.get_resilient_container",
+            side_effect=lambda: st.session_state["container"],
+        ),
+        mock.patch("asset_lab.bootstrap.get_read_cache", return_value=cache),
+        mock.patch("asset_lab.bootstrap.get_query_metrics", return_value=QueryMetrics()),
+    ):
+        yield
 
 
 class TestOverviewPageHouseSummary:
@@ -561,3 +594,281 @@ class TestOverviewPageHouseSummaryMatchesHousePage:
         ).value
         house_trigger_count = next(m for m in house_at.metric if m.label == "達成計數").value
         assert overview_trigger_count == house_trigger_count
+
+
+# ---- 城市總覽整合
+_CITY_LABEL = "城市總覽"
+_CITY_KEY = "city_overview"
+_CITY_MONTH_KEY = "city_month"
+_CITY_MONTHS = ("2026-01", "2026-02", "2026-03")
+
+
+def _city_service() -> CityService:
+    """以真實純 Service 組出的 CityService，供替身容器使用。"""
+    return_service = ReturnService()
+    allocation_service = AllocationService()
+    protocol_service = ProtocolService()
+    house_service = HouseService()
+    affordability_service = AffordabilityService()
+    return CityService(
+        return_service=return_service,
+        protocol_service=protocol_service,
+        allocation_service=allocation_service,
+        house_service=house_service,
+        affordability_service=affordability_service,
+        min_data_months=PROTOCOL_MIN_DATA_MONTHS,
+        rebalance_threshold=DEFAULT_REBALANCE_THRESHOLD,
+    )
+
+
+def _seeded_container(months: tuple[str, ...]):
+    """虛構資料的真實容器（記憶體資料庫）：兩個項目，各月市值逐月成長。"""
+    conn = libsql.connect(":memory:")
+    SchemaRepository(conn=conn).ensure_schema()
+    container = bootstrap.build_container(
+        conn=conn, read_cache=ReadCache(ttl_seconds=300), query_metrics=QueryMetrics()
+    )
+    stock_id = container.holding_repo.add_holding(
+        holding=HoldingModel(
+            name="範例股票",
+            kind="asset",
+            category=ASSET_CATEGORIES.TW_STOCK,
+            initial_market_value=300000.0,
+            initial_cost=300000.0,
+        )
+    )
+    deposit_id = container.holding_repo.add_holding(
+        holding=HoldingModel(
+            name="範例活存",
+            kind="asset",
+            category=ASSET_CATEGORIES.DEMAND_DEPOSIT,
+            initial_market_value=100000.0,
+            initial_cost=100000.0,
+        )
+    )
+    for index, month in enumerate(months):
+        container.record_repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=stock_id,
+                year_month=month,
+                market_value=300000.0 + index * 50000.0,
+                net_investment=0.0,
+                total_cost=300000.0,
+                realized_income=0.0,
+            )
+        )
+        container.record_repo.upsert_record(
+            record=MonthlyRecordModel(
+                holding_id=deposit_id,
+                year_month=month,
+                market_value=100000.0 + index * 1000.0,
+                net_investment=1000.0,
+            )
+        )
+    return container
+
+
+def _run_city_page(container, *, preset: dict[str, object] | None = None) -> AppTest:
+    at = AppTest.from_file(APP_DIR / "views" / "overview.py", default_timeout=15)
+    at.session_state["container"] = container
+    for name, value in (preset or {}).items():
+        at.session_state[name] = value
+    at.run()
+    return at
+
+
+def _flatten(node) -> list:
+    """依畫面由上而下的順序攤平元素樹。"""
+    result = []
+    for child in node.children.values():
+        result.append(child)
+        if hasattr(child, "children"):
+            result.extend(_flatten(child))
+    return result
+
+
+def _is_city_component(element) -> bool:
+    return "bidi" in type(element).__name__.lower() or getattr(element, "type", "") == (
+        "bidi_component"
+    )
+
+
+def _metric_value(at: AppTest, label: str) -> str:
+    return next(m for m in at.metric if m.label == label).value
+
+
+class TestOverviewCityNoData:
+    """沒有任何月度紀錄時城市區塊不掛元件、不出滑桿（SC-151）。"""
+
+    @pytest.mark.scenario("SC-151")
+    def test_sc151_no_records_shows_neutral_hint_without_component_or_slider(self):
+        at = _run_overview_page(
+            params=_house_summary_params(),
+            holdings=[_house_holding_bucket_1m()],
+            records_df=_empty_records_df(),
+            triggers=_house_summary_triggers(),
+        )
+
+        assert not at.exception
+        assert not at.select_slider
+        assert not any(_is_city_component(e) for e in _flatten(at.main))
+        assert any("尚無資料" in info.value for info in at.info)
+        # 下方數字卡照現行行為處理無資料
+        assert _metric_value(at, "買房 bucket 進度") == "66.7%"
+
+
+class TestOverviewCityLayoutOrder:
+    """城市在最上方，數字卡在其後且固定最新月結（SC-160）。"""
+
+    @pytest.mark.scenario("SC-160")
+    def test_sc160_city_component_precedes_protocol_signal_and_metrics(self):
+        at = _run_city_page(_seeded_container(_CITY_MONTHS))
+
+        assert not at.exception
+        elements = _flatten(at.main)
+        city_index = next(i for i, e in enumerate(elements) if _is_city_component(e))
+        slider_index = next(i for i, e in enumerate(elements) if e is at.select_slider[0])
+        first_metric_index = next(i for i, e in enumerate(elements) if e is at.metric[0])
+        signal_index = next(i for i, e in enumerate(elements) if e is at.subheader[0])
+        assert city_index < slider_index < signal_index < first_metric_index
+
+    @pytest.mark.scenario("SC-160")
+    def test_sc160_number_cards_stay_on_latest_month_when_slider_moves(self):
+        container = _seeded_container(_CITY_MONTHS)
+        at = _run_city_page(container)
+        latest_net_worth = _metric_value(at, "目前淨值")
+
+        at.select_slider(key=_CITY_MONTH_KEY).set_value(_CITY_MONTHS[0]).run()
+
+        assert not at.exception
+        assert at.select_slider(key=_CITY_MONTH_KEY).value == _CITY_MONTHS[0]
+        assert _metric_value(at, "目前淨值") == latest_net_worth
+        assert latest_net_worth == "502,000"
+
+    @pytest.mark.scenario("SC-159")
+    def test_sc159_card_shows_hint_without_selection(self):
+        at = _run_city_page(_seeded_container(_CITY_MONTHS))
+
+        assert not at.exception
+        assert any(CITY_TEXT.CARD_HINT in c.value for c in at.caption)
+
+    @pytest.mark.scenario("SC-158")
+    def test_sc158_selected_site_shows_site_card(self):
+        at = _run_city_page(
+            _seeded_container(_CITY_MONTHS), preset={_CITY_KEY: {"selected": "site"}}
+        )
+
+        assert not at.exception
+        assert not any(CITY_TEXT.CARD_HINT in c.value for c in at.caption)
+        assert any(CITY_TEXT.SITE_NAME in t.value for t in at.text)
+
+    @pytest.mark.scenario("SC-159")
+    def test_sc159_stale_selection_is_ignored(self):
+        at = _run_city_page(
+            _seeded_container(_CITY_MONTHS), preset={_CITY_KEY: {"selected": "holding-999"}}
+        )
+
+        assert not at.exception
+        assert any(CITY_TEXT.CARD_HINT in c.value for c in at.caption)
+
+
+class TestOverviewCityFragmentScope:
+    """月份滑桿與小卡只重跑城市區塊（SC-161 結構斷言；真實重跑範圍由人工量測 log 驗證）。"""
+
+    @pytest.mark.scenario("SC-161")
+    def test_sc161_slider_defaults_to_latest_month_with_all_months_as_options(self):
+        at = _run_city_page(_seeded_container(_CITY_MONTHS))
+
+        slider = at.select_slider(key=_CITY_MONTH_KEY)
+        assert not at.exception
+        assert tuple(slider.options) == _CITY_MONTHS
+        assert slider.value == _CITY_MONTHS[-1]
+
+    @pytest.mark.scenario("SC-161")
+    def test_sc161_single_month_hides_slider_and_still_mounts_city(self):
+        at = _run_city_page(_seeded_container(_CITY_MONTHS[:1]))
+
+        assert not at.exception
+        assert not at.select_slider
+        assert any(_is_city_component(e) for e in _flatten(at.main))
+
+    @pytest.mark.scenario("SC-161")
+    def test_sc161_stale_month_in_session_falls_back_to_latest(self):
+        at = _run_city_page(_seeded_container(_CITY_MONTHS), preset={_CITY_MONTH_KEY: "1999-01"})
+
+        assert not at.exception
+        assert at.select_slider(key=_CITY_MONTH_KEY).value == _CITY_MONTHS[-1]
+
+    @pytest.mark.scenario("SC-161")
+    def test_sc161_city_block_is_parameterless_fragment_and_cards_stay_outside(self):
+        tree = ast.parse((APP_DIR / "views" / "overview.py").read_text(encoding="utf-8"))
+        funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        city = funcs["_render_city"]
+
+        assert [a.arg for a in city.args.args] == []
+        decorator = ast.unparse(city.decorator_list[0])
+        assert decorator == "rerun_fragment(label='城市總覽')"
+        # 數字卡編排不在 fragment 內：城市函式不呼叫 _render（數字卡）與買房摘要編排
+        called = {
+            n.func.id
+            for n in ast.walk(city)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+        assert "_render" not in called
+        assert "_compute_house_summary" not in called
+
+    @pytest.mark.scenario("SC-161")
+    def test_sc161_city_run_is_logged_as_fragment(self, caplog):
+        with caplog.at_level(logging.INFO, logger="asset_lab.rerun_runtime"):
+            _run_city_page(_seeded_container(_CITY_MONTHS))
+
+        lines = [r.getMessage() for r in caplog.records if "重跑量測" in r.getMessage()]
+        assert any(f"kind=fragment page={_CITY_LABEL}" in line for line in lines)
+
+    @pytest.mark.scenario("SC-161")
+    def test_sc161_page_no_longer_exports_transition_alias(self):
+        source = (APP_DIR / "src" / "asset_lab" / "city" / "component.py").read_text(
+            encoding="utf-8"
+        )
+
+        assert "city_overview" not in source
+
+
+class TestOverviewCityErrorIsolation:
+    """城市區塊出錯時下方數字卡照常顯示（SC-162）。"""
+
+    @pytest.mark.scenario("SC-162")
+    def test_sc162_city_failure_shows_fallback_and_keeps_number_cards(self, caplog):
+        container = _seeded_container(_CITY_MONTHS)
+        container.city_service.build_timeline = mock.Mock(side_effect=RuntimeError("boom"))
+
+        with caplog.at_level(logging.ERROR):
+            at = _run_city_page(container)
+
+        assert [e.value for e in at.error] == [UNEXPECTED_ERROR_MESSAGE]
+        assert not at.select_slider
+        assert _metric_value(at, "目前淨值") != "—"
+        assert _metric_value(at, "買房 bucket 進度") is not None
+        assert any(f"context={_CITY_LABEL}" in r.getMessage() for r in caplog.records)
+
+
+class TestOverviewCityLayoutFailure:
+    """版位無法排出時顯示中性訊息、記錄 log，數字卡照常顯示（SC-163）。"""
+
+    @pytest.mark.scenario("SC-163")
+    def test_sc163_layout_failure_shows_message_and_keeps_number_cards(self, caplog):
+        container = _seeded_container(_CITY_MONTHS)
+
+        with (
+            mock.patch(
+                "asset_lab.city.layout.layout_city",
+                side_effect=CityLayoutError(CITY_TEXT.LAYOUT_FAILED),
+            ),
+            caplog.at_level(logging.ERROR),
+        ):
+            at = _run_city_page(container)
+
+        assert [e.value for e in at.error] == [CITY_TEXT.LAYOUT_FAILED]
+        assert any(f"context={_CITY_LABEL}" in r.getMessage() for r in caplog.records)
+        assert _metric_value(at, "目前淨值") == "502,000"
+        assert _metric_value(at, "買房 bucket 進度") is not None

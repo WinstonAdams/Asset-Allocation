@@ -224,6 +224,13 @@ class HOUSE_TRIGGER:
     COGNITION = "cognition"
     ALL = (ANCHOR, INCOME, DOWN_PAYMENT, PAYMENT, COGNITION)
     SUBJECTIVE = (ANCHOR, COGNITION)
+    LABEL = {
+        ANCHOR: "定錨",
+        INCOME: "收入",
+        DOWN_PAYMENT: "自備",
+        PAYMENT: "月付",
+        COGNITION: "認知",
+    }
 
 
 class HOUSE_PARAMS_TABLE:
@@ -369,3 +376,120 @@ class RERUN_KIND:
 
     FULL = "full"
     FRAGMENT = "fragment"
+
+
+class CITY_ZONE:
+    """城市分區鍵（亦為 city.css 色票鍵）。台股與美股同屬股票分區。"""
+
+    CASH = "cash"
+    DEPOSIT = "deposit"
+    STOCK = "stock"
+    INSURANCE = "ins"
+    DEBT = "debt"
+    SITE = "house"  # 購屋工地
+    BY_CATEGORY = {
+        ASSET_CATEGORIES.DEMAND_DEPOSIT: CASH,
+        ASSET_CATEGORIES.TIME_DEPOSIT: DEPOSIT,
+        ASSET_CATEGORIES.TW_STOCK: STOCK,
+        ASSET_CATEGORIES.US_STOCK: STOCK,
+        ASSET_CATEGORIES.INSURANCE: INSURANCE,
+    }
+    LIABILITY = DEBT
+    ZONE_LABEL = {CASH: "現金", DEPOSIT: "存款", STOCK: "股票", INSURANCE: "保險", DEBT: "負債"}
+
+
+class CITY_SHAPE:
+    """建築外形鍵（city.js 依此選繪圖函式）。"""
+
+    TANK = "tank"
+    SILO = "silo"
+    TOWER = "tower"
+    STATION = "station"
+    PIT = "pit"
+    BY_ZONE = {
+        CITY_ZONE.CASH: TANK,
+        CITY_ZONE.DEPOSIT: SILO,
+        CITY_ZONE.STOCK: TOWER,
+        CITY_ZONE.INSURANCE: STATION,
+        CITY_ZONE.DEBT: PIT,
+    }
+
+
+class CITY_BUILDING_STATUS:
+    """項目在選定月份的狀態。"""
+
+    PRESENT = "present"
+    UNFILLED = "unfilled"  # 有列但市值留空：不畫建築、不畫名稱牌
+    ABSENT = "absent"  # 沒有列：空地加淡化名稱牌
+    VACANT = frozenset({UNFILLED, ABSENT})
+
+
+class CITY_PLATE_MODE:
+    """名稱牌三種畫法（city.js 依此決定畫法）：一般、淡化（沒有此項目）、隱藏（市值留空）。"""
+
+    NORMAL = "normal"
+    FADED = "faded"
+    HIDDEN = "hidden"
+
+
+@dataclass(frozen=True)
+class CityWeatherSpec:
+    """一種天氣的顯示規格：視覺代碼給 city.js 選畫法，名稱與嚴重度給天氣面板。"""
+
+    sky: str  # clear / cloudy / rain / typhoon / calm
+    name: str
+    severity: str  # good / warn / bad / neutral
+
+
+class CITY_WEATHER:
+    """天氣即大跌協定等級。等級標籤另取協定等級規格，不在此重抄。"""
+
+    BY_LEVEL = {
+        PROTOCOL_LEVEL_CODE.L0: CityWeatherSpec(sky="clear", name="晴", severity="good"),
+        PROTOCOL_LEVEL_CODE.L1: CityWeatherSpec(sky="cloudy", name="多雲", severity="warn"),
+        PROTOCOL_LEVEL_CODE.L2: CityWeatherSpec(sky="rain", name="暴雨", severity="bad"),
+        PROTOCOL_LEVEL_CODE.L3: CityWeatherSpec(sky="typhoon", name="颱風", severity="bad"),
+    }
+    NEUTRAL = CityWeatherSpec(sky="calm", name="天氣未定", severity="neutral")
+
+
+class CITY_AMOUNT:
+    """名稱牌與提示的金額單位（萬，一位小數）。"""
+
+    DIVISOR = 10_000
+    UNIT = "萬"
+
+
+class CITY_TEXT:
+    """城市總覽的固定文案；含 {month}、{pct} 等佔位符者以 str.format 帶入。"""
+
+    SITE_NAME = "購屋工地"
+    LIABILITY_PREFIX = "應繳"
+    SITE_AMOUNT_PREFIX = "自備款"
+    MONTH_SLIDER_LABEL = "月份"
+    ARIA_LABEL = "等角城市：資產狀態與購屋進度"
+    CARD_HINT = "點建築或工地，查看該項目的細節"
+    DRAWDOWN = "自高點回撤 {pct}"
+    COMPARE_WITH = "較 {month}"
+    PREVIOUS_ABSENT = "較 {month}：當時沒有此項目"
+    PREVIOUS_UNFILLED = "較 {month}：當時未填"
+    UNFILLED = "本月未填"
+    ABSENT = "本月沒有此項目"
+    BY_CURRENT_SETTINGS = "依目前設定判定"
+    INCLUDES_HOUSE_PURPOSE = "含購屋用途金額"
+    TARGET_UNSET = "目標未設定"
+    MET = "達成"
+    NOT_MET = "未達成"
+    LAYOUT_FAILED = "城市版位暫時無法排出，請參考下方數字"
+    CARD_LABEL_CATEGORY = "類別"
+    CARD_LABEL_VALUE = "該月市值"
+    CARD_LABEL_COMPARE = "與前一月相比"
+    CARD_LABEL_DRIFT = "目標偏離"
+    CARD_LABEL_SITE_AMOUNT = "自備款"
+    CARD_LABEL_SITE_TARGET = "目標"
+    CARD_LABEL_SITE_PROGRESS = "進度"
+    CARD_DELTA_UP = "增加 {amount}"
+    CARD_DELTA_DOWN = "減少 {amount}"
+    CARD_DELTA_FLAT = "持平"
+    CARD_DRIFT_VALUE = "現況 {current}%、目標 {target}%（偏離 {drift} 個百分點）"
+    SITE_CONDITIONS = "購屋條件 {met}/{total}"

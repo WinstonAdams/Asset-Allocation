@@ -11,6 +11,12 @@
 已知限制），無月度紀錄時仍照常計算（bucket 可能以 initial_market_value 起始值計）。
 本頁為唯一 catch 點。
 
+頁面最上方是城市區塊（`_render_city`，以 `rerun_fragment` 包成 fragment）：依序為版位
+元件、月份滑桿、點選項目的小卡。拖滑桿與點擊只重跑此區塊，不影響其後的數字卡；數字卡
+（協定燈號、必做禁止、指標、買房摘要）在 fragment 之外，固定顯示最新月結。城市區塊的
+資料組裝全部委派 `CityService`，版位與小卡文字委派 `asset_lab.city` 呈現模組，本頁只
+讀取、串接與渲染。城市區塊出錯由 fragment 的錯誤兜底接住，不影響數字卡。
+
 等級判定與回撤計算的業務正確性由 ProtocolService 的 SC 測試保證；level_code 查表與
 狀態轉呈現資料的邏輯由 overview_presentation 的 SC 測試保證；買房摘要的業務正確性由
 HouseService 的 SC 測試保證。本頁只做委派、資料組裝與渲染，不算任何業務值（只消費
@@ -22,24 +28,31 @@ HouseService 的 SC 測試保證。本頁只做委派、資料組裝與渲染，
 import logging
 
 # ==== 第三方套件 ====
-import pandas as pd
 import streamlit as st
 
 # ==== 專案內部 ====
 from asset_lab import overview_presentation
 from asset_lab.bootstrap import Container
+from asset_lab.city import payload as city_payload
+from asset_lab.city.component import render_city, selected_in_session
+from asset_lab.city.layout import layout_city
 from asset_lab.core.constants import (
+    CITY_TEXT,
     EARLIEST_YEAR_MONTH_SENTINEL,
     PROTOCOL_LEVEL_CODE,
     PROTOCOL_MIN_DATA_MONTHS,
     TIMEZONE,
 )
 from asset_lab.core.exceptions import AssetLabError
-from asset_lab.models.record import MonthlyRecordModel
-from asset_lab.models.results import HouseSummary, ProtocolStatus
+from asset_lab.core.utils import records_frame_to_models
+from asset_lab.models.results import CityFrame, CityTimeline, HouseSummary, ProtocolStatus
+from asset_lab.rerun_runtime import rerun_fragment
 from asset_lab.services.period_service import today_in_timezone
 
 logger = logging.getLogger("asset_lab.views.overview")
+
+_CITY_KEY = "city_overview"
+_CITY_MONTH_KEY = "city_month"
 
 # 燈號 emoji：對映等級代碼，供畫面上的等級指示（平時 → 深熊漸次升高警覺）。
 _SIGNAL_EMOJI = {
@@ -67,6 +80,7 @@ def _container() -> Container:
 def render() -> None:
     """渲染總覽頁：登入後預設落地頁。"""
     st.title("總覽")
+    _render_city()
     container = _container()
 
     try:
@@ -101,6 +115,90 @@ def render() -> None:
         st.error(str(error))
 
 
+@rerun_fragment(label="城市總覽")
+def _render_city() -> None:
+    """城市區塊（fragment）：拖滑桿與點擊只重跑此區塊，不影響下方數字卡。
+
+    沒有任何月度紀錄時只顯示中性提示，不掛元件也不出滑桿；只有一個月份時不出滑桿，
+    直接用該月。
+    """
+    container = _container()
+    holdings = container.holding_repo.list_holdings()
+    records_df = container.record_repo.read_all()
+    city_service = container.city_service
+    timeline = city_service.build_timeline(holdings=holdings, records_df=records_df)
+    if not timeline.months:
+        st.info(overview_presentation.NO_DATA_MESSAGE)
+        return
+
+    # fragment 內的 widget 不能寫進 fragment 外建立的容器，所以元件先佔位、滑桿後建立
+    slot = st.container()
+    month = _select_month(timeline)
+
+    thresholds = container.protocol_service.effective_thresholds(
+        stored=container.protocol_threshold_repo.read_thresholds()
+    )
+    frame = city_service.frame_at(
+        year_month=month,
+        timeline=timeline,
+        holdings=holdings,
+        records_df=records_df,
+        thresholds=thresholds,
+        house_params=container.house_service.effective_params(
+            stored=container.house_param_repo.read_params()
+        ),
+        subjective=container.subjective_trigger_repo.read_triggers(),
+        targets=container.target_repo.read_targets(),
+        current_year=today_in_timezone(TIMEZONE).year,
+    )
+    layout = layout_city(
+        specs=city_payload.build_specs(timeline=timeline), max_asset=timeline.max_asset_value
+    )
+    selected = city_payload.resolve_selection(
+        selected=selected_in_session(key=_CITY_KEY), timeline=timeline
+    )
+    with slot:
+        render_city(
+            payload=city_payload.build_payload(
+                layout=layout, timeline=timeline, frame=frame, selected=selected
+            ),
+            key=_CITY_KEY,
+        )
+    _render_card(timeline=timeline, frame=frame, selected=selected)
+
+
+def _select_month(timeline: CityTimeline) -> str:
+    """月份滑桿：預設最新月結；只有一個月份時不渲染滑桿。
+
+    Returns:
+        選定的年月字串。
+    """
+    months = timeline.months
+    if len(months) == 1:
+        # 單一選項的 select_slider 沒有可拖動的意義，直接用該月並清掉過時的 widget 狀態
+        st.session_state.pop(_CITY_MONTH_KEY, None)
+        return months[0]
+    if st.session_state.get(_CITY_MONTH_KEY) not in months:
+        # 資料被刪或換月後 widget 狀態不在選項內，會讓 select_slider 報錯，先重設為最新月
+        st.session_state[_CITY_MONTH_KEY] = timeline.latest_month
+    return st.select_slider(CITY_TEXT.MONTH_SLIDER_LABEL, options=months, key=_CITY_MONTH_KEY)
+
+
+def _render_card(*, timeline: CityTimeline, frame: CityFrame, selected: str | None) -> None:
+    """依選取渲染小卡；沒有選取時顯示操作提示。"""
+    if selected is None:
+        st.caption(CITY_TEXT.CARD_HINT)
+        return
+    card = city_payload.card_for(selected=selected, timeline=timeline, frame=frame)
+    with st.container(border=True):
+        # 名稱是使用者輸入，用純文字渲染，不經 markdown 解析
+        st.text(card.title)
+        for label, value in card.rows:
+            st.text(f"{label}：{value}")
+        for note in card.notes:
+            st.caption(note)
+
+
 def _compute_house_summary(container: Container) -> HouseSummary:
     """讀買房參數/主觀勾選/主檔/全歷史月度紀錄，編排取得總覽頁買房摘要。
 
@@ -113,7 +211,7 @@ def _compute_house_summary(container: Container) -> HouseSummary:
 
     params = house_service.effective_params(stored=container.house_param_repo.read_params())
     holdings = container.holding_repo.list_holdings()
-    month_records = _to_month_records(container.record_repo.read_all())
+    month_records = records_frame_to_models(container.record_repo.read_all())
 
     bucket_value = house_service.bucket_value(month_records=month_records, holdings=holdings)
     cash_reserve_value = house_service.cash_reserve_value(
@@ -140,24 +238,6 @@ def _compute_house_summary(container: Container) -> HouseSummary:
         subjective=subjective,
     )
     return house_service.overview_summary(bucket_progress=progress, checklist=checklist)
-
-
-def _to_month_records(records_df: pd.DataFrame) -> list[MonthlyRecordModel]:
-    """把月度紀錄 DataFrame（RecordRepository.read_all 產出）轉為 HouseService 消費的模型清單。
-
-    HouseService 的 bucket/現金預備金口徑須橫跨全歷史月份（判定「是否曾有任何紀錄」，
-    見 HouseService._current_market_values），故取全量而非僅最新月（與 views/house.py
-    的同名輔助函式同邏輯，頁面各自編排的可接受重複，見 design 已知限制）。
-    """
-    return [
-        MonthlyRecordModel(
-            holding_id=row.holding_id,
-            year_month=row.year_month,
-            market_value=None if pd.isna(row.market_value) else row.market_value,
-            net_investment=row.net_investment,
-        )
-        for row in records_df.itertuples(index=False)
-    ]
 
 
 def _render(

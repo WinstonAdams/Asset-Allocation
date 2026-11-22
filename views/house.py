@@ -15,16 +15,15 @@
 import logging
 
 # ==== 第三方套件 ====
-import pandas as pd
 import streamlit as st
 
 # ==== 專案內部 ====
 from asset_lab.bootstrap import Container
 from asset_lab.core.constants import HOUSE_TRIGGER, TIMEZONE
 from asset_lab.core.exceptions import AssetLabError
+from asset_lab.core.utils import records_frame_to_models
 from asset_lab.error_boundary import guarded_callback, show_callback_error
 from asset_lab.models.house import SubjectiveTriggerModel
-from asset_lab.models.record import MonthlyRecordModel
 from asset_lab.models.results import (
     AffordabilityResult,
     BucketCompositionWarning,
@@ -35,15 +34,6 @@ from asset_lab.rerun_runtime import verified_container
 from asset_lab.services.period_service import today_in_timezone
 
 logger = logging.getLogger("asset_lab.views.house")
-
-# 觸發條件鍵→中文標籤，供五條檢核清單與缺口清單顯示（HOUSE_TRIGGER.ALL 值域固定五條）。
-_TRIGGER_LABEL = {
-    HOUSE_TRIGGER.ANCHOR: "定錨",
-    HOUSE_TRIGGER.INCOME: "收入",
-    HOUSE_TRIGGER.DOWN_PAYMENT: "自備",
-    HOUSE_TRIGGER.PAYMENT: "月付",
-    HOUSE_TRIGGER.COGNITION: "認知",
-}
 
 # 客觀觸發條件的 actual/required 呈現單位：月付為百分比，收入/自備為金額（TWD）。
 _PERCENT_TRIGGERS = (HOUSE_TRIGGER.PAYMENT,)
@@ -66,7 +56,7 @@ def render() -> None:
 
         params = house_service.effective_params(stored=container.house_param_repo.read_params())
         holdings = container.holding_repo.list_holdings()
-        month_records = _to_month_records(container.record_repo.read_all())
+        month_records = records_frame_to_models(container.record_repo.read_all())
 
         bucket_value = house_service.bucket_value(month_records=month_records, holdings=holdings)
         cash_reserve_value = house_service.cash_reserve_value(
@@ -113,23 +103,6 @@ def render() -> None:
         st.error(str(error))
 
 
-def _to_month_records(records_df: pd.DataFrame) -> list[MonthlyRecordModel]:
-    """把月度紀錄 DataFrame（RecordRepository.read_all 產出）轉為 HouseService 消費的模型清單。
-
-    HouseService 的 bucket/現金預備金口徑須橫跨全歷史月份（判定「是否曾有任何紀錄」，
-    見 HouseService._current_market_values），故取全量而非僅最新月。
-    """
-    return [
-        MonthlyRecordModel(
-            holding_id=row.holding_id,
-            year_month=row.year_month,
-            market_value=None if pd.isna(row.market_value) else row.market_value,
-            net_investment=row.net_investment,
-        )
-        for row in records_df.itertuples(index=False)
-    ]
-
-
 def _render_affordability(
     *, reverse_result: AffordabilityResult, forward_result: AffordabilityResult
 ) -> None:
@@ -170,7 +143,7 @@ def _render_triggers(
     checked_map = {row.trigger_key: row.checked for row in subjective}
 
     for condition in checklist.conditions:
-        label = _TRIGGER_LABEL[condition.key]
+        label = HOUSE_TRIGGER.LABEL[condition.key]
         if condition.kind == "subjective":
             _render_subjective_checkbox(
                 trigger_key=condition.key,
@@ -192,7 +165,7 @@ def _render_triggers(
     for condition in checklist.conditions:
         if condition.met:
             continue
-        label = _TRIGGER_LABEL[condition.key]
+        label = HOUSE_TRIGGER.LABEL[condition.key]
         if condition.kind == "subjective":
             st.write(f"- {label}（未勾選）")
         else:

@@ -17,6 +17,7 @@ import pandas as pd
 from asset_lab.core.constants import HOLDING_KIND, MONTHLY_RECORDS_TABLE, YEAR_MONTH_FORMAT
 from asset_lab.core.exceptions import DataValidationError
 from asset_lab.models.holding import HoldingModel
+from asset_lab.models.record import MonthlyRecordModel
 
 # 'YYYY-MM'：四位數年、兩位數補零的月（01–12）；用於從介面攔下格式不合的年月。
 _YEAR_MONTH_PATTERN = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
@@ -172,3 +173,26 @@ def parse_amount(text: str | None, *, field_label: str) -> float:
         Decimal(normalized.replace(",", "")).quantize(_INTEGER_QUANTUM, rounding=ROUND_HALF_UP)
     )
     return float(rounded)
+
+
+def records_frame_to_models(records_df: pd.DataFrame) -> list[MonthlyRecordModel]:
+    """把月度紀錄 DataFrame 轉為模型清單。
+
+    取 holding_id、year_month、market_value、net_investment 四欄；NaN 市值轉 None
+    （有列但市值留空）。與買房頁、總覽頁私有的轉換同口徑。
+
+    Args:
+        records_df: RecordRepository.read_all 產出的月度紀錄。
+
+    Returns:
+        與列同順序的 MonthlyRecordModel 清單；空表回傳空清單。
+    """
+    return [
+        MonthlyRecordModel(
+            holding_id=row.holding_id,
+            year_month=row.year_month,
+            market_value=None if pd.isna(row.market_value) else row.market_value,
+            net_investment=row.net_investment,
+        )
+        for row in records_df.itertuples(index=False)
+    ]

@@ -34,11 +34,13 @@ from asset_lab.core.constants import (
     APP_LOGGING,
     BALANCE_INPUT,
     COST_BASIS_INPUT,
+    DEFAULT_REBALANCE_THRESHOLD,
     ERROR_DETAILS,
     HOLDING_KIND,
     INPUT_MODE,
     PREMIUM_INPUT,
     PROTOCOL_DOC_RELATIVE_PATH,
+    PROTOCOL_MIN_DATA_MONTHS,
     READ_CACHE,
 )
 from asset_lab.repositories.connection_layers import CachingConnection, CountingConnection
@@ -57,6 +59,7 @@ from asset_lab.repositories.transaction_repository import TransactionRepository
 from asset_lab.services.affordability_service import AffordabilityService
 from asset_lab.services.allocation_service import AllocationService
 from asset_lab.services.balance_input_service import BalanceInputService
+from asset_lab.services.city_service import CityService
 from asset_lab.services.cost_basis_service import CostBasisService
 from asset_lab.services.data_io_service import DataIoService
 from asset_lab.services.house_service import HouseService
@@ -112,6 +115,7 @@ class Container:
     protocol_service: ProtocolService
     affordability_service: AffordabilityService
     house_service: HouseService
+    city_service: CityService
 
 
 def parse_allowed_emails(raw: object) -> set[str]:
@@ -177,6 +181,11 @@ def build_container(
     house_param_repo = HouseParamRepository(conn=cached)
     subjective_trigger_repo = SubjectiveTriggerRepository(conn=cached)
     transaction_repo = TransactionRepository(conn=cached)
+    return_service = ReturnService()
+    allocation_service = AllocationService()
+    protocol_service = ProtocolService()
+    affordability_service = AffordabilityService()
+    house_service = HouseService()
 
     return Container(
         holding_repo=holding_repo,
@@ -189,8 +198,8 @@ def build_container(
         house_param_repo=house_param_repo,
         subjective_trigger_repo=subjective_trigger_repo,
         transaction_repo=transaction_repo,
-        return_service=ReturnService(),
-        allocation_service=AllocationService(),
+        return_service=return_service,
+        allocation_service=allocation_service,
         period_service=PeriodService(),
         data_io_service=DataIoService(),
         monthly_input_service=MonthlyInputService(
@@ -205,9 +214,18 @@ def build_container(
             premium_categories=PREMIUM_INPUT.CATEGORIES,
         ),
         balance_input_service=BalanceInputService(balance_categories=BALANCE_INPUT.CATEGORIES),
-        protocol_service=ProtocolService(),
-        affordability_service=AffordabilityService(),
-        house_service=HouseService(),
+        protocol_service=protocol_service,
+        affordability_service=affordability_service,
+        house_service=house_service,
+        city_service=CityService(
+            return_service=return_service,
+            protocol_service=protocol_service,
+            allocation_service=allocation_service,
+            house_service=house_service,
+            affordability_service=affordability_service,
+            min_data_months=PROTOCOL_MIN_DATA_MONTHS,
+            rebalance_threshold=DEFAULT_REBALANCE_THRESHOLD,
+        ),
     )
 
 

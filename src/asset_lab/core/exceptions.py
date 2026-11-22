@@ -37,3 +37,7 @@ class PersistenceError(AssetLabError):
 
     def __init__(self, message: str = DEFAULT_MESSAGE) -> None:
         super().__init__(message)
+
+
+class CityLayoutError(AssetLabError):
+    """城市版位在迭代上限內無法收斂時拋出；訊息為可直接顯示的中性文案。"""
