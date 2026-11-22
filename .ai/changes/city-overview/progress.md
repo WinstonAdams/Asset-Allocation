@@ -35,7 +35,7 @@
 | 3-2 安全審查 | 完成 | 有條件通過→已修：authlib 1.9.5、joserfc 1.7.7 升級（獨立 commit，使用者本機登入實測通過）；補 JS script sink 靜態掃描；msgpack dev 依賴 CVE 未處理；pytest 1114 passed |
 | 3-3 規則符合度審查 | 完成 | 阻擋→已修：小卡篩選移出 views（payload.card_for）、CITY_PLATE_MODE 移入 constants、public 函式補 Returns 與 docstring；LOW-1 與 ruff isort 衝突不改；AD-2 偏離判定合理；超長檔不拆；pytest 1117 passed |
 | 3-4 行為對映審查 | 完成 | 有條件通過→已修：marker 改掛約 20 個、SC-153 改真 30 棟、補 SC-141/142/163 測試；SC-154 門檻改「含工地」、SC-163 邊界補輸入錯誤句；約 20 個技術防線測試維持勉強掛載（使用者決定，記於 review.md）；pytest 1121 passed |
-| 3-Z 最終驗證 | 未開始 | 重跑 2-Z 三件事，確認審查改動沒破壞 runtime |
+| 3-Z 最終驗證 | 完成 | scenario-lint PASS（覆蓋 160/161，SC-165 屬人工量測 WARN，孤兒維持既有 38）；pytest 1121 passed；本機啟動無例外；SC-165 總覽切頁中位數 143ms vs main 118ms（+25ms，上限 100ms 內，不含冷載入） |
 
 ## Phase 4：收尾
 
